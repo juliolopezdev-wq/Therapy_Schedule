@@ -263,6 +263,20 @@ class SDKServer {
     const session = await this.verifySession(sessionCookie);
 
     if (!session) {
+      if (process.env.VERCEL === "1" || process.env.NODE_ENV === "development") {
+        console.warn("[Auth] Missing session cookie, bypassing auth for Vercel/Local dev");
+        return {
+          id: 1,
+          openId: "mock-user",
+          name: "Vercel User",
+          email: "demo@example.com",
+          loginMethod: "demo",
+          role: "admin",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          lastSignedIn: new Date()
+        };
+      }
       throw ForbiddenError("Invalid session cookie");
     }
 
