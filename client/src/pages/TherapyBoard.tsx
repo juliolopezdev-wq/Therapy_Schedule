@@ -70,7 +70,7 @@ function getPatientWeekBounds(admissionDateStr: string | null | undefined, viewe
   if (!admissionDateStr) {
     const start = startOfWeek(viewedDate);
     const end = new Date(start);
-    end.setDate(start.getDate() + 6);
+    end.setDate(start.getDate() + 7);
     end.setHours(23, 59, 59, 999);
     return { start, end };
   }
@@ -80,14 +80,14 @@ function getPatientWeekBounds(admissionDateStr: string | null | undefined, viewe
   if (diff < 0) {
     const start = startOfWeek(viewedDate);
     const end = new Date(start);
-    end.setDate(start.getDate() + 6);
+    end.setDate(start.getDate() + 7);
     end.setHours(23, 59, 59, 999);
     return { start, end };
   }
   const weeksPassed = Math.floor(diff / 7);
   const start = addDays(adminStart, weeksPassed * 7);
   const end = new Date(start);
-  end.setDate(start.getDate() + 6);
+  end.setDate(start.getDate() + 7);
   end.setHours(23, 59, 59, 999);
   return { start, end };
 }
