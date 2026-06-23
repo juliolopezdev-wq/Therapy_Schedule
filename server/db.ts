@@ -25,9 +25,14 @@ let _db: ReturnType<typeof drizzle> | null = null;
 // Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
   if (!_db) {
+    const dbUrl = process.env.DATABASE_URL || process.env.TURSO_DATABASE_URL;
+    if (!dbUrl) {
+      console.warn("[Database] DATABASE_URL is missing. Database not available.");
+      return null;
+    }
     try {
       const client = createClient({
-        url: process.env.DATABASE_URL!,
+        url: dbUrl,
         authToken: process.env.TURSO_AUTH_TOKEN,
       });
       _db = drizzle(client);
