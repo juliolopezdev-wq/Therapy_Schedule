@@ -70,9 +70,9 @@ function getPatientWeekBounds(admissionDateStr: string | null | undefined, viewe
   if (!admissionDateStr) {
     const start = startOfWeek(viewedDate);
     const end = new Date(start);
-    end.setDate(start.getDate() + 7);
+    end.setDate(start.getDate() + 6);
     end.setHours(23, 59, 59, 999);
-    return { start, end };
+    return { start, end, weekNumber: 1 };
   }
   const adminStart = startOfDay(new Date(admissionDateStr));
   const viewed = startOfDay(viewedDate);
@@ -80,16 +80,16 @@ function getPatientWeekBounds(admissionDateStr: string | null | undefined, viewe
   if (diff < 0) {
     const start = startOfWeek(viewedDate);
     const end = new Date(start);
-    end.setDate(start.getDate() + 7);
+    end.setDate(start.getDate() + 6);
     end.setHours(23, 59, 59, 999);
-    return { start, end };
+    return { start, end, weekNumber: 1 };
   }
   const weeksPassed = Math.floor(diff / 7);
   const start = addDays(adminStart, weeksPassed * 7);
   const end = new Date(start);
-  end.setDate(start.getDate() + 7);
+  end.setDate(start.getDate() + 6);
   end.setHours(23, 59, 59, 999);
-  return { start, end };
+  return { start, end, weekNumber: weeksPassed + 1 };
 }
 
 const BOARD_SECTIONS = [
@@ -676,7 +676,7 @@ export default function TherapyBoard() {
                         return (
                           <li key={p.id} className="text-sm flex flex-col pb-2.5 mb-2 border-b border-amber-200/40 last:border-0 last:pb-0 last:mb-0">
                             <div className="flex justify-between items-start">
-                              <span className="font-semibold text-amber-950">{p.name}</span>
+                              <span className="font-semibold text-amber-950">{p.name} <span className="text-amber-700/80 font-normal ml-1">(Week {bounds.weekNumber})</span></span>
                               <span className="text-xs font-medium bg-amber-200/60 px-1.5 py-0.5 rounded text-amber-950">
                                 {mins} / {target} mins
                               </span>
