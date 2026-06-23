@@ -647,15 +647,23 @@ export default function TherapyBoard() {
                     <span>{patientsUnderTarget.length} under target</span>
                   </div>
                 </TooltipTrigger>
-                <TooltipContent side="bottom" className="max-w-xs">
-                  <p className="font-semibold mb-1">Patients under weekly target ({weekRangeLabel(day)}):</p>
-                  <ul className="space-y-0.5">
+                <TooltipContent side="bottom" className="max-w-sm">
+                  <p className="font-semibold mb-2">Patients under weekly target:</p>
+                  <ul className="space-y-1.5">
                     {patientsUnderTarget.map((p) => {
                       const mins = weekMinsByPatient.get(p.id) ?? 0;
                       const target = (p as any).weeklyMinuteTarget ?? 900;
+                      const minsNeeded = Math.max(0, target - mins);
+                      const hoursNeeded = (minsNeeded / 60).toFixed(1);
+                      const bounds = getPatientWeekBounds((p as any).admissionDate, day);
+                      const startLabel = bounds.start.toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
+                      const endLabel = bounds.end.toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
+                      
                       return (
-                        <li key={p.id} className="text-xs">
-                          {p.name} — {mins}/{target} min
+                        <li key={p.id} className="text-xs flex flex-col pb-1.5 mb-1.5 border-b border-amber-200/40 last:border-0 last:pb-0 last:mb-0">
+                          <span className="font-semibold">{p.name}</span>
+                          <span className="text-amber-800/90">Week: {startLabel} – {endLabel}</span>
+                          <span className="text-amber-800/90">Needed: {hoursNeeded} hrs ({minsNeeded} mins)</span>
                         </li>
                       );
                     })}
