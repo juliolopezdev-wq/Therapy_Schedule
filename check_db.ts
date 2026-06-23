@@ -1,14 +1,19 @@
+import { drizzle } from "drizzle-orm/libsql";
+import { createClient } from "@libsql/client";
+import * as schema from "./drizzle/schema";
 import "dotenv/config";
-import { createClient } from "@libsql/client/http";
 
-async function main() {
-  const tursoClient = createClient({
-    url: process.env.DATABASE_URL!,
-    authToken: process.env.TURSO_AUTH_TOKEN!,
-  });
+const client = createClient({
+  url: process.env.DATABASE_URL!,
+  authToken: process.env.TURSO_AUTH_TOKEN,
+});
 
-  const res = await tursoClient.execute("SELECT * FROM patients LIMIT 5");
-  console.log("Patients in Turso:", res.rows);
+const db = drizzle(client, { schema });
+
+async function check() {
+  const p = await db.select().from(schema.patients);
+  console.log("Patients:", p.length);
+  process.exit(0);
 }
 
-main().catch(console.error);
+check();
