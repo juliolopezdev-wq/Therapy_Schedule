@@ -71,9 +71,16 @@ export async function askScheduler(question: string, referenceDate: Date = new D
   ].join("\n");
 
   try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (ENV.ollamaApiKey) {
+      headers["Authorization"] = `Bearer ${ENV.ollamaApiKey}`;
+    }
+
     const res = await fetch(`${ENV.ollamaBaseUrl}/api/generate`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({
         model: ENV.ollamaModel,
         prompt,
