@@ -122,6 +122,21 @@ export function addDays(date: Date, days: number): Date {
   return d;
 }
 
+export function subDays(date: Date, days: number): Date {
+  const d = new Date(date);
+  d.setDate(d.getDate() - days);
+  return d;
+}
+
+export function differenceInDays(laterDate: Date | string, earlierDate: Date | string): number {
+  const d1 = new Date(laterDate);
+  d1.setHours(0, 0, 0, 0);
+  const d2 = new Date(earlierDate);
+  d2.setHours(0, 0, 0, 0);
+  const diffTime = d1.getTime() - d2.getTime();
+  return Math.round(diffTime / (1000 * 60 * 60 * 24));
+}
+
 export function startOfWeek(date: Date): Date {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);

@@ -11,6 +11,7 @@ import {
   deletePatient,
   getTherapySessions,
   getTherapySessionsForWeek,
+  getTherapySessionsForDateRange,
   createTherapySession,
   updateTherapySession,
   deleteTherapySession,
@@ -97,6 +98,9 @@ export const appRouter = router({
     listForWeek: publicProcedure
       .input(z.object({ weekStart: z.date() }))
       .query(async ({ input }) => getTherapySessionsForWeek(input.weekStart)),
+    listForDateRange: publicProcedure
+      .input(z.object({ startDate: z.date(), endDate: z.date() }))
+      .query(async ({ input }) => getTherapySessionsForDateRange(input.startDate, input.endDate)),
     create: publicProcedure
       .input(
         z.object({

@@ -39,6 +39,8 @@ import {
   durationToSlots,
   startOfDay,
   addDays,
+  subDays,
+  differenceInDays,
   formatLongDate,
   sessionsOverlap,
   startOfWeek,
@@ -57,6 +59,32 @@ import { TargetReachedDialog, type WeekSessionRow } from "@/components/board/Tar
 import { cn } from "@/lib/utils";
 
 const SLOT_WIDTH = 72; // px per 30-min slot
+
+function getPatientWeekBounds(admissionDateStr: string | null | undefined, viewedDate: Date) {
+  if (!admissionDateStr) {
+    const start = startOfWeek(viewedDate);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
+  }
+  const adminStart = startOfDay(new Date(admissionDateStr));
+  const viewed = startOfDay(viewedDate);
+  const diff = differenceInDays(viewed, adminStart);
+  if (diff < 0) {
+    const start = startOfWeek(viewedDate);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
+  }
+  const weeksPassed = Math.floor(diff / 7);
+  const start = addDays(adminStart, weeksPassed * 7);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  end.setHours(23, 59, 59, 999);
+  return { start, end };
+}
 
 const BOARD_SECTIONS = [
   { id: 1, name: "Team One",   color: "#3b82f6" },
@@ -114,7 +142,10 @@ export default function TherapyBoard() {
   const therapistsQuery = trpc.therapists.list.useQuery();
   const teamsQuery = trpc.teams.list.useQuery();
   const sessionsQuery = trpc.sessions.list.useQuery({ date: day });
-  const weekSessionsQuery = trpc.sessions.listForWeek.useQuery({ weekStart: startOfWeek(day) });
+  const weekSessionsQuery = trpc.sessions.listForDateRange.useQuery({ 
+    startDate: subDays(day, 7),
+    endDate: addDays(day, 7)
+  });
   const flagsQuery = trpc.statusFlags.listForDate.useQuery({ date: day });
 
   const patients = patientsQuery.data ?? [];
@@ -205,11 +236,19 @@ export default function TherapyBoard() {
   // Weekly minutes per patient (Mon–Sun of the viewed week)
   const weekMinsByPatient = useMemo(() => {
     const map = new Map<number, number>();
-    weekSessions.forEach((s) => {
-      map.set(s.patientId, (map.get(s.patientId) ?? 0) + s.durationMinutes);
+    patients.forEach((p) => {
+      if (p.isDischarged) return;
+      const bounds = getPatientWeekBounds((p as any).admissionDate, day);
+      const patientSessions = weekSessions.filter((s) => {
+        if (s.patientId !== p.id) return false;
+        const sessionStart = new Date(s.startTime);
+        return sessionStart >= bounds.start && sessionStart <= bounds.end;
+      });
+      const sum = patientSessions.reduce((acc, curr) => acc + curr.durationMinutes, 0);
+      map.set(p.id, sum);
     });
     return map;
-  }, [weekSessions]);
+  }, [patients, weekSessions, day]);
 
   // How many active (non-discharged) patients are below their weekly target
   const patientsUnderTarget = useMemo(() => {
@@ -231,8 +270,13 @@ export default function TherapyBoard() {
       const prevMins = prev.get(p.id) ?? 0;
       const currMins = weekMinsByPatient.get(p.id) ?? 0;
       if (prevMins < target && currMins >= target) {
+        const bounds = getPatientWeekBounds((p as any).admissionDate, day);
         const patientWeekSessions: WeekSessionRow[] = weekSessions
-          .filter((s) => s.patientId === p.id)
+          .filter((s) => {
+            if (s.patientId !== p.id) return false;
+            const sessionStart = new Date(s.startTime);
+            return sessionStart >= bounds.start && sessionStart <= bounds.end;
+          })
           .map((s) => ({
             id: s.id,
             therapyType: s.therapyType as TherapyType,

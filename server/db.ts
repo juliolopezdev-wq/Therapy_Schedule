@@ -196,6 +196,19 @@ export async function getTherapySessionsForWeek(weekStart: Date) {
     .where(and(gte(therapySessions.startTime, start), lte(therapySessions.startTime, end)));
 }
 
+export async function getTherapySessionsForDateRange(startDate: Date, endDate: Date) {
+  const db = await getDb();
+  if (!db) return [];
+  const start = new Date(startDate);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(endDate);
+  end.setHours(23, 59, 59, 999);
+  return db
+    .select()
+    .from(therapySessions)
+    .where(and(gte(therapySessions.startTime, start), lte(therapySessions.startTime, end)));
+}
+
 export async function getSessionById(id: number) {
   const db = await getDb();
   if (!db) return undefined;
