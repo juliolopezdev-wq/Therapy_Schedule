@@ -668,15 +668,22 @@ export default function TherapyBoard() {
                         const bounds = getPatientWeekBounds((p as any).admissionDate, day);
                         const startLabel = bounds.start.toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
                         const endLabel = bounds.end.toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
+                        const adminStr = (p as any).admissionDate;
+                        const adminLabel = adminStr 
+                          ? new Date(adminStr).toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" })
+                          : "N/A";
                         
                         return (
-                          <li key={p.id} className="text-sm flex flex-col pb-2 mb-2 border-b border-amber-200/40 last:border-0 last:pb-0 last:mb-0">
-                            <span className="font-semibold text-amber-950">{p.name}</span>
-                            <div className="flex justify-between items-center mt-1 text-xs text-amber-800/90">
-                              <span>{startLabel} – {endLabel}</span>
-                              <span className="font-medium bg-amber-200/50 px-1.5 py-0.5 rounded text-amber-900">
-                                {hoursNeeded} hrs left
+                          <li key={p.id} className="text-sm flex flex-col pb-2.5 mb-2 border-b border-amber-200/40 last:border-0 last:pb-0 last:mb-0">
+                            <div className="flex justify-between items-start">
+                              <span className="font-semibold text-amber-950">{p.name}</span>
+                              <span className="text-xs font-medium bg-amber-200/60 px-1.5 py-0.5 rounded text-amber-950">
+                                {mins} / {target} mins
                               </span>
+                            </div>
+                            <div className="flex justify-between items-center mt-1.5 text-xs text-amber-800/90">
+                              <span>Admitted: <span className="font-medium">{adminLabel}</span></span>
+                              <span>Ends: <span className="font-medium">{endLabel}</span></span>
                             </div>
                           </li>
                         );
