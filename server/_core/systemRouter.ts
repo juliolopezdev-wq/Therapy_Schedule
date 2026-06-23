@@ -11,6 +11,10 @@ export const systemRouter = router({
     )
     .query(() => ({
       ok: true,
+      hasDbUrl: !!(process.env.DATABASE_URL || process.env.TURSO_DATABASE_URL),
+      hasTursoAuth: !!process.env.TURSO_AUTH_TOKEN,
+      isRender: process.env.RENDER === "true",
+      nodeEnv: process.env.NODE_ENV,
     })),
 
   notifyOwner: adminProcedure
