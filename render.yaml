@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: therapy-board
+    env: node
+    buildCommand: pnpm install && pnpm run build
+    startCommand: pnpm run start
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: PNPM_VERSION
+        value: 10
+      - key: DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
