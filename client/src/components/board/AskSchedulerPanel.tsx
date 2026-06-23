@@ -57,9 +57,7 @@ export function AskSchedulerPanel({ open, onOpenChange }: AskSchedulerPanelProps
             <Bot className="h-5 w-5 text-slate-500" /> Ask the Scheduler
           </SheetTitle>
           <SheetDescription>
-            Runs entirely on a free, local model via Ollama — no cloud API, no
-            cost. Start <code className="rounded bg-slate-100 px-1">ollama serve</code> on
-            this machine first.
+            Ask questions about the schedule, patient targets, or staffing. Get instant answers to help plan your team's day.
           </SheetDescription>
         </SheetHeader>
 
