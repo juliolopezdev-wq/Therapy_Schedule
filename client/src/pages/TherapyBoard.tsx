@@ -29,6 +29,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
   THERAPY_TYPES,
   THERAPY_META,
   TIME_SLOTS,
@@ -640,36 +646,45 @@ export default function TherapyBoard() {
               <span>sessions today</span>
             </div>
             {patientsUnderTarget.length > 0 && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div className="flex cursor-default items-center gap-1.5 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button className="flex cursor-pointer items-center gap-1.5 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-100 transition-colors">
                     <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                     <span>{patientsUnderTarget.length} under target</span>
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent side="bottom" align="end" className="w-80 p-0 overflow-hidden shadow-lg border-amber-200/60 bg-amber-50/95 backdrop-blur">
+                  <div className="p-3 border-b border-amber-200/40 bg-amber-100/50">
+                    <p className="font-semibold text-amber-900 text-sm">Patients Under Target</p>
+                    <p className="text-xs text-amber-700/80 mt-0.5">Custom weekly targets based on admission</p>
                   </div>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="max-w-sm">
-                  <p className="font-semibold mb-2">Patients under weekly target:</p>
-                  <ul className="space-y-1.5">
-                    {patientsUnderTarget.map((p) => {
-                      const mins = weekMinsByPatient.get(p.id) ?? 0;
-                      const target = (p as any).weeklyMinuteTarget ?? 900;
-                      const minsNeeded = Math.max(0, target - mins);
-                      const hoursNeeded = (minsNeeded / 60).toFixed(1);
-                      const bounds = getPatientWeekBounds((p as any).admissionDate, day);
-                      const startLabel = bounds.start.toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
-                      const endLabel = bounds.end.toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
-                      
-                      return (
-                        <li key={p.id} className="text-xs flex flex-col pb-1.5 mb-1.5 border-b border-amber-200/40 last:border-0 last:pb-0 last:mb-0">
-                          <span className="font-semibold">{p.name}</span>
-                          <span className="text-amber-800/90">Week: {startLabel} – {endLabel}</span>
-                          <span className="text-amber-800/90">Needed: {hoursNeeded} hrs ({minsNeeded} mins)</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </TooltipContent>
-              </Tooltip>
+                  <ScrollArea className="h-[300px]">
+                    <ul className="p-3 space-y-2">
+                      {patientsUnderTarget.map((p) => {
+                        const mins = weekMinsByPatient.get(p.id) ?? 0;
+                        const target = (p as any).weeklyMinuteTarget ?? 900;
+                        const minsNeeded = Math.max(0, target - mins);
+                        const hoursNeeded = (minsNeeded / 60).toFixed(1);
+                        const bounds = getPatientWeekBounds((p as any).admissionDate, day);
+                        const startLabel = bounds.start.toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
+                        const endLabel = bounds.end.toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
+                        
+                        return (
+                          <li key={p.id} className="text-sm flex flex-col pb-2 mb-2 border-b border-amber-200/40 last:border-0 last:pb-0 last:mb-0">
+                            <span className="font-semibold text-amber-950">{p.name}</span>
+                            <div className="flex justify-between items-center mt-1 text-xs text-amber-800/90">
+                              <span>{startLabel} – {endLabel}</span>
+                              <span className="font-medium bg-amber-200/50 px-1.5 py-0.5 rounded text-amber-900">
+                                {hoursNeeded} hrs left
+                              </span>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </ScrollArea>
+                </PopoverContent>
+              </Popover>
             )}
             {conflictCount > 0 ? (
               <div className="flex items-center gap-1.5 rounded border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-red-700">
