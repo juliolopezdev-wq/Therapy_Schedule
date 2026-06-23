@@ -19,6 +19,8 @@ import {
   History,
   LayoutGrid,
   Smartphone,
+  Clock,
+  Bot
 } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
@@ -62,35 +64,13 @@ import { TherapistPanel } from "@/components/board/TherapistPanel";
 import { MySchedule } from "@/components/board/MySchedule";
 import { BoardHistoryDialog } from "@/components/board/BoardHistoryDialog";
 import { TargetReachedDialog, type WeekSessionRow } from "@/components/board/TargetReachedDialog";
+import { WeeklyMinutesPanel } from "@/components/board/WeeklyMinutesPanel";
+import { AskSchedulerPanel } from "@/components/board/AskSchedulerPanel";
 import { cn } from "@/lib/utils";
 
 const SLOT_WIDTH = 72; // px per 30-min slot
 
-function getPatientWeekBounds(admissionDateStr: string | null | undefined, viewedDate: Date) {
-  if (!admissionDateStr) {
-    const start = startOfWeek(viewedDate);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6);
-    end.setHours(23, 59, 59, 999);
-    return { start, end, weekNumber: 1 };
-  }
-  const adminStart = startOfDay(new Date(`${admissionDateStr}T12:00:00`));
-  const viewed = startOfDay(viewedDate);
-  const diff = differenceInDays(viewed, adminStart);
-  if (diff < 0) {
-    const start = startOfWeek(viewedDate);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6);
-    end.setHours(23, 59, 59, 999);
-    return { start, end, weekNumber: 1 };
-  }
-  const weeksPassed = Math.floor(diff / 7);
-  const start = addDays(adminStart, weeksPassed * 7);
-  const end = new Date(start);
-  end.setDate(start.getDate() + 6);
-  end.setHours(23, 59, 59, 999);
-  return { start, end, weekNumber: weeksPassed + 1 };
-}
+import { getPatientWeekBounds } from "@/../../shared/weekUtils";
 
 const BOARD_SECTIONS = [
   { id: 1, name: "Team One",   color: "#3b82f6" },
@@ -127,6 +107,8 @@ export default function TherapyBoard() {
   const [patientDraft, setPatientDraft] = useState<PatientFormValue | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [staffPanelOpen, setStaffPanelOpen] = useState(false);
+  const [weeklyMinutesPanelOpen, setWeeklyMinutesPanelOpen] = useState(false);
+  const [askSchedulerPanelOpen, setAskSchedulerPanelOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [activeDrag, setActiveDrag] = useState<SessionTileData | null>(null);
   const [targetAlertData, setTargetAlertData] = useState<{
@@ -733,6 +715,24 @@ export default function TherapyBoard() {
               <UserRound className="mr-1.5 h-3.5 w-3.5" />
               <span className="hidden sm:inline">Staff</span>
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 border-slate-200 font-medium text-slate-600 hover:bg-slate-50"
+              onClick={() => setWeeklyMinutesPanelOpen(true)}
+            >
+              <Clock className="mr-1.5 h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Weekly Minutes</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 border-slate-200 font-medium text-slate-600 hover:bg-slate-50"
+              onClick={() => setAskSchedulerPanelOpen(true)}
+            >
+              <Bot className="mr-1.5 h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Ask Scheduler</span>
+            </Button>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -1123,10 +1123,15 @@ export default function TherapyBoard() {
         open={patientDialogOpen}
         onOpenChange={setPatientDialogOpen}
         initial={patientDraft}
-        onSave={savePatient}
-        therapists={therapists}
         teams={teams}
+        therapists={therapists}
+        onSave={savePatient}
       />
+
+      <WeeklyMinutesPanel open={weeklyMinutesPanelOpen} onOpenChange={setWeeklyMinutesPanelOpen} />
+      <AskSchedulerPanel open={askSchedulerPanelOpen} onOpenChange={setAskSchedulerPanelOpen} />
+
+      <BoardHistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} />
 
       <PatientPanel
         open={panelOpen}

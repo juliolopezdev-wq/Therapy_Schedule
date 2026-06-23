@@ -30,6 +30,8 @@ import {
   saveBoardSnapshot,
   seedTeamsIfEmpty,
 } from "./db";
+import { getWeeklyMinutesSummary, getGapFillSuggestions } from "./scheduling";
+import { askScheduler } from "./ollama";
 
 const therapyTypeEnum = z.enum(["PT", "OT", "SLP", "Eval"]);
 const flagTypeEnum = z.enum(["DC", "Name Alert", "Weekend", "In-Service", "Appointment"]);
@@ -249,6 +251,30 @@ export const appRouter = router({
     save: publicProcedure
       .input(z.object({ date: z.date(), snapshot: z.any() }))
       .mutation(async ({ input }) => saveBoardSnapshot(input.date, input.snapshot)),
+  }),
+
+  /* ------------------------------------------------------------------ */
+  /* Weekly Minutes & Gap Fill                                           */
+  /* ------------------------------------------------------------------ */
+  weeklyMinutes: router({
+    summary: publicProcedure
+      .input(z.object({ referenceDate: z.date().optional() }).optional())
+      .query(async ({ input }) => getWeeklyMinutesSummary(input?.referenceDate ?? new Date())),
+  }),
+
+  gapFill: router({
+    suggestions: publicProcedure
+      .input(z.object({ patientId: z.number(), referenceDate: z.date().optional() }))
+      .query(async ({ input }) => getGapFillSuggestions(input.patientId, input.referenceDate ?? new Date())),
+  }),
+
+  /* ------------------------------------------------------------------ */
+  /* AI scheduling assistant (free, self-hosted via Ollama)               */
+  /* ------------------------------------------------------------------ */
+  ai: router({
+    ask: publicProcedure
+      .input(z.object({ question: z.string().min(1), referenceDate: z.date().optional() }))
+      .mutation(async ({ input }) => askScheduler(input.question, input.referenceDate ?? new Date())),
   }),
 });
 

@@ -1,0 +1,118 @@
+diff --git a/README.md b/README.md
+index 5eb8d25..a53ec28 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1,64 @@
+ # Therapy_Schedule
++
++## Weekly Minutes, Gap-Fill & AI Scheduling Assistant
++
++Three additions on top of the existing board:
++
++### 1. Per-patient weekly minute tracker
++Each patient's "week" (for the 900-minute, or custom, target) starts on their
++own admission day-of-week — not a shared Monday calendar week. Two patients
++admitted on different days have different week boundaries. See
++`shared/weekUtils.ts` for the math and `Weekly Minutes` panel (header button)
++for the UI: progress per patient, minutes remaining, days left in their week.
++
++### 2. Gap-fill suggestions
++For any patient under target, click "Suggest open slots" in the Weekly
++Minutes panel. The engine (`server/scheduling.ts`) scans the rest of their
++week for grid slots where both the patient and a therapist (preferring their
++own team) are free, and proposes 30/45/60-minute blocks to close the gap.
++Each suggestion has an "Add" button that creates a real session.
++
++### 3. Ask the Scheduler (free, self-hosted AI)
++The "Ask Scheduler" header button opens a chat that answers questions like
++"who's at risk this week" or "who can cover Room 214's gap" using a **free,
++local** model via [Ollama](https://ollama.com) — no API key, no cloud spend.
++
++**Setup (one-time, on the machine running the server):**
++```bash
++# 1. Install Ollama: https://ollama.com/download
++# 2. Pull a model (this one is small/fast; swap for a bigger one if you have the RAM)
++ollama pull llama3.1
++# 3. Start the Ollama server (leave this running)
++ollama serve
++```
++Then start the app as usual (`npm run dev`). By default it talks to Ollama at
++`http://localhost:11434` using the `llama3.1` model. Override with env vars if
++needed:
++```
++OLLAMA_BASE_URL=http://localhost:11434
++OLLAMA_MODEL=llama3.1
++```
++If Ollama isn't reachable, the assistant still replies — it falls back to
++showing the raw scheduling data it would hav
+<truncated 45214 bytes>
+   expect(we.getHours()).toBe(23);
++  });
++
++  it("counts today as a remaining day", () => {
++    const ws = new Date(2026, 5, 17); // Wed start
++    const reference = new Date(2026, 5, 17); // same day
++    expect(daysRemainingInWeek(ws, reference)).toBe(7);
++  });
++
++  it("counts down correctly mid-week", () => {
++    const ws = new Date(2026, 5, 17); // Wed
++    const reference = new Date(2026, 5, 22); // Mon (5 days later)
++    expect(daysRemainingInWeek(ws, reference)).toBe(2); // Mon + Tue left
++  });
++
++  it("returns 0 once the week has fully elapsed", () => {
++    const ws = new Date(2026, 5, 17);
++    const reference = new Date(2026, 5, 25); // 8 days later
++    expect(daysRemainingInWeek(ws, reference)).toBe(0);
++  });
++});
++
++describe("requiredPaceMinutesPerDay", () => {
++  it("returns null when already on/over target", () => {
++    expect(
++      requiredPaceMinutesPerDay({
++        patientId: 1,
++        patientName: "Test",
++        roomNumber: "101",
++        teamId: null,
++        weekStart: new Date(),
++        weekEnd: new Date(),
++        target: 900,
++        completedMinutes: 900,
++        remainingMinutes: 0,
++        daysRemaining: 3,
++        atRisk: false,
++      }),
++    ).toBeNull();
++  });
++
++  it("divides remaining minutes across remaining days, rounding up", () => {
++    expect(
++      requiredPaceMinutesPerDay({
++        patientId: 1,
++        patientName: "Test",
++        roomNumber: "101",
++        teamId: null,
++        weekStart: new Date(),
++        weekEnd: new Date(),
++        target: 900,
++        completedMinutes: 300,
++        remainingMinutes: 600,
++        daysRemaining: 4,
++        atRisk: false,
++      }),
++    ).toBe(150);
++  });
++});
+diff --git a/shared/weekUtils.ts b/shared/weekUtils.ts
+new file mode 100644
+index 0000000..0768069
+--- /dev/null
++++ b/shared/weekUtils.ts
+@@ -0,0 +1,94 @@
++/**
++ * Per-patient week
+<truncated 5240 bytes>
+
+NOTE: The output was truncated because it was too long. Use a more targeted query or a smaller range to get the information you need.

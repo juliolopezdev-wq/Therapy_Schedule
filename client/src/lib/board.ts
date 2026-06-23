@@ -34,10 +34,25 @@ export const FLAG_META: Record<
   Appointment: { label: "Appointment", bg: "#d1fae5", fg: "#065f46", description: "Off-unit clinical appointment" },
 };
 
-// Time grid: 7:00 AM to 5:00 PM in 30-minute increments
-export const START_HOUR = 7;
-export const END_HOUR = 17; // 5 PM
-export const SLOT_MINUTES = 30;
+import {
+  START_HOUR,
+  END_HOUR,
+  SLOT_MINUTES,
+  dateToSlotIndex,
+  slotIndexToDate,
+  durationToSlots,
+  formatDateKey
+} from "../../../shared/timeGrid";
+
+export {
+  START_HOUR,
+  END_HOUR,
+  SLOT_MINUTES,
+  dateToSlotIndex,
+  slotIndexToDate,
+  durationToSlots,
+  formatDateKey
+};
 
 export interface TimeSlot {
   index: number;
@@ -71,35 +86,7 @@ export function buildTimeSlots(): TimeSlot[] {
 export const TIME_SLOTS = buildTimeSlots();
 export const TOTAL_SLOTS = TIME_SLOTS.length;
 
-// Convert a Date to a slot index (0-based) within the day's grid
-export function dateToSlotIndex(date: Date): number {
-  const hour = date.getHours();
-  const minute = date.getMinutes();
-  const totalMinutes = (hour - START_HOUR) * 60 + minute;
-  return Math.round(totalMinutes / SLOT_MINUTES);
-}
-
-// Build a Date for a given base day + slot index
-export function slotIndexToDate(baseDay: Date, slotIndex: number): Date {
-  const d = new Date(baseDay);
-  const totalMinutes = slotIndex * SLOT_MINUTES;
-  const hour = START_HOUR + Math.floor(totalMinutes / 60);
-  const minute = totalMinutes % 60;
-  d.setHours(hour, minute, 0, 0);
-  return d;
-}
-
-// How many slots a duration spans
-export function durationToSlots(durationMinutes: number): number {
-  return Math.max(1, Math.round(durationMinutes / SLOT_MINUTES));
-}
-
-export function formatDateKey(date: Date): string {
-  const y = date.getFullYear();
-  const m = (date.getMonth() + 1).toString().padStart(2, "0");
-  const d = date.getDate().toString().padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
+// Exports from shared/timeGrid are now available in board.ts scope
 
 export function formatLongDate(date: Date): string {
   return date.toLocaleDateString("en-US", {
