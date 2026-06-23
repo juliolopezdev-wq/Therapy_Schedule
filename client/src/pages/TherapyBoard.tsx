@@ -74,7 +74,7 @@ function getPatientWeekBounds(admissionDateStr: string | null | undefined, viewe
     end.setHours(23, 59, 59, 999);
     return { start, end, weekNumber: 1 };
   }
-  const adminStart = startOfDay(new Date(admissionDateStr));
+  const adminStart = startOfDay(new Date(`${admissionDateStr}T12:00:00`));
   const viewed = startOfDay(viewedDate);
   const diff = differenceInDays(viewed, adminStart);
   if (diff < 0) {
@@ -669,8 +669,9 @@ export default function TherapyBoard() {
                         const startLabel = bounds.start.toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
                         const endLabel = bounds.end.toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
                         const adminStr = (p as any).admissionDate;
-                        const adminLabel = adminStr 
-                          ? new Date(adminStr).toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" })
+                        const adminDate = adminStr ? new Date(`${adminStr}T12:00:00`) : null;
+                        const adminLabel = adminDate 
+                          ? adminDate.toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" })
                           : "N/A";
                         
                         return (
