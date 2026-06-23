@@ -1,0 +1,438 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--card);
+  --color-popover-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+}
+
+@layer base {
+  :root {
+    /* Therapy Type Colors - Fixed */
+    --color-pt: #fbbf24;
+    --color-ot: #c084fc;
+    --color-slp: #38bdf8;
+    --color-eval: #4ade80;
+
+    /* Neutral Colors */
+    --color-slate-50: #f8fafc;
+    --color-slate-100: #f1f5f9;
+    --color-slate-200: #e2e8f0;
+    --color-slate-300: #cbd5e1;
+    --color-slate-400: #94a3b8;
+    --color-slate-500: #64748b;
+    --color-slate-600: #475569;
+    --color-slate-700: #334155;
+    --color-slate-800: #1e293b;
+    --color-slate-900: #0f172a;
+
+    /* Status Colors */
+    --color-red: #ef4444;
+    --color-amber: #f59e0b;
+    --color-green: #10b981;
+    --color-blue: #3b82f6;
+
+    /* Clinical accent (PAM Health Blue) */
+    --clinical-50: #f0f7fd;
+    --clinical-100: #e0effa;
+    --clinical-200: #bce0f5;
+    --clinical-500: #005696;
+    --clinical-600: #004880;
+    --clinical-700: #003a6b;
+
+    /* Semantic Colors — clinical light theme */
+    --background: #f1f4f7;
+    --foreground: #0f172a;
+    --card: #ffffff;
+    --card-foreground: #0f172a;
+    --primary: #005696;
+    --primary-foreground: #ffffff;
+    --secondary: #475569;
+    --secondary-foreground: #ffffff;
+    --muted: #f1f5f9;
+    --muted-foreground: #64748b;
+    --accent: #004880;
+    --accent-foreground: #ffffff;
+    --destructive: #ef4444;
+    --destructive-foreground: #ffffff;
+    --border: #e2e8f0;
+    --input: #e2e8f0;
+    --ring: #005696;
+
+    /* Refined shadow scale (soft, layered) */
+    --shadow-sm: 0 1px 2px 0 rgba(15, 23, 42, 0.04);
+    --shadow-md: 0 4px 12px -2px rgba(15, 23, 42, 0.05), 0 2px 6px -1px rgba(15, 23, 42, 0.03);
+    --shadow-lg: 0 16px 32px -8px rgba(15, 23, 42, 0.08), 0 4px 12px -4px rgba(15, 23, 42, 0.04);
+    --shadow-xl: 0 24px 48px -12px rgba(15, 23, 42, 0.12), 0 8px 16px -8px rgba(15, 23, 42, 0.06);
+
+  /* Spacing */
+    --radius: 0.375rem;
+  }
+
+  .dark {
+    --background: #0b0f19;
+    --foreground: #f1f5f9;
+    --card: #111827;
+    --card-foreground: #f1f5f9;
+    --primary: #38bdf8;
+    --primary-foreground: #0b0f19;
+    --secondary: #64748b;
+    --secondary-foreground: #0b0f19;
+    --muted: #1f2937;
+    --muted-foreground: #9ca3af;
+    --accent: #005696;
+    --accent-foreground: #f1f5f9;
+    --border: #1f2937;
+    --input: #111827;
+    --ring: #38bdf8;
+  }
+
+  /* Universal selector border removed - use explicit classes instead */
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: "Inter", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    letter-spacing: -0.005em;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: "Space Grotesk", "Inter", sans-serif;
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+  }
+
+  h1 {
+    font-size: 32px;
+  }
+
+  h2 {
+    font-size: 28px;
+  }
+
+  h3 {
+    font-size: 24px;
+  }
+
+  h4 {
+    font-size: 20px;
+  }
+
+  h5 {
+    font-size: 18px;
+  }
+
+  h6 {
+    font-size: 16px;
+  }
+
+  /* Flex defaults */
+  .flex {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  /* Container defaults */
+  .container {
+    width: 100%;
+    max-width: 80rem;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+  
+  @media (min-width: 640px) {
+    .container {
+      padding-left: 1.5rem;
+      padding-right: 1.5rem;
+    }
+  }
+  
+  @media (min-width: 1024px) {
+    .container {
+      padding-left: 2rem;
+      padding-right: 2rem;
+    }
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background-color: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: #cbd5e1;
+    border-radius: 0.5rem;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: #94a3b8;
+  }
+}
+
+@layer components {
+  /* Button base styles */
+  .btn-base {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.375rem;
+    font-weight: 500;
+    transition: all 150ms;
+    outline: none;
+    opacity: 1;
+  }
+  
+  .btn-base:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  
+  .btn-base:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* Card elevation */
+  .card-elevated {
+    background-color: var(--card);
+    color: var(--card-foreground);
+    border-radius: 0.75rem;
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-md);
+  }
+
+  /* Board tile base */
+  .tile-base {
+    border-radius: 0.5rem;
+    padding: 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: move;
+    transition: all 150ms;
+    box-shadow: var(--shadow-sm);
+  }
+  
+  .tile-base:hover {
+    box-shadow: var(--shadow-md);
+  }
+
+  /* Therapy type tiles */
+  .tile-pt {
+    background-color: #fef08a;
+    color: #713f12;
+  }
+
+  .tile-ot {
+    background-color: #f3e8ff;
+    color: #581c87;
+  }
+
+  .tile-slp {
+    background-color: #e0f2fe;
+    color: #0c4a6e;
+  }
+
+  .tile-eval {
+    background-color: #d1fae5;
+    color: #064e3b;
+  }
+
+  /* Status flag badges */
+  .flag-dc {
+    background-color: #fee2e2;
+    color: #991b1b;
+  }
+
+  .flag-alert {
+    background-color: #ffedd5;
+    color: #9a3412;
+  }
+
+  .flag-weekend {
+    background-color: #e0f2fe;
+    color: #0369a1;
+  }
+
+  .flag-service {
+    background-color: #f3e8ff;
+    color: #6b21a8;
+  }
+
+  .flag-appointment {
+    background-color: #d1fae5;
+    color: #065f46;
+  }
+
+  /* Grid cell */
+  .grid-cell {
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 0.25rem;
+    min-height: 60px;
+    position: relative;
+  }
+
+  /* Conflict highlight */
+  .conflict-highlight {
+    outline: 2px solid #ef4444;
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  /* Smooth transitions */
+  .transition-smooth {
+    transition: all 200ms cubic-bezier(0.23, 1, 0.32, 1);
+  }
+
+  /* Flex center */
+  .flex-center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Grid center */
+  .grid-center {
+    display: grid;
+    place-items: center;
+  }
+
+  /* Text truncate */
+  .truncate-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* Opacity hover */
+  .hover-opacity {
+    transition: opacity 150ms;
+  }
+  
+  .hover-opacity:hover {
+    opacity: 0.8;
+  }
+
+  /* Scale hover */
+  .hover-scale {
+    transition: transform 150ms;
+  }
+  
+  .hover-scale:hover {
+    transform: scale(1.05);
+  }
+
+  /* Gradient text */
+  .gradient-text {
+    background: linear-gradient(to right, #0d9488, #0369a1);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Subtle clinical grid texture for surfaces */
+  .clinical-grid-bg {
+    background-color: #f1f5f8;
+    background-image:
+      linear-gradient(to right, rgba(13, 148, 136, 0.04) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(13, 148, 136, 0.04) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+
+  /* Professional shadow */
+  .shadow-professional {
+    box-shadow: var(--shadow-lg);
+  }
+
+  /* Disabled state */
+  .disabled-state {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+/* Animations */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+.animate-slide-in {
+  animation: slideIn 0.2s ease-out;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
