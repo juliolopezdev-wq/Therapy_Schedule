@@ -263,8 +263,8 @@ class SDKServer {
     const session = await this.verifySession(sessionCookie);
 
     if (!session) {
-      if (process.env.VERCEL === "1" || process.env.NODE_ENV === "development") {
-        console.warn("[Auth] Missing session cookie, bypassing auth for Vercel/Local dev");
+      if (process.env.VERCEL === "1" || process.env.RENDER === "true" || process.env.NODE_ENV === "development") {
+        console.warn("[Auth] Missing session cookie, bypassing auth for Deployment/Local dev");
         return {
           id: 1,
           openId: "mock-user",
