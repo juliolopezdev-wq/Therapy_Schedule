@@ -260,11 +260,12 @@ export default function TherapyBoard() {
   const patientsUnderTarget = useMemo(() => {
     return patients.filter((p) => {
       if (p.isDischarged) return false;
+      if (teamFilter !== "all" && p.teamId !== teamFilter) return false;
       const mins = weekMinsByPatient.get(p.id) ?? 0;
       const target = (p as any).weeklyMinuteTarget ?? 900;
       return mins < target;
     });
-  }, [patients, weekMinsByPatient]);
+  }, [patients, weekMinsByPatient, teamFilter]);
 
   // Fire a toast when a patient crosses from below to at/above their weekly target
   const prevWeekMinsRef = useRef<Map<number, number>>(new Map());
@@ -684,7 +685,9 @@ export default function TherapyBoard() {
                             </div>
                             <div className="flex justify-between items-center mt-1.5 text-xs text-amber-800/90">
                               <span>Admitted: <span className="font-medium">{adminLabel}</span></span>
-                              <span>Ends: <span className="font-medium">{endLabel}</span></span>
+                              {adminStr ? (
+                                <span>Ends: <span className="font-medium">{endLabel}</span></span>
+                              ) : null}
                             </div>
                           </li>
                         );
