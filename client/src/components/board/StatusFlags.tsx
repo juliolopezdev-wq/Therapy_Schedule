@@ -11,7 +11,7 @@ export function FlagBadge({ flag }: { flag: FlagType }) {
   const meta = FLAG_META[flag];
   return (
     <span
-      className="inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-extrabold leading-none uppercase tracking-wide border border-black/[0.05] shadow-[0_1px_1px_rgba(0,0,0,0.02)]"
+      className="inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-extrabold leading-none uppercase tracking-wide border border-black/[0.05] shadow-[0_1px_1px_rgba(0,0,0,0.02)] whitespace-nowrap"
       style={{ backgroundColor: meta.bg, color: meta.fg }}
       title={meta.description}
     >
