@@ -3,6 +3,7 @@ import {
   getPatientById,
   getTherapists,
   getTherapySessionsForDateRange,
+  createTherapySession,
 } from "./db";
 import {
   patientWeekStart,
@@ -199,4 +200,35 @@ export async function getGapFillSuggestions(patientId: number, referenceDate: Da
   }
 
   return suggestions;
+}
+
+export async function autoScheduleAllGaps(referenceDate: Date = new Date()): Promise<number> {
+  const summary = await getWeeklyMinutesSummary(referenceDate);
+  let totalScheduled = 0;
+
+  for (const patient of summary) {
+    if (patient.remainingMinutes <= 0) continue;
+
+    const suggestions = await getGapFillSuggestions(patient.patientId, referenceDate);
+    for (const suggestion of suggestions) {
+      if (!suggestion.therapistId) continue;
+
+      const startTime = suggestion.startTime;
+      const endTime = new Date(startTime.getTime() + suggestion.durationMinutes * 60000);
+
+      await createTherapySession({
+        patientId: patient.patientId,
+        therapistId: suggestion.therapistId,
+        therapyType: "PT", // Default to PT for auto-scheduled sessions
+        startTime,
+        endTime,
+        durationMinutes: suggestion.durationMinutes,
+        notes: "Auto-scheduled by AI Assistant",
+      });
+
+      totalScheduled++;
+    }
+  }
+
+  return totalScheduled;
 }

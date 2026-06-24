@@ -1,5 +1,5 @@
 import { ENV } from "./_core/env";
-import { getWeeklyMinutesSummary, getGapFillSuggestions, GapFillSuggestion } from "./scheduling";
+import { getWeeklyMinutesSummary, getGapFillSuggestions, autoScheduleAllGaps, GapFillSuggestion } from "./scheduling";
 import { formatWeekRangeLabel, WeeklyMinutesSummary } from "../shared/weekUtils";
 
 export async function buildSchedulerContext(referenceDate: Date = new Date()): Promise<string> {
@@ -63,6 +63,11 @@ export async function askScheduler(question: string, referenceDate: Date = new D
     "Be concise and concrete (cite room numbers, names, times, and minutes). If the data doesn't contain",
     "the answer, say so plainly instead of guessing.",
     "",
+    "IMPORTANT COMMAND INSTRUCTION:",
+    "If the user explicitly asks you to 'schedule patients', 'fill gaps', 'maximize minutes', or 'auto-schedule',",
+    "you MUST include the exact tag [EXECUTE_AUTO_SCHEDULE] anywhere in your text response.",
+    "When you include this tag, the system will automatically book all recommended gap-fill sessions to maximize minutes.",
+    "",
     "=== SCHEDULING DATA ===",
     context,
     "=== END DATA ===",
@@ -93,8 +98,17 @@ export async function askScheduler(question: string, referenceDate: Date = new D
     }
 
     const data = await res.json() as any;
+    let answerText = data.response?.trim() || "(Ollama returned an empty response.)";
+    let autoScheduledCount = 0;
+
+    if (answerText.includes("[EXECUTE_AUTO_SCHEDULE]")) {
+      answerText = answerText.replace(/\[EXECUTE_AUTO_SCHEDULE\]/g, "").trim();
+      autoScheduledCount = await autoScheduleAllGaps(referenceDate);
+      answerText += `\n\n✅ **Auto-Scheduler Triggered!** I successfully scheduled ${autoScheduledCount} new sessions to maximize weekly minutes!`;
+    }
+
     return {
-      answer: data.response?.trim() || "(Ollama returned an empty response.)",
+      answer: answerText,
       model: ENV.ollamaModel,
       usedFallback: false,
     };
