@@ -34,7 +34,7 @@ import { getWeeklyMinutesSummary, getGapFillSuggestions } from "./scheduling";
 import { askScheduler } from "./ollama";
 
 const therapyTypeEnum = z.enum(["PT", "OT", "SLP", "Eval"]);
-const flagTypeEnum = z.enum(["DC", "Name Alert", "Weekend", "In-Service", "Appointment"]);
+const flagTypeEnum = z.enum(["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program"]);
 
 export const appRouter = router({
   system: systemRouter,

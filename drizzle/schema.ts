@@ -57,7 +57,7 @@ export type InsertPatient = typeof patients.$inferInsert;
 export const statusFlags = sqliteTable("statusFlags", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   patientId: integer("patientId").notNull(),
-  flagType: text("flagType", { enum: ["DC", "Name Alert", "Weekend", "In-Service", "Appointment"] }).notNull(),
+  flagType: text("flagType", { enum: ["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program"] }).notNull(),
   date: integer("date", { mode: 'timestamp' }).notNull(),
   createdAt: integer("createdAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
 });

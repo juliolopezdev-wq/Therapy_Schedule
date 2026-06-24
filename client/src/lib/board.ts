@@ -1,10 +1,10 @@
 // Board-wide constants and helpers
 
 export type TherapyType = "PT" | "OT" | "SLP" | "Eval";
-export type FlagType = "DC" | "Name Alert" | "Weekend" | "In-Service" | "Appointment";
+export type FlagType = "DC" | "Name Alert" | "Weekend" | "In-Service" | "Appointment" | "Stroke Program";
 
 export const THERAPY_TYPES: TherapyType[] = ["PT", "OT", "SLP", "Eval"];
-export const FLAG_TYPES: FlagType[] = ["DC", "Name Alert", "Weekend", "In-Service", "Appointment"];
+export const FLAG_TYPES: FlagType[] = ["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program"];
 
 export const THERAPY_META: Record<
   TherapyType,
@@ -32,6 +32,7 @@ export const FLAG_META: Record<
   Weekend: { label: "Weekend", bg: "#e0f2fe", fg: "#0369a1", description: "Weekend therapy order" },
   "In-Service": { label: "In-Service", bg: "#f3e8ff", fg: "#6b21a8", description: "In-Service training session" },
   Appointment: { label: "Appointment", bg: "#d1fae5", fg: "#065f46", description: "Off-unit clinical appointment" },
+  "Stroke Program": { label: "Stroke Program", bg: "#fce7f3", fg: "#be185d", description: "Specialized Stroke Program Protocol" },
 };
 
 import {
