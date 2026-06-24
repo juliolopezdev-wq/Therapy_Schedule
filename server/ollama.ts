@@ -1,5 +1,5 @@
 import { ENV } from "./_core/env";
-import { getWeeklyMinutesSummary, getGapFillSuggestions, autoScheduleAllGaps, GapFillSuggestion } from "./scheduling";
+import { getWeeklyMinutesSummary, getGapFillSuggestions, autoScheduleAllGaps, getJointCommissionAnalytics, GapFillSuggestion } from "./scheduling";
 import { formatWeekRangeLabel, WeeklyMinutesSummary } from "../shared/weekUtils";
 
 export async function buildSchedulerContext(referenceDate: Date = new Date()): Promise<string> {
@@ -11,6 +11,24 @@ export async function buildSchedulerContext(referenceDate: Date = new Date()): P
   const lines: string[] = [];
   lines.push(`Today is ${referenceDate.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}.`);
   lines.push("");
+
+  const analytics = await getJointCommissionAnalytics(referenceDate);
+  lines.push("=== JOINT COMMISSION & REHAB ANALYTICS (Past 7 Days) ===");
+  lines.push(`Compliance: ${analytics.compliance.onTarget} on target, ${analytics.compliance.atRisk} at risk (Total Active: ${analytics.compliance.totalActive})`);
+  lines.push(`Therapy Breakdown: PT: ${analytics.therapyBreakdown.PT} min, OT: ${analytics.therapyBreakdown.OT} min, SLP: ${analytics.therapyBreakdown.SLP} min, Eval: ${analytics.therapyBreakdown.Eval} min`);
+  
+  lines.push("Therapist Utilization:");
+  analytics.therapistUtilization.forEach(t => lines.push(`- ${t.name}: ${t.scheduledMinutes} min`));
+  
+  if (analytics.careGaps.length > 0) {
+    lines.push("CRITICAL GAPS IN CARE (0 minutes in last 48 hours):");
+    analytics.careGaps.forEach(g => lines.push(`- Room ${g.roomNumber} (${g.patientName})`));
+  } else {
+    lines.push("Gaps in Care: None (All patients have received therapy recently)");
+  }
+  lines.push("==========================================================");
+  lines.push("");
+  
   lines.push("Weekly minute progress (each patient's week starts on their own admission day):");
 
   const underTarget: WeeklyMinutesSummary[] = [];
@@ -59,9 +77,11 @@ export async function askScheduler(question: string, referenceDate: Date = new D
   const context = await buildSchedulerContext(referenceDate);
 
   const prompt = [
-    "You are a scheduling assistant for a rehab therapy unit. Use ONLY the data below to answer.",
-    "Be concise and concrete (cite room numbers, names, times, and minutes). If the data doesn't contain",
-    "the answer, say so plainly instead of guessing.",
+    "You are a scheduling assistant AND a Joint Commission data analyst for a rehab therapy unit.",
+    "Use ONLY the data below to answer.",
+    "Be concise and concrete (cite room numbers, names, times, and minutes).",
+    "If asked for metrics, compliance, or rehab analysis, use the ANALYTICS section to give a detailed breakdown.",
+    "If the data doesn't contain the answer, say so plainly instead of guessing.",
     "",
     "IMPORTANT COMMAND INSTRUCTION:",
     "If the user explicitly asks you to 'schedule patients', 'fill gaps', 'maximize minutes', or 'auto-schedule',",

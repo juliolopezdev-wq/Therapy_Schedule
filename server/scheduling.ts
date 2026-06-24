@@ -232,3 +232,85 @@ export async function autoScheduleAllGaps(referenceDate: Date = new Date()): Pro
 
   return totalScheduled;
 }
+
+export interface JointCommissionAnalytics {
+  compliance: {
+    totalActive: number;
+    onTarget: number;
+    atRisk: number;
+  };
+  therapyBreakdown: {
+    PT: number;
+    OT: number;
+    SLP: number;
+    Eval: number;
+  };
+  therapistUtilization: Array<{
+    name: string;
+    scheduledMinutes: number;
+  }>;
+  careGaps: Array<{
+    patientName: string;
+    roomNumber: string;
+    daysWithoutTherapy: number;
+  }>;
+}
+
+export async function getJointCommissionAnalytics(referenceDate: Date = new Date()): Promise<JointCommissionAnalytics> {
+  const summary = await getWeeklyMinutesSummary(referenceDate);
+  const therapists = await getTherapists();
+
+  const past7DaysStart = startOfDayLocal(addDaysLocal(referenceDate, -6));
+  const todayEnd = startOfDayLocal(addDaysLocal(referenceDate, 1));
+  const recentSessions = await getTherapySessionsForDateRange(past7DaysStart, todayEnd);
+
+  // 1. Compliance
+  const compliance = {
+    totalActive: summary.length,
+    onTarget: summary.filter(p => p.remainingMinutes <= 0 || !p.atRisk).length,
+    atRisk: summary.filter(p => p.atRisk).length,
+  };
+
+  // 2. Therapy Breakdown
+  const therapyBreakdown = { PT: 0, OT: 0, SLP: 0, Eval: 0 };
+  recentSessions.forEach(s => {
+    if (s.therapyType === "PT") therapyBreakdown.PT += s.durationMinutes;
+    else if (s.therapyType === "OT") therapyBreakdown.OT += s.durationMinutes;
+    else if (s.therapyType === "SLP") therapyBreakdown.SLP += s.durationMinutes;
+    else if (s.therapyType === "Eval") therapyBreakdown.Eval += s.durationMinutes;
+  });
+
+  // 3. Therapist Utilization
+  const therapistMap = new Map<number, number>();
+  recentSessions.forEach(s => {
+    if (s.therapistId) {
+      therapistMap.set(s.therapistId, (therapistMap.get(s.therapistId) || 0) + s.durationMinutes);
+    }
+  });
+  const therapistUtilization = therapists.map(t => ({
+    name: t.name,
+    scheduledMinutes: therapistMap.get(t.id) || 0,
+  })).sort((a, b) => b.scheduledMinutes - a.scheduledMinutes);
+
+  // 4. Gaps in Care (Patients with 0 minutes in the last 2 days)
+  const careGaps: JointCommissionAnalytics["careGaps"] = [];
+  const yesterdayStart = startOfDayLocal(addDaysLocal(referenceDate, -1));
+  
+  for (const patient of summary) {
+    const recentPatientSessions = recentSessions.filter(s => s.patientId === patient.patientId && new Date(s.startTime).getTime() >= yesterdayStart.getTime());
+    if (recentPatientSessions.length === 0) {
+      careGaps.push({
+        patientName: patient.patientName,
+        roomNumber: patient.roomNumber,
+        daysWithoutTherapy: 2, // Approximated for "yesterday and today"
+      });
+    }
+  }
+
+  return {
+    compliance,
+    therapyBreakdown,
+    therapistUtilization,
+    careGaps,
+  };
+}
