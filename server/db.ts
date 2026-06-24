@@ -237,6 +237,34 @@ export async function deleteTherapySession(id: number) {
   return { success: true };
 }
 
+export async function clearSchedule(timeframe: "daily" | "weekly", referenceDate: Date, therapistId?: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  let start: Date;
+  let end: Date;
+
+  if (timeframe === "daily") {
+    const bounds = dayBounds(referenceDate);
+    start = bounds.startOfDay;
+    end = bounds.endOfDay;
+  } else {
+    start = new Date(referenceDate);
+    start.setHours(0, 0, 0, 0);
+    end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    end.setHours(23, 59, 59, 999);
+  }
+
+  let conditions = and(gte(therapySessions.startTime, start), lte(therapySessions.startTime, end));
+  if (therapistId !== undefined) {
+    conditions = and(conditions, eq(therapySessions.therapistId, therapistId));
+  }
+
+  await db.delete(therapySessions).where(conditions);
+  return { success: true, timeframe, therapistId };
+}
+
 /* ---------------------------------------------------------------------------
  * Therapists
  * ------------------------------------------------------------------------ */

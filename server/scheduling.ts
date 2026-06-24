@@ -4,6 +4,7 @@ import {
   getTherapists,
   getTherapySessionsForDateRange,
   createTherapySession,
+  getTeams,
 } from "./db";
 import {
   patientWeekStart,
@@ -313,4 +314,43 @@ export async function getJointCommissionAnalytics(referenceDate: Date = new Date
     therapistUtilization,
     careGaps,
   };
+}
+
+/* ------------------------------------------------------------------------ */
+/* Team roster -- which therapists can see which patients                   */
+/* ------------------------------------------------------------------------ */
+
+export interface TeamRosterEntry {
+  teamId: number;
+  teamName: string;
+  therapists: { id: number; name: string }[];
+  patients: { id: number; roomNumber: string; name: string }[];
+}
+
+/** Groups therapists and active patients by team -- the actual "who can see whom" coverage map. */
+export async function getTeamRoster(): Promise<TeamRosterEntry[]> {
+  const [teams, therapists, patients] = await Promise.all([getTeams(), getTherapists(), getPatients()]);
+  const active = patients.filter((p) => !p.isDischarged);
+
+  const entries: TeamRosterEntry[] = teams.map((t) => ({
+    teamId: t.id,
+    teamName: t.name,
+    therapists: therapists.filter((th) => th.teamId === t.id).map((th) => ({ id: th.id, name: th.name })),
+    patients: active
+      .filter((p) => p.teamId === t.id)
+      .map((p) => ({ id: p.id, roomNumber: p.roomNumber, name: p.name })),
+  }));
+
+  const unassignedTherapists = therapists.filter((th) => th.teamId == null);
+  const unassignedPatients = active.filter((p) => p.teamId == null);
+  if (unassignedTherapists.length > 0 || unassignedPatients.length > 0) {
+    entries.push({
+      teamId: 0,
+      teamName: "Unassigned",
+      therapists: unassignedTherapists.map((th) => ({ id: th.id, name: th.name })),
+      patients: unassignedPatients.map((p) => ({ id: p.id, roomNumber: p.roomNumber, name: p.name })),
+    });
+  }
+
+  return entries;
 }

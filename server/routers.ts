@@ -154,6 +154,7 @@ export const appRouter = router({
           name: z.string().min(1),
           teamId: z.number().nullable().optional(),
           userId: z.number().nullable().optional(),
+          therapyType: z.enum(["PT", "OT", "SLP"]).optional(),
         }),
       )
       .mutation(async ({ input }) =>
@@ -161,6 +162,7 @@ export const appRouter = router({
           name: input.name,
           teamId: input.teamId ?? null,
           userId: input.userId ?? null,
+          therapyType: input.therapyType ?? "PT",
         }),
       ),
     update: publicProcedure
@@ -169,6 +171,7 @@ export const appRouter = router({
           id: z.number(),
           name: z.string().optional(),
           teamId: z.number().nullable().optional(),
+          therapyType: z.enum(["PT", "OT", "SLP"]).optional(),
         }),
       )
       .mutation(async ({ input }) => {

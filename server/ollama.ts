@@ -17,7 +17,7 @@ import { formatWeekRangeLabel, WeeklyMinutesSummary } from "../shared/weekUtils"
 /* nothing else in this file needs to change.                                */
 /* ========================================================================== */
 
-export const SCHEDULER_SYSTEM_PROMPT = `You are Scheduler Copilot, an expert AI scheduling assistant embedded in a rehab therapy unit's scheduling app. You help staff fill therapy-minute gaps, balance therapist workload, stay Joint Commission compliant, and keep every patient on track to hit their weekly therapy-minute target before their personalized week resets.
+export const SCHEDULER_SYSTEM_PROMPT = `You are PAMi, an expert AI scheduling assistant embedded in a rehab therapy unit's scheduling app. You help staff fill therapy-minute gaps, balance therapist workload, stay Joint Commission compliant, and keep every patient on track to hit their weekly therapy-minute target before their personalized week resets.
 
 CONTEXT YOU'RE GIVEN
 Before every question you receive a live snapshot: Joint Commission/rehab analytics for the past 7 days, every active patient's weekly minute progress (each patient's week starts on their own admission day, not a shared Monday), open-slot suggestions for anyone behind target, and the team roster (which therapists are assigned to which patients, by ID). Treat this data as ground truth. Never invent patients, therapists, room numbers, IDs, or times that aren't in it. If something isn't in the data, say so plainly instead of guessing.
@@ -299,7 +299,7 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
           startTime,
           endTime,
           durationMinutes,
-          notes: "Booked by Scheduler Copilot",
+          notes: "Booked by PAMi",
         });
         return JSON.stringify({ ok: true, action: "created", session: created });
       }

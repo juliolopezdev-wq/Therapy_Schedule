@@ -27,11 +27,12 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Plus, Trash2, UserRound } from "lucide-react";
+import { Plus, Trash2, UserRound, Pencil } from "lucide-react";
 
 interface Therapist {
   id: number;
   name: string;
+  therapyType: string;
   teamId: number | null;
 }
 
@@ -46,11 +47,12 @@ interface TherapistPanelProps {
   onOpenChange: (open: boolean) => void;
   therapists: Therapist[];
   teams: Team[];
-  onAdd: (name: string, teamId: number | null) => void;
+  onAdd: (name: string, teamId: number | null, therapyType: "PT" | "OT" | "SLP") => void;
+  onEdit: (id: number, name: string, teamId: number | null, therapyType: "PT" | "OT" | "SLP") => void;
   onDelete: (id: number) => void;
 }
 
-const EMPTY_FORM = { name: "", teamId: "none" };
+const EMPTY_FORM = { name: "", teamId: "none", therapyType: "PT" as "PT" | "OT" | "SLP" };
 
 export function TherapistPanel({
   open,
@@ -58,15 +60,37 @@ export function TherapistPanel({
   therapists,
   teams,
   onAdd,
+  onEdit,
   onDelete,
 }: TherapistPanelProps) {
   const [form, setForm] = useState(EMPTY_FORM);
+  const [editingId, setEditingId] = useState<number | null>(null);
 
-  function handleAdd() {
+  function handleSave() {
     const name = form.name.trim();
     if (!name) return;
-    onAdd(name, form.teamId === "none" ? null : Number(form.teamId));
+    const teamIdVal = form.teamId === "none" ? null : Number(form.teamId);
+    if (editingId) {
+      onEdit(editingId, name, teamIdVal, form.therapyType);
+      setEditingId(null);
+    } else {
+      onAdd(name, teamIdVal, form.therapyType);
+    }
     setForm(EMPTY_FORM);
+  }
+
+  function handleCancelEdit() {
+    setEditingId(null);
+    setForm(EMPTY_FORM);
+  }
+
+  function handleEditClick(t: Therapist) {
+    setEditingId(t.id);
+    setForm({
+      name: t.name,
+      teamId: t.teamId ? String(t.teamId) : "none",
+      therapyType: t.therapyType as "PT" | "OT" | "SLP",
+    });
   }
 
   // Group therapists by team
@@ -90,17 +114,35 @@ export function TherapistPanel({
 
         {/* Add therapist form */}
         <div className="border-b border-slate-100 p-4 space-y-3">
-          <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Add Staff</p>
-          <div className="grid grid-cols-5 gap-2">
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">
+            {editingId ? "Edit Staff" : "Add Staff"}
+          </p>
+          <div className="grid grid-cols-7 gap-2">
             <div className="col-span-3 space-y-1">
               <Label className="text-xs text-slate-500">Name</Label>
               <Input
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder="First Last"
-                onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+                onKeyDown={(e) => e.key === "Enter" && handleSave()}
                 className="h-8 text-sm"
               />
+            </div>
+            <div className="col-span-2 space-y-1">
+              <Label className="text-xs text-slate-500">Type</Label>
+              <Select
+                value={form.therapyType}
+                onValueChange={(v: "PT" | "OT" | "SLP") => setForm({ ...form, therapyType: v })}
+              >
+                <SelectTrigger className="h-8 text-sm">
+                  <SelectValue placeholder="Type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="PT">PT</SelectItem>
+                  <SelectItem value="OT">OT</SelectItem>
+                  <SelectItem value="SLP">SLP</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="col-span-2 space-y-1">
               <Label className="text-xs text-slate-500">Team</Label>
@@ -128,14 +170,21 @@ export function TherapistPanel({
               </Select>
             </div>
           </div>
-          <Button
-            size="sm"
-            className="w-full h-8"
-            disabled={!form.name.trim()}
-            onClick={handleAdd}
-          >
-            <Plus className="mr-1.5 h-3.5 w-3.5" /> Add Staff Member
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              className="flex-1 h-8"
+              disabled={!form.name.trim()}
+              onClick={handleSave}
+            >
+              {editingId ? "Save Changes" : <><Plus className="mr-1.5 h-3.5 w-3.5" /> Add Staff Member</>}
+            </Button>
+            {editingId && (
+              <Button size="sm" variant="outline" className="h-8" onClick={handleCancelEdit}>
+                Cancel
+              </Button>
+            )}
+          </div>
         </div>
 
         {/* Therapist list */}
@@ -162,7 +211,7 @@ export function TherapistPanel({
                     </div>
                     <ul className="space-y-1.5">
                       {members.map((t) => (
-                        <TherapistRow key={t.id} therapist={t} onDelete={onDelete} />
+                        <TherapistRow key={t.id} therapist={t} onDelete={onDelete} onEditClick={handleEditClick} />
                       ))}
                     </ul>
                   </div>
@@ -179,7 +228,7 @@ export function TherapistPanel({
                   </div>
                   <ul className="space-y-1.5">
                     {unassigned.map((t) => (
-                      <TherapistRow key={t.id} therapist={t} onDelete={onDelete} />
+                      <TherapistRow key={t.id} therapist={t} onDelete={onDelete} onEditClick={handleEditClick} />
                     ))}
                   </ul>
                 </div>
@@ -195,9 +244,11 @@ export function TherapistPanel({
 function TherapistRow({
   therapist,
   onDelete,
+  onEditClick,
 }: {
   therapist: Therapist;
   onDelete: (id: number) => void;
+  onEditClick: (t: Therapist) => void;
 }) {
   return (
     <li className="flex items-center justify-between gap-3 rounded border border-slate-200 bg-white px-3 py-2">
@@ -210,20 +261,34 @@ function TherapistRow({
             .join("")
             .toUpperCase()}
         </div>
-        <span className="truncate text-sm font-medium text-slate-800">
-          {therapist.name}
-        </span>
+        <div className="flex items-center gap-2 truncate">
+          <span className="truncate text-sm font-medium text-slate-800">
+            {therapist.name}
+          </span>
+          <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-400">
+            {therapist.therapyType}
+          </span>
+        </div>
       </div>
-      <AlertDialog>
-        <AlertDialogTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0 text-slate-400 hover:text-red-600"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
-        </AlertDialogTrigger>
+      <div className="flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 shrink-0 text-slate-400 hover:text-emerald-600"
+          onClick={() => onEditClick(therapist)}
+        >
+          <Pencil className="h-3.5 w-3.5" />
+        </Button>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0 text-slate-400 hover:text-red-600"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </AlertDialogTrigger>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {therapist.name}?</AlertDialogTitle>
@@ -242,6 +307,7 @@ function TherapistRow({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      </div>
     </li>
   );
 }

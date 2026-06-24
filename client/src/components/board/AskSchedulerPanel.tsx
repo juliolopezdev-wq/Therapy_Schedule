@@ -70,10 +70,10 @@ export function AskSchedulerPanel({ open, onOpenChange }: AskSchedulerPanelProps
       <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-md">
         <SheetHeader className="bg-white/80 p-5 backdrop-blur-md border-b border-slate-100 shadow-sm z-10">
           <SheetTitle className="flex items-center gap-2 text-lg font-bold text-slate-800">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-white shadow-md">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 text-white shadow-md">
               <Bot className="h-4 w-4" />
             </div>
-            Scheduler Copilot
+            PAMi
           </SheetTitle>
           <SheetDescription className="text-slate-500">
             Ask about gaps, coverage, or compliance — or tell it to book, move, or cancel a session and it'll do it for real.
@@ -91,9 +91,9 @@ export function AskSchedulerPanel({ open, onOpenChange }: AskSchedulerPanelProps
                   key={p}
                   type="button"
                   onClick={() => submit(p)}
-                  className="group flex w-full items-start gap-3 rounded-xl border border-indigo-100/50 bg-white p-3 text-left text-[13px] text-slate-600 shadow-sm transition-all hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-md"
+                  className="group flex w-full items-start gap-3 rounded-xl border border-blue-100/50 bg-white p-3 text-left text-[13px] text-slate-600 shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md"
                 >
-                  <div className="mt-0.5 rounded-full bg-indigo-50 p-1 text-indigo-500 group-hover:bg-indigo-100 group-hover:text-indigo-600 transition-colors">
+                  <div className="mt-0.5 rounded-full bg-blue-50 p-1 text-blue-500 group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors">
                     <Sparkles className="h-3.5 w-3.5" />
                   </div>
                   <span className="leading-snug pt-0.5">{p}</span>
@@ -138,7 +138,7 @@ export function AskSchedulerPanel({ open, onOpenChange }: AskSchedulerPanelProps
 
           {ask.isPending && (
             <div className="flex items-center gap-2 pl-2 pt-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-white shadow-sm">
+              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 text-white shadow-sm">
                 <Bot className="h-3.5 w-3.5" />
               </div>
               <div className="flex items-center gap-1 rounded-2xl rounded-tl-sm bg-white border border-slate-100 px-3 py-2 shadow-sm">
@@ -161,7 +161,7 @@ export function AskSchedulerPanel({ open, onOpenChange }: AskSchedulerPanelProps
                   submit(question);
                 }
               }}
-              placeholder="Ask Copilot anything..."
+              placeholder="Ask PAMi anything..."
               className="min-h-[44px] flex-1 resize-none border-0 bg-transparent text-[13px] focus-visible:ring-0 focus-visible:ring-offset-0 px-2 py-3 shadow-none"
             />
             <Button

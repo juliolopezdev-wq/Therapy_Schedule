@@ -57,6 +57,7 @@ import {
 import { SessionTile, type SessionTileData } from "@/components/board/SessionTile";
 import { GridCell } from "@/components/board/GridCell";
 import { FlagBadge, FlagToggle } from "@/components/board/StatusFlags";
+import { BoardHeader } from "@/components/board/BoardHeader";
 import { SessionDialog, type SessionFormValue } from "@/components/board/SessionDialog";
 import { PatientDialog, type PatientFormValue } from "@/components/board/PatientDialog";
 import { PatientPanel } from "@/components/board/PatientPanel";
@@ -94,6 +95,13 @@ const EMPTY_PATIENT: PatientFormValue = {
 
 type ViewFilter = "all" | TherapyType;
 
+export interface ConflictPair {
+  id: string;
+  type: "therapist" | "patient";
+  sessionA: SessionTileData;
+  sessionB: SessionTileData;
+}
+
 export default function TherapyBoard() {
   const utils = trpc.useUtils();
   const [day, setDay] = useState(() => startOfDay(new Date()));
@@ -117,6 +125,31 @@ export default function TherapyBoard() {
     totalMinutes: number;
     weekSessions: WeekSessionRow[];
   } | null>(null);
+
+  const [collapsedSections, setCollapsedSections] = useState<Set<number>>(new Set());
+
+  const jumpToPatient = (patientId: number) => {
+    const patient = patientsQuery.data?.find((p) => p.id === patientId);
+    if (patient) {
+      if ((patient as any).teamId) {
+        setCollapsedSections((prev) => {
+          const next = new Set(prev);
+          next.delete((patient as any).teamId);
+          return next;
+        });
+      }
+      setFilter("all");
+      setTeamFilter("all");
+      setTimeout(() => {
+        const row = document.getElementById(`patient-row-${patientId}`);
+        if (row) {
+          row.scrollIntoView({ behavior: "smooth", block: "center" });
+          row.classList.add("bg-amber-100/50", "transition-colors", "duration-500");
+          setTimeout(() => row.classList.remove("bg-amber-100/50", "transition-colors", "duration-500"), 2000);
+        }
+      }, 100);
+    }
+  };
 
   // Seed teams once on mount
   const seedTeams = trpc.teams.seed.useMutation();
@@ -162,6 +195,9 @@ export default function TherapyBoard() {
   const createTherapist = trpc.therapists.create.useMutation({
     onSuccess: () => utils.therapists.list.invalidate(),
   });
+  const updateTherapist = trpc.therapists.update.useMutation({
+    onSuccess: () => utils.therapists.list.invalidate(),
+  });
   const deleteTherapist = trpc.therapists.delete.useMutation({
     onSuccess: () => utils.therapists.list.invalidate(),
   });
@@ -185,9 +221,11 @@ export default function TherapyBoard() {
     });
   }, [rawSessions]);
 
+
   // Conflict detection: same therapist overlapping in time, or same patient overlapping
-  const conflictIds = useMemo(() => {
+  const { conflictIds, conflictPairs } = useMemo(() => {
     const ids = new Set<number>();
+    const pairs: ConflictPair[] = [];
     const withTherapist = tiles.filter((t) => t.therapistId != null);
     for (let i = 0; i < withTherapist.length; i++) {
       for (let j = i + 1; j < withTherapist.length; j++) {
@@ -199,6 +237,12 @@ export default function TherapyBoard() {
         ) {
           ids.add(a.id);
           ids.add(b.id);
+          pairs.push({
+            id: `t-${a.id}-${b.id}`,
+            type: "therapist",
+            sessionA: a,
+            sessionB: b,
+          });
         }
       }
     }
@@ -214,11 +258,17 @@ export default function TherapyBoard() {
           if (sessionsOverlap(arr[i].slotIndex, arr[i].slotSpan, arr[j].slotIndex, arr[j].slotSpan)) {
             ids.add(arr[i].id);
             ids.add(arr[j].id);
+            pairs.push({
+              id: `p-${arr[i].id}-${arr[j].id}`,
+              type: "patient",
+              sessionA: arr[i],
+              sessionB: arr[j],
+            });
           }
         }
       }
     });
-    return ids;
+    return { conflictIds: ids, conflictPairs: pairs };
   }, [tiles]);
 
   // Weekly minutes per patient (Mon–Sun of the viewed week)
@@ -549,7 +599,7 @@ export default function TherapyBoard() {
     return result;
   }, [patients, teams, teamFilter]);
 
-  const [collapsedSections, setCollapsedSections] = useState<Set<number>>(new Set());
+
 
   function toggleSection(id: number) {
     setCollapsedSections((prev) => {
@@ -567,246 +617,31 @@ export default function TherapyBoard() {
 
   return (
     <div className="min-h-screen bg-[#f1f4f7]">
-      {/* Header */}
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white shadow-sm">
-        {/* Primary toolbar */}
-        <div className="flex items-center gap-2 px-4 py-2.5 sm:px-6">
-          {/* Logo */}
-          <div className="flex shrink-0 items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
-              </svg>
-            </div>
-            <div className="hidden flex-col leading-none sm:flex">
-              <span className="text-sm font-extrabold tracking-tight text-slate-900">PAM</span>
-              <span className="text-[9px] font-semibold uppercase tracking-widest text-primary">Rehab Scheduler</span>
-            </div>
-          </div>
-
-          <div className="mx-2 hidden h-5 w-px bg-slate-200 sm:block" />
-
-          {/* Date navigation */}
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-slate-500 hover:text-slate-800"
-              onClick={() => setDay(addDays(day, -1))}
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <div className="flex min-w-[140px] items-center justify-center gap-1.5 rounded border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 sm:min-w-[200px]">
-              <CalendarIcon className="h-3 w-3 shrink-0 text-primary" />
-              <span className="hidden sm:inline">{formatLongDate(day)}</span>
-              <span className="sm:hidden">{day.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
-            </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-slate-500 hover:text-slate-800"
-              onClick={() => setDay(addDays(day, 1))}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 px-2.5 text-xs font-medium text-slate-500 hover:text-slate-800"
-              onClick={() => setDay(startOfDay(new Date()))}
-            >
-              Today
-            </Button>
-          </div>
-
-          <div className="flex-1" />
-
-          {/* Live stats */}
-          <div className="hidden items-center gap-3 md:flex">
-            <div className="flex items-center gap-1.5 text-xs text-slate-500">
-              <LayoutGrid className="h-3.5 w-3.5 shrink-0" />
-              <span className="tabular-nums font-semibold text-slate-700">{totalSessions}</span>
-              <span>sessions today</span>
-            </div>
-            {patientsUnderTarget.length > 0 && (
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button className="flex cursor-pointer items-center gap-1.5 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-100 transition-colors">
-                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                    <span>{patientsUnderTarget.length} under target</span>
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent side="bottom" align="end" className="w-80 p-0 overflow-hidden shadow-lg border-amber-200/60 bg-amber-50/95 backdrop-blur">
-                  <div className="p-3 border-b border-amber-200/40 bg-amber-100/50">
-                    <p className="font-semibold text-amber-900 text-sm">Patients Under Target</p>
-                    <p className="text-xs text-amber-700/80 mt-0.5">Custom weekly targets based on admission</p>
-                  </div>
-                  <ScrollArea className="h-[300px]">
-                    <ul className="p-3 space-y-2">
-                      {patientsUnderTarget.map((p) => {
-                        const mins = weekMinsByPatient.get(p.id) ?? 0;
-                        const target = (p as any).weeklyMinuteTarget ?? 900;
-                        const minsNeeded = Math.max(0, target - mins);
-                        const hoursNeeded = (minsNeeded / 60).toFixed(1);
-                        const bounds = getPatientWeekBounds((p as any).admissionDate, day);
-                        const startLabel = bounds.start.toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
-                        const endLabel = bounds.end.toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
-                        const adminStr = (p as any).admissionDate;
-                        const adminDate = adminStr ? new Date(`${adminStr}T12:00:00`) : null;
-                        const adminLabel = adminDate 
-                          ? adminDate.toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" })
-                          : "N/A";
-                        
-                        return (
-                          <li key={p.id} className="text-sm flex flex-col pb-2.5 mb-2 border-b border-amber-200/40 last:border-0 last:pb-0 last:mb-0">
-                            <div className="flex justify-between items-start">
-                              <span className="font-semibold text-amber-950">{p.name} <span className="text-amber-700/80 font-normal ml-1">(Week {bounds.weekNumber})</span></span>
-                              <span className="text-xs font-medium bg-amber-200/60 px-1.5 py-0.5 rounded text-amber-950">
-                                {mins} / {target} mins
-                              </span>
-                            </div>
-                            <div className="flex justify-between items-center mt-1.5 text-xs text-amber-800/90">
-                              <span>Admitted: <span className="font-medium">{adminLabel}</span></span>
-                              {adminStr ? (
-                                <span>Ends: <span className="font-medium">{endLabel}</span></span>
-                              ) : null}
-                            </div>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </ScrollArea>
-                </PopoverContent>
-              </Popover>
-            )}
-            {conflictCount > 0 ? (
-              <div className="flex items-center gap-1.5 rounded border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-red-700">
-                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                <span>{conflictCount} conflict{conflictCount !== 1 ? "s" : ""}</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-700">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                No conflicts
-              </div>
-            )}
-          </div>
-
-          <div className="mx-2 hidden h-5 w-px bg-slate-200 md:block" />
-
-          {/* Action buttons */}
-          <div className="flex items-center gap-1.5">
-
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 border-slate-200 font-medium text-slate-600 hover:bg-slate-50"
-              onClick={() => setPanelOpen(true)}
-            >
-              <Users className="mr-1.5 h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Patients</span>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 border-slate-200 font-medium text-slate-600 hover:bg-slate-50"
-              onClick={() => setStaffPanelOpen(true)}
-            >
-              <UserRound className="mr-1.5 h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Staff</span>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 border-slate-200 font-medium text-slate-600 hover:bg-slate-50"
-              onClick={() => setWeeklyMinutesPanelOpen(true)}
-            >
-              <Clock className="mr-1.5 h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Weekly Minutes</span>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 border-slate-200 font-medium text-slate-600 hover:bg-slate-50"
-              onClick={() => setAskSchedulerPanelOpen(true)}
-            >
-              <Bot className="mr-1.5 h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Ask Scheduler</span>
-            </Button>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="h-8 w-8 border-slate-200 text-slate-500 hover:bg-slate-50"
-                  onClick={handleSnapshot}
-                >
-                  <History className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Save board snapshot</TooltipContent>
-            </Tooltip>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 border-slate-200 font-medium text-slate-600 hover:bg-slate-50"
-              onClick={() => setHistoryOpen(true)}
-            >
-              History
-            </Button>
-          </div>
-        </div>
-
-        {/* Filter bar */}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-100 bg-slate-50/70 px-4 py-2 sm:px-6">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Discipline</span>
-            <div className="flex items-center gap-0.5 rounded border border-slate-200 bg-white p-0.5">
-              <FilterButton active={filter === "all"} onClick={() => setFilter("all")}>All</FilterButton>
-              {THERAPY_TYPES.map((t) => (
-                <FilterButton
-                  key={t}
-                  active={filter === t}
-                  onClick={() => setFilter(t)}
-                  color={THERAPY_META[t].accent}
-                  activeBg={THERAPY_META[t].soft}
-                  activeFg={THERAPY_META[t].fg}
-                >
-                  {t}
-                </FilterButton>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Team</span>
-            <div className="flex flex-wrap items-center gap-0.5 rounded border border-slate-200 bg-white p-0.5">
-              <FilterButton active={teamFilter === "all"} onClick={() => setTeamFilter("all")}>All Teams</FilterButton>
-              {teams.map((team) => (
-                <FilterButton
-                  key={team.id}
-                  active={teamFilter === team.id}
-                  onClick={() => setTeamFilter(team.id)}
-                  color={team.color}
-                >
-                  {team.name}
-                </FilterButton>
-              ))}
-            </div>
-          </div>
-
-          <div className="ml-auto flex items-center gap-2">
-            <MySchedule
-              therapists={therapists}
-              value={mySchedTherapist}
-              onChange={setMySchedTherapist}
-              sessions={tiles}
-              patients={patients}
-              day={day}
-            />
-          </div>
-        </div>
-      </header>
+      <BoardHeader
+        day={day}
+        setDay={setDay}
+        filter={filter}
+        setFilter={setFilter}
+        teamFilter={teamFilter}
+        setTeamFilter={setTeamFilter}
+        teams={teams}
+        patientsUnderTarget={patientsUnderTarget}
+        weekMinsByPatient={weekMinsByPatient}
+        conflictCount={conflictCount}
+        conflictPairs={conflictPairs}
+        therapists={therapists}
+        patients={patients}
+        jumpToPatient={jumpToPatient}
+        setPanelOpen={setPanelOpen}
+        setStaffPanelOpen={setStaffPanelOpen}
+        setWeeklyMinutesPanelOpen={setWeeklyMinutesPanelOpen}
+        setAskSchedulerPanelOpen={setAskSchedulerPanelOpen}
+        setHistoryOpen={setHistoryOpen}
+        handleSnapshot={handleSnapshot}
+        mySchedTherapist={mySchedTherapist}
+        setMySchedTherapist={setMySchedTherapist}
+        tiles={tiles}
+      />
 
       {/* Mobile hint */}
       <div className="flex items-center gap-2 border-b border-slate-100 bg-white px-4 py-2 text-xs text-slate-500 sm:hidden">
@@ -834,12 +669,12 @@ export default function TherapyBoard() {
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
-          <div className="overflow-x-auto rounded border border-slate-200 bg-white shadow-sm">
-            <div className="min-w-max">
+          <div className="overflow-auto rounded-xl border border-slate-200/60 bg-white shadow-sm touch-pan-x overscroll-x-contain scroll-smooth" style={{ WebkitOverflowScrolling: "touch" }}>
+            <div className="min-w-max pb-16">
               {/* Time header */}
-              <div className="flex border-b border-slate-200 bg-slate-50">
-                <div className="sticky left-0 z-20 flex w-64 shrink-0 items-center border-r border-slate-200 bg-slate-100 px-4 py-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+              <div className="flex border-b border-slate-200/60 bg-slate-50/50 backdrop-blur-sm sticky top-0 z-20">
+                <div className="sticky left-0 z-30 flex w-64 shrink-0 items-center border-r border-slate-200/60 bg-slate-100/90 backdrop-blur px-4 py-2 shadow-[2px_0_10px_-3px_rgba(0,0,0,0.05)]">
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
                     Patient / Room
                   </span>
                 </div>
@@ -909,16 +744,16 @@ export default function TherapyBoard() {
                     <div key={section.id}>
                       {/* Section header */}
                       <div 
-                        className="flex items-center border-b border-slate-200 sticky left-0"
+                        className="flex items-center border-b border-slate-200/50"
                         style={{ 
-                          borderTop: `3px solid ${section.color}`,
-                          backgroundColor: `${section.color}0A`
+                          borderTop: `2px solid ${section.color}`,
+                          backgroundColor: `${section.color}05`
                         }}
                       >
                         {/* Colored accent + label (sticky) */}
                         <div
-                          className="sticky left-0 z-20 flex w-64 shrink-0 items-center gap-2 border-r border-slate-200 px-3 py-2"
-                          style={{ backgroundColor: `${section.color}1A` }}
+                          className="sticky left-0 z-20 flex w-64 shrink-0 items-center gap-2 border-r border-slate-200/60 px-3 py-2 shadow-[2px_0_10px_-3px_rgba(0,0,0,0.02)] backdrop-blur-md"
+                          style={{ backgroundColor: `${section.color}0A` }}
                         >
                           <button
                             onClick={() => toggleSection(section.id)}
@@ -960,7 +795,7 @@ export default function TherapyBoard() {
                         const pFlags = flagsByPatient.get(patient.id) ?? [];
                         const isDC = patient.isDischarged || pFlags.some((f) => f.flagType === "DC");
                         return (
-                          <div key={patient.id} className={cn("group/row flex border-b border-slate-100 transition-colors last:border-b-0 hover:bg-slate-50/60", isDC && "bg-slate-200 opacity-60 grayscale")}>
+                          <div key={patient.id} id={`patient-row-${patient.id}`} className={cn("group/row flex border-b border-slate-100 transition-colors last:border-b-0 hover:bg-slate-50/60", isDC && "bg-slate-200 opacity-60 grayscale")}>
                             {/* Patient label */}
                             <div
                               className={cn(
@@ -1167,9 +1002,13 @@ export default function TherapyBoard() {
         onOpenChange={setStaffPanelOpen}
         therapists={therapists}
         teams={teams}
-        onAdd={(name, teamId) => {
-          createTherapist.mutate({ name, teamId });
+        onAdd={(name, teamId, therapyType) => {
+          createTherapist.mutate({ name, teamId, therapyType });
           toast.success("Staff member added");
+        }}
+        onEdit={(id, name, teamId, therapyType) => {
+          updateTherapist.mutate({ id, name, teamId, therapyType });
+          toast.success("Staff member updated");
         }}
         onDelete={(id) => {
           deleteTherapist.mutate({ id });

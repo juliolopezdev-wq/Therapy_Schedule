@@ -30,6 +30,7 @@ export const therapists = sqliteTable("therapists", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   userId: integer("userId"),
   name: text("name").notNull(),
+  therapyType: text("therapyType", { enum: ["PT", "OT", "SLP"] }).notNull().default("PT"),
   teamId: integer("teamId"),
   createdAt: integer("createdAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
   updatedAt: integer("updatedAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
