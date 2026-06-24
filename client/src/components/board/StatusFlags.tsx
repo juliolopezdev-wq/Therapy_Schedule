@@ -37,7 +37,7 @@ export function FlagToggle({ activeFlags, onToggle }: FlagToggleProps) {
           <Flag className="h-3.5 w-3.5" />
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-56 p-2.5 border border-slate-200 shadow-lg bg-white rounded-lg" align="end">
+      <PopoverContent className="w-auto min-w-[14rem] p-2.5 border border-slate-200 shadow-lg bg-white rounded-lg" align="end">
         <p className="px-2 pb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Clinical Status Flags</p>
         <div className="space-y-1">
           {FLAG_TYPES.map((flag) => {
@@ -54,14 +54,14 @@ export function FlagToggle({ activeFlags, onToggle }: FlagToggleProps) {
                     onCheckedChange={(checked) => onToggle(flag, Boolean(checked))}
                   />
                   <span
-                    className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-extrabold border border-black/[0.04]"
+                    className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-extrabold border border-black/[0.04] whitespace-nowrap"
                     style={{ backgroundColor: meta.bg, color: meta.fg }}
                   >
                     {meta.label}
                   </span>
                 </div>
-                <span className="text-[10px] text-slate-400 font-medium">
-                  {flag === "Name Alert" ? "Alert" : flag}
+                <span className="text-[10px] text-slate-400 font-medium whitespace-nowrap ml-4">
+                  {flag === "Name Alert" ? "Alert" : flag === "Stroke Program" ? "Stroke" : flag}
                 </span>
               </label>
             );
