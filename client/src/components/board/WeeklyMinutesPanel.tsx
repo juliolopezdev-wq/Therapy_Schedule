@@ -221,9 +221,7 @@ export function WeeklyMinutesPanel({ open, onOpenChange }: WeeklyMinutesPanelPro
             <Clock className="h-5 w-5 text-slate-500" /> Weekly Minutes
           </SheetTitle>
           <SheetDescription>
-            Each patient's week starts on their own admission day, not a shared
-            calendar week. Patients short on minutes get open-slot suggestions
-            you can add with one click.
+            Track each patient's weekly minutes and quickly fill schedule gaps with one click.
           </SheetDescription>
         </SheetHeader>
 

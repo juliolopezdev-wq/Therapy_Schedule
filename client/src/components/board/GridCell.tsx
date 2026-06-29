@@ -24,8 +24,7 @@ export function GridCell({ patientId, slotIndex, onAdd, children, isAlternate, i
     <div
       ref={setNodeRef}
       className={cn(
-        "group relative h-10 border-b border-slate-100 transition-colors duration-150",
-        isHourEnd ? "border-r border-r-slate-200" : "border-r border-r-slate-100",
+        "group relative h-full border-b border-slate-100 transition-colors duration-150",
         isLunch ? "bg-slate-200/50 bg-[repeating-linear-gradient(45deg,transparent,transparent_4px,rgba(0,0,0,0.02)_4px,rgba(0,0,0,0.02)_8px)]" : isAlternate ? "bg-slate-50/40" : "bg-transparent",
         isOver && !isLunch && "bg-primary/10 ring-2 ring-inset ring-primary/70 z-20",
         isLunch && "cursor-not-allowed",

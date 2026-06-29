@@ -343,7 +343,7 @@ export async function deleteStatusFlag(id: number) {
 
 export async function deleteStatusFlagByPatientAndType(
   patientId: number,
-  flagType: "DC" | "Name Alert" | "Weekend" | "In-Service" | "Appointment" | "Stroke Program",
+  flagType: "DC" | "Name Alert" | "Weekend" | "In-Service" | "Appointment" | "Stroke Program" | "Shower",
   date: Date,
 ) {
   const db = await getDb();

@@ -690,7 +690,7 @@ export default function TherapyBoard() {
                       <div
                         key={slot.index}
                         className="shrink-0 py-2.5 text-center border-r border-slate-200 bg-slate-200/40 bg-[repeating-linear-gradient(45deg,transparent,transparent_4px,rgba(0,0,0,0.03)_4px,rgba(0,0,0,0.03)_8px)]"
-                        style={{ width: SLOT_WIDTH * 2 }}
+                        style={{ flex: `0 0 ${SLOT_WIDTH * 2}px`, width: SLOT_WIDTH * 2, minWidth: SLOT_WIDTH * 2 }}
                       >
                         <span className="text-[10px] font-bold text-slate-600 tracking-widest">
                           LUNCH
@@ -704,9 +704,9 @@ export default function TherapyBoard() {
                       key={slot.index}
                       className={cn(
                         "shrink-0 py-2.5 text-center border-r transition-colors",
-                        isHour ? "border-slate-200" : "border-slate-100/50",
+                        !isHour ? "border-slate-200" : "border-slate-100/50",
                       )}
-                      style={{ width: SLOT_WIDTH }}
+                      style={{ flex: `0 0 ${SLOT_WIDTH}px`, width: SLOT_WIDTH, minWidth: SLOT_WIDTH }}
                     >
                       <span
                         className={cn(
@@ -795,11 +795,11 @@ export default function TherapyBoard() {
                         const pFlags = flagsByPatient.get(patient.id) ?? [];
                         const isDC = patient.isDischarged || pFlags.some((f) => f.flagType === "DC");
                         return (
-                          <div key={patient.id} id={`patient-row-${patient.id}`} className={cn("group/row flex border-b border-slate-100 transition-colors last:border-b-0 hover:bg-slate-50/60", isDC && "bg-slate-200 opacity-60 grayscale")}>
+                          <div key={patient.id} id={`patient-row-${patient.id}`} className={cn("group/row flex h-14 border-b border-slate-100 transition-colors last:border-b-0 hover:bg-slate-50/60", isDC && "bg-slate-200 opacity-60 grayscale")}>
                             {/* Patient label */}
                             <div
                               className={cn(
-                                "sticky left-0 z-10 flex w-64 shrink-0 items-center justify-between gap-1.5 border-r border-slate-200 px-2 py-1 transition-colors",
+                                "sticky left-0 z-10 flex h-full w-64 shrink-0 items-center justify-between gap-1.5 border-r border-slate-200 px-2 py-1 transition-colors",
                                 isDC ? "bg-slate-200" : (rowIdx % 2 === 0 ? "bg-white" : "bg-slate-50"),
                                 "group-hover/row:bg-slate-100",
                               )}
@@ -827,9 +827,17 @@ export default function TherapyBoard() {
                                   <span className="shrink-0 inline-flex min-w-[2rem] justify-center rounded border border-slate-200 bg-slate-100 px-1 text-[9px] font-bold tabular-nums text-slate-600">
                                     {patient.roomNumber}
                                   </span>
-                                  {pFlags.map((f) => <FlagBadge key={f.id} flag={f.flagType} />)}
-                                  {patient.notes && <span className="truncate text-[9px] italic text-slate-400 flex-1">{patient.notes}</span>}
+                                  {pFlags.length > 0 && (
+                                    <div className="flex items-center gap-0.5 ml-auto shrink-0">
+                                      {pFlags.map((f) => <FlagBadge key={f.id} flag={f.flagType} iconOnly />)}
+                                    </div>
+                                  )}
                                 </div>
+                                {patient.notes && (
+                                  <div className="flex items-center w-full">
+                                    <span className="truncate text-[9px] italic text-slate-400 w-full">{patient.notes}</span>
+                                  </div>
+                                )}
                                 {!isDC && (() => {
                                   const weekMins = weekMinsByPatient.get(patient.id) ?? 0;
                                   const target = (patient as any).weeklyMinuteTarget ?? 900;
@@ -865,18 +873,21 @@ export default function TherapyBoard() {
                               const tile = tilesByPatientSlot.get(`${patient.id}-${slot.index}`);
                               const isOccupied = occupiedCells.has(`${patient.id}-${slot.index}`);
 
+                              const isHourEnd = slot.index % 2 === 1;
+                              const borderClass = isHourEnd ? "border-r border-slate-200" : "border-r border-slate-100";
+
                               if (slot.hour === 12 && slot.minute === 0) {
                                 return (
-                                  <div key={slot.index} style={{ width: SLOT_WIDTH * 2 }} className="shrink-0">
+                                  <div key={slot.index} style={{ flex: `0 0 ${SLOT_WIDTH * 2}px`, width: SLOT_WIDTH * 2, minWidth: SLOT_WIDTH * 2 }} className={cn("shrink-0", "border-r border-slate-200")}>
                                     <GridCell patientId={patient.id} slotIndex={slot.index} onAdd={openNewSession} isAlternate={rowIdx % 2 !== 0} isLunch={true} />
                                   </div>
                                 );
                               }
                               if (isOccupied) {
-                                return <div key={slot.index} style={{ width: SLOT_WIDTH }} className="shrink-0 border-r border-slate-100" />;
+                                return <div key={slot.index} style={{ flex: `0 0 ${SLOT_WIDTH}px`, width: SLOT_WIDTH, minWidth: SLOT_WIDTH }} className={cn("shrink-0", borderClass)} />;
                               }
                               return (
-                                <div key={slot.index} style={{ width: SLOT_WIDTH }} className="shrink-0">
+                                <div key={slot.index} style={{ flex: `0 0 ${SLOT_WIDTH}px`, width: SLOT_WIDTH, minWidth: SLOT_WIDTH }} className={cn("shrink-0", borderClass)}>
                                   <GridCell patientId={patient.id} slotIndex={slot.index} onAdd={openNewSession} isAlternate={rowIdx % 2 !== 0} isLunch={false}>
                                     {tile ? (
                                       <div
