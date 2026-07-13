@@ -47,6 +47,11 @@ export const patients = sqliteTable("patients", {
   isDischarged: integer("isDischarged", { mode: 'boolean' }).default(false).notNull(),
   admissionDate: text("admissionDate"),
   weeklyMinuteTarget: integer("weeklyMinuteTarget").default(900).notNull(),
+  ptTarget: integer("ptTarget"),
+  otTarget: integer("otTarget"),
+  slpTarget: integer("slpTarget"),
+  assessmentPeriodStart: text("assessmentPeriodStart"),
+  assessmentPeriodEnd: text("assessmentPeriodEnd"),
   teamId: integer("teamId"),
   createdAt: integer("createdAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
   updatedAt: integer("updatedAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
@@ -58,8 +63,11 @@ export type InsertPatient = typeof patients.$inferInsert;
 export const statusFlags = sqliteTable("statusFlags", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   patientId: integer("patientId").notNull(),
-  flagType: text("flagType", { enum: ["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program", "Shower"] }).notNull(),
+  flagType: text("flagType", { enum: ["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program", "Shower", "Medical Hold", "Dialysis", "Block Time", "Group Appropriate", "Male Therapist Only", "Female Therapist Only", "Home Eval", "Family Training"] }).notNull(),
+  // The day this row takes effect from. A flag carries forward to every later day until a newer
+  // row for the same patient+flagType is written (see setStatusFlag) -- it is not a one-day-only marker.
   date: integer("date", { mode: 'timestamp' }).notNull(),
+  active: integer("active", { mode: 'boolean' }).default(true).notNull(),
   createdAt: integer("createdAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
 });
 
@@ -70,10 +78,14 @@ export const therapySessions = sqliteTable("therapySessions", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   patientId: integer("patientId").notNull(),
   therapistId: integer("therapistId"),
-  therapyType: text("therapyType", { enum: ["PT", "OT", "SLP", "Eval"] }).notNull(),
+  therapyType: text("therapyType", { enum: ["PT", "OT", "SLP", "Eval", "Block"] }).notNull(),
   startTime: integer("startTime", { mode: 'timestamp' }).notNull(),
   endTime: integer("endTime", { mode: 'timestamp' }).notNull(),
   durationMinutes: integer("durationMinutes").notNull(),
+  actualDurationMinutes: integer("actualDurationMinutes"),
+  deliveryMode: text("deliveryMode", { enum: ["individual", "concurrent", "group"] }).default("individual").notNull(),
+  status: text("status", { enum: ["scheduled", "completed", "missed_refusal", "missed_clinical_hold", "missed_staffing", "missed_other"] }).default("scheduled").notNull(),
+  missedReason: text("missedReason"),
   notes: text("notes"),
   createdAt: integer("createdAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
   updatedAt: integer("updatedAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),

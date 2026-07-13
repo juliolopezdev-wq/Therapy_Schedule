@@ -1,8 +1,8 @@
 import React, { useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import { AlertTriangle } from "lucide-react";
-import { THERAPY_META, type TherapyType } from "@/lib/board";
+import { AlertTriangle, Lock, CheckCircle2, XCircle } from "lucide-react";
+import { THERAPY_META, isMissedStatus, type TherapyType, type SessionStatus, type DeliveryMode } from "@/lib/board";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -14,6 +14,9 @@ export interface SessionTileData {
   durationMinutes: number;
   slotIndex: number;
   slotSpan: number;
+  status: SessionStatus;
+  deliveryMode?: DeliveryMode;
+  missedReason?: string | null;
   notes?: string | null;
   hasConflict?: boolean;
 }
@@ -92,13 +95,14 @@ export function SessionTile({
   const visualSpan = session.slotSpan + resizeDeltaSlots;
   const showFullInfo = visualSpan >= 2;
   const tileWidth = visualSpan * slotWidth - 6;
+  const isMissed = isMissedStatus(session.status);
 
   const style: React.CSSProperties = {
     backgroundColor: meta.bg,
     color: meta.fg,
     width: isOverlay ? width : (resizeDeltaSlots !== 0 ? tileWidth : "100%"),
     transform: CSS.Translate.toString(transform),
-    opacity: isDragging && !isOverlay ? 0.3 : 1,
+    opacity: isDragging && !isOverlay ? 0.3 : (isMissed ? 0.6 : 1),
     boxShadow: isOverlay
       ? "0 12px 28px -4px rgba(15,23,42,0.3)"
       : "0 1px 3px 0 rgba(0, 0, 0, 0.05), inset 0 1px 0 0 rgba(255, 255, 255, 0.4)",
@@ -116,7 +120,8 @@ export function SessionTile({
         if (!isDragging) onClick?.(session);
       }}
       className={cn(
-        "group relative flex h-full items-center justify-between gap-1 overflow-hidden rounded px-1.5 text-left border border-black/[0.05]",
+        "group relative flex h-full items-center justify-between gap-1 overflow-hidden rounded px-1.5 text-left",
+        session.therapyType === "Block" ? "border-2 border-dashed border-slate-400/50 bg-[repeating-linear-gradient(-45deg,rgba(0,0,0,0.05),rgba(0,0,0,0.05)_6px,transparent_6px,transparent_12px)]" : "border border-black/[0.05]",
         "cursor-grab touch-none select-none transition-all duration-150",
         "hover:shadow-sm hover:border-black/[0.10]",
         "active:cursor-grabbing",
@@ -134,11 +139,14 @@ export function SessionTile({
       <div className="flex min-w-0 flex-1 items-center gap-1.5 pl-1">
         <div className="flex min-w-0 flex-1 flex-col leading-none">
           <div className="flex items-center gap-1">
-            <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: meta.fg }}>
-              {meta.label}
+            {session.therapyType === "Block" && <Lock className="h-2.5 w-2.5" style={{ color: meta.fg }} strokeWidth={3} />}
+            {session.status === "completed" && <CheckCircle2 className="h-2.5 w-2.5" style={{ color: meta.fg }} strokeWidth={2.5} />}
+            {isMissed && <XCircle className="h-2.5 w-2.5" style={{ color: meta.fg }} strokeWidth={2.5} />}
+            <span className={cn("text-[10px] font-bold uppercase tracking-wide", isMissed && "line-through")} style={{ color: meta.fg }}>
+              {session.therapyType === "Block" ? "Blocked" : meta.label}
             </span>
             {showFullInfo && (
-              <span className="text-[9px] opacity-60 tabular-nums truncate" style={{ color: meta.fg }}>
+              <span className={cn("text-[9px] opacity-60 tabular-nums truncate", isMissed && "line-through")} style={{ color: meta.fg }}>
                 {session.durationMinutes}m
               </span>
             )}
@@ -179,6 +187,10 @@ export function SessionTile({
   );
 
   let tooltipText = session.notes || "";
+  if (isMissed) {
+    const missedMsg = session.missedReason ? `Missed: ${session.missedReason}` : "Missed";
+    tooltipText = tooltipText ? `${missedMsg}\n\nNotes: ${tooltipText}` : missedMsg;
+  }
   if (session.hasConflict) {
     const conflictMsg = "⚠️ Scheduling Conflict: Overlapping sessions detected for this patient or therapist.";
     tooltipText = tooltipText ? `${conflictMsg}\n\nNotes: ${tooltipText}` : conflictMsg;

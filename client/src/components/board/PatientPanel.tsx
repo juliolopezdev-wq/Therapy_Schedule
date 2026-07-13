@@ -47,6 +47,8 @@ export function PatientPanel({
   onEdit,
   onDelete,
 }: PatientPanelProps) {
+  const activePatients = patients.filter((p) => !p.isDischarged);
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-md">
@@ -66,14 +68,14 @@ export function PatientPanel({
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
-          {patients.length === 0 ? (
+          {activePatients.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 py-12 text-center">
               <Users className="h-8 w-8 text-slate-300" />
-              <p className="text-sm text-slate-500">No patients yet.</p>
+              <p className="text-sm text-slate-500">No active patients yet.</p>
             </div>
           ) : (
             <ul className="space-y-2">
-              {patients.map((patient) => (
+              {activePatients.map((patient) => (
                 <li
                   key={patient.id}
                   className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3"

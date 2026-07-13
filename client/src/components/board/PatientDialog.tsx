@@ -65,10 +65,14 @@ const EMPTY: PatientFormValue = {
 };
 
 export function PatientDialog({ open, onOpenChange, initial, onSave, therapists = [], teams = [] }: PatientDialogProps) {
-  const [form, setForm] = useState<PatientFormValue>(initial ?? EMPTY);
+  const [form, setForm] = useState<PatientFormValue>(() => {
+    const val = initial ?? EMPTY;
+    return val.name === "Available" ? { ...val, name: "" } : val;
+  });
 
   useEffect(() => {
-    setForm(initial ?? EMPTY);
+    const val = initial ?? EMPTY;
+    setForm(val.name === "Available" ? { ...val, name: "" } : val);
   }, [initial, open]);
 
   const isEditing = Boolean(form.id);
@@ -99,7 +103,7 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
               <Input
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="LIN MON"
+                placeholder="Available"
               />
             </div>
           </div>

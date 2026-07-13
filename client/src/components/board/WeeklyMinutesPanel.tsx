@@ -127,7 +127,9 @@ function PatientRow({
     patientName: string;
     roomNumber: string;
     target: number;
+    scheduledMinutes: number;
     completedMinutes: number;
+    missedMinutes: number;
     remainingMinutes: number;
     daysRemaining: number;
     atRisk: boolean;
@@ -156,14 +158,19 @@ function PatientRow({
             </Badge>
           ) : null}
         </div>
-        <span
-          className={cn(
-            "shrink-0 text-xs font-bold tabular-nums",
-            onTarget ? "text-emerald-600" : "text-slate-500",
-          )}
-        >
-          {fmtHours(patient.completedMinutes)} / {fmtHours(patient.target)}
-        </span>
+        <div className="flex flex-col items-end">
+          <span
+            className={cn(
+              "shrink-0 text-xs font-bold tabular-nums",
+              onTarget ? "text-emerald-600" : "text-slate-500",
+            )}
+          >
+            {fmtHours(patient.completedMinutes)} / {fmtHours(patient.target)}
+          </span>
+          <span className="text-[10px] text-slate-400 font-medium">
+            Sch: {fmtHours(patient.scheduledMinutes)}
+          </span>
+        </div>
       </div>
 
       <Progress value={pct} className={cn("mt-2 h-1.5", onTarget && "bg-emerald-100")} />

@@ -3,9 +3,9 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { 
-  ChevronLeft, ChevronRight, AlertTriangle, Calendar as CalendarIcon, 
-  History, Users, UserRound, Clock, Bot, Smartphone 
+import {
+  ChevronLeft, ChevronRight, AlertTriangle, Calendar as CalendarIcon,
+  History, Users, UserRound, Clock, Bot, Smartphone, BarChart3, Camera, Printer
 } from "lucide-react";
 import { 
   THERAPY_TYPES, THERAPY_META, TIME_SLOTS, type TherapyType,
@@ -64,7 +64,9 @@ export interface BoardHeaderProps {
   setWeeklyMinutesPanelOpen: (v: boolean) => void;
   setAskSchedulerPanelOpen: (v: boolean) => void;
   setHistoryOpen: (v: boolean) => void;
+  setDataAnalysisOpen: (v: boolean) => void;
   handleSnapshot: () => void;
+  handlePrintAllPatients: () => void;
   mySchedTherapist: number | null;
   setMySchedTherapist: Dispatch<SetStateAction<number | null>>;
   tiles: SessionTileData[];
@@ -74,8 +76,8 @@ export function BoardHeader({
   day, setDay, filter, setFilter, teamFilter, setTeamFilter, teams,
   patientsUnderTarget, weekMinsByPatient, conflictCount, conflictPairs,
   therapists, patients, jumpToPatient, setPanelOpen, setStaffPanelOpen,
-  setWeeklyMinutesPanelOpen, setAskSchedulerPanelOpen, setHistoryOpen, handleSnapshot,
-  mySchedTherapist, setMySchedTherapist, tiles
+  setWeeklyMinutesPanelOpen, setAskSchedulerPanelOpen, setHistoryOpen, setDataAnalysisOpen, handleSnapshot,
+  handlePrintAllPatients, mySchedTherapist, setMySchedTherapist, tiles
 }: BoardHeaderProps) {
   const weekStart = startOfWeek(day);
   const weekLabel = weekRangeLabel(weekStart);
@@ -246,13 +248,33 @@ export function BoardHeader({
             <Bot className="mr-1.5 h-3.5 w-3.5 text-blue-600" />
             <span className="hidden sm:inline text-blue-700">Ask PAMi</span>
           </Button>
+          <Button variant="outline" size="sm" className="h-8 border-slate-200 font-medium text-slate-600 hover:bg-slate-50 shadow-sm transition-all" onClick={() => setDataAnalysisOpen(true)}>
+            <BarChart3 className="mr-1.5 h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Data Analysis</span>
+          </Button>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="outline" size="icon" className="h-8 w-8 border-slate-200 text-slate-500 hover:bg-slate-50 shadow-sm transition-all" onClick={handleSnapshot}>
-                <History className="h-4 w-4" />
+                <Camera className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
             <TooltipContent>Save board snapshot</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" size="icon" className="h-8 w-8 border-slate-200 text-slate-500 hover:bg-slate-50 shadow-sm transition-all" onClick={() => setHistoryOpen(true)}>
+                <History className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>View & print board history</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" size="icon" className="h-8 w-8 border-slate-200 text-slate-500 hover:bg-slate-50 shadow-sm transition-all" onClick={handlePrintAllPatients}>
+                <Printer className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Print all patient schedules</TooltipContent>
           </Tooltip>
         </div>
       </div>

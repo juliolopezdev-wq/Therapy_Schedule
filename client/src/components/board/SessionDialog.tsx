@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -22,7 +23,13 @@ import {
   THERAPY_TYPES,
   THERAPY_META,
   TIME_SLOTS,
+  SESSION_STATUSES,
+  SESSION_STATUS_META,
+  isMissedStatus,
+  DELIVERY_MODES,
   type TherapyType,
+  type SessionStatus,
+  type DeliveryMode,
 } from "@/lib/board";
 
 export interface SessionFormValue {
@@ -32,6 +39,10 @@ export interface SessionFormValue {
   therapistId: number | null;
   slotIndex: number;
   durationMinutes: number;
+  actualDurationMinutes?: number | null;
+  deliveryMode: DeliveryMode;
+  status: SessionStatus;
+  missedReason?: string;
   notes: string;
 }
 
@@ -57,15 +68,28 @@ export function SessionDialog({
   onDelete,
 }: SessionDialogProps) {
   const [form, setForm] = useState<SessionFormValue | null>(initial);
+  const [customDurationMode, setCustomDurationMode] = useState(false);
 
   useEffect(() => {
     setForm(initial);
+    if (initial) {
+      setCustomDurationMode(!DURATIONS.includes(initial.durationMinutes));
+    }
   }, [initial]);
 
   if (!form) return null;
 
   const isEditing = Boolean(form.id);
   const patient = patients.find((p) => p.id === form.patientId);
+
+  const maxDur = (TIME_SLOTS.length - form.slotIndex) * 30;
+  const durationExceedsEndOfDay = form.durationMinutes > maxDur;
+  const startSlot = TIME_SLOTS[form.slotIndex];
+  const durationSpansLunch =
+    !durationExceedsEndOfDay &&
+    !!startSlot &&
+    startSlot.hour < 12 &&
+    form.slotIndex + form.durationMinutes / 30 > TIME_SLOTS.findIndex((s) => s.hour === 12);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -131,34 +155,66 @@ export function SessionDialog({
 
           {/* Duration */}
           <div className="space-y-2">
-            <Label>Duration</Label>
-            <Select
-              value={String(form.durationMinutes)}
-              onValueChange={(v) => setForm({ ...form, durationMinutes: Number(v) })}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {DURATIONS.filter(d => {
-                  const maxDur = (TIME_SLOTS.length - form.slotIndex) * 30;
-                  if (d > maxDur) return false;
-                  
-                  // Prevent spanning into lunch
-                  const startSlot = TIME_SLOTS[form.slotIndex];
-                  if (startSlot && startSlot.hour < 12) {
-                    const endSlotIndex = form.slotIndex + (d / 30);
-                    const firstLunchIndex = TIME_SLOTS.findIndex(s => s.hour === 12);
-                    if (endSlotIndex > firstLunchIndex) return false;
+            <Label>Duration (minutes)</Label>
+            {customDurationMode ? (
+              <div className="flex gap-2">
+                <Input
+                  type="number"
+                  value={form.durationMinutes}
+                  onChange={(e) => setForm({ ...form, durationMinutes: Number(e.target.value) })}
+                  className="w-full"
+                  min={1}
+                />
+                <Button type="button" variant="outline" onClick={() => {
+                   setCustomDurationMode(false);
+                   if (!DURATIONS.includes(form.durationMinutes)) {
+                     setForm({ ...form, durationMinutes: DURATIONS[0] });
+                   }
+                }}>
+                  Standard
+                </Button>
+              </div>
+            ) : (
+              <Select
+                value={String(form.durationMinutes)}
+                onValueChange={(v) => {
+                  if (v === "custom") {
+                    setCustomDurationMode(true);
+                  } else {
+                    setForm({ ...form, durationMinutes: Number(v) });
                   }
-                  return true;
-                }).map((d) => (
-                  <SelectItem key={d} value={String(d)}>
-                    {d} minutes
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {DURATIONS.filter(d => {
+                    const maxDur = (TIME_SLOTS.length - form.slotIndex) * 30;
+                    if (d > maxDur) return false;
+                    
+                    // Prevent spanning into lunch
+                    const startSlot = TIME_SLOTS[form.slotIndex];
+                    if (startSlot && startSlot.hour < 12) {
+                      const endSlotIndex = form.slotIndex + (d / 30);
+                      const firstLunchIndex = TIME_SLOTS.findIndex(s => s.hour === 12);
+                      if (endSlotIndex > firstLunchIndex) return false;
+                    }
+                    return true;
+                  }).map((d) => (
+                    <SelectItem key={d} value={String(d)}>
+                      {d} minutes
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="custom">Custom...</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+            {durationExceedsEndOfDay ? (
+              <p className="text-xs text-red-500">Duration exceeds end of day.</p>
+            ) : durationSpansLunch ? (
+              <p className="text-xs text-orange-500">Warning: Session spans into lunch break.</p>
+            ) : null}
           </div>
 
           {/* Therapist */}
@@ -183,6 +239,91 @@ export function SessionDialog({
               </SelectContent>
             </Select>
           </div>
+
+          {/* Status */}
+          <div className="space-y-2">
+            <Label>Status</Label>
+            <div className="grid grid-cols-3 gap-2">
+              {(["scheduled", "completed"] as const).map((s) => {
+                const active = form.status === s;
+                const meta = SESSION_STATUS_META[s];
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setForm({ ...form, status: s, missedReason: undefined })}
+                    className="rounded-md px-2 py-2 text-xs font-bold transition-all"
+                    style={{
+                      backgroundColor: active ? meta.bg : "#f1f5f9",
+                      color: active ? meta.fg : "#64748b",
+                      outline: active ? "2px solid rgba(0,0,0,0.15)" : "none",
+                    }}
+                  >
+                    {meta.label}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => setForm({ ...form, status: isMissedStatus(form.status) ? form.status : "missed_other" })}
+                className="rounded-md px-2 py-2 text-xs font-bold transition-all"
+                style={{
+                  backgroundColor: isMissedStatus(form.status) ? "#fee2e2" : "#f1f5f9",
+                  color: isMissedStatus(form.status) ? "#991b1b" : "#64748b",
+                  outline: isMissedStatus(form.status) ? "2px solid rgba(0,0,0,0.15)" : "none",
+                }}
+              >
+                Missed
+              </button>
+            </div>
+          </div>
+
+          {/* Delivery Mode */}
+          <div className="space-y-2">
+            <Label>Delivery Mode</Label>
+            <Select
+              value={form.deliveryMode}
+              onValueChange={(v) => setForm({ ...form, deliveryMode: v as DeliveryMode })}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DELIVERY_MODES.map((m) => (
+                  <SelectItem key={m} value={m} className="capitalize">
+                    {m}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Missed reason code (required — this is what makes the status a specific missed_* value) */}
+          {isMissedStatus(form.status) && (
+            <div className="space-y-2">
+              <Label className="text-red-600">Reason Code</Label>
+              <Select
+                value={form.status}
+                onValueChange={(v) => setForm({ ...form, status: v as SessionStatus })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SESSION_STATUSES.filter(isMissedStatus).map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {SESSION_STATUS_META[s].label.replace("Missed — ", "")}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Input
+                value={form.missedReason || ""}
+                onChange={(e) => setForm({ ...form, missedReason: e.target.value })}
+                placeholder="Optional note, e.g. patient in wheelchair for outing"
+              />
+            </div>
+          )}
 
           {/* Notes */}
           <div className="space-y-2">
@@ -216,6 +357,7 @@ export function SessionDialog({
               Cancel
             </Button>
             <Button
+              disabled={durationExceedsEndOfDay}
               onClick={() => {
                 onSave(form);
                 onOpenChange(false);

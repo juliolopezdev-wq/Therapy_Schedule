@@ -1,5 +1,10 @@
 import { startOfWeek, startOfDay, differenceInDays, addDays } from "date-fns";
 
+export type SessionStatus = "scheduled" | "completed" | "missed_refusal" | "missed_clinical_hold" | "missed_staffing" | "missed_other";
+export function isMissedStatus(status: string): boolean {
+  return status.startsWith("missed_");
+}
+
 export interface WeeklyMinutesSummary {
   patientId: number;
   patientName: string;
@@ -8,10 +13,24 @@ export interface WeeklyMinutesSummary {
   weekStart: Date;
   weekEnd: Date;
   target: number;
+  scheduledMinutes: number;
   completedMinutes: number;
+  missedMinutes: number;
+  pendingMinutes: number;
+  projectedTotalMinutes: number;
   remainingMinutes: number;
   daysRemaining: number;
   atRisk: boolean;
+}
+
+/**
+ * A patient's personalized week does NOT start on their admission day itself -- it starts the
+ * day after admission (their first full day on the unit), and that day resets every 7 days from
+ * then on. E.g. admitted Monday -> week 1 runs Tuesday-Monday, week 2 starts the following Tuesday.
+ */
+function patientWeekEpoch(admissionDateStr: string): Date {
+  const adminStart = startOfDay(new Date(`${admissionDateStr}T12:00:00`));
+  return addDays(adminStart, 1);
 }
 
 export function patientWeekStart(admissionDateStr: string | null | undefined, referenceDate: Date): Date {
@@ -25,10 +44,11 @@ export function patientWeekStart(admissionDateStr: string | null | undefined, re
     return d;
   }
 
-  const adminStart = startOfDay(new Date(`${admissionDateStr}T12:00:00`));
-  const diff = differenceInDays(viewed, adminStart);
-  
+  const weekEpoch = patientWeekEpoch(admissionDateStr);
+  const diff = differenceInDays(viewed, weekEpoch);
+
   if (diff < 0) {
+    // Viewing the admission day itself (or earlier) -- their personalized week hasn't started yet.
     const d = new Date(viewed);
     d.setHours(0, 0, 0, 0);
     const day = d.getDay();
@@ -38,7 +58,7 @@ export function patientWeekStart(admissionDateStr: string | null | undefined, re
   }
 
   const weeksPassed = Math.floor(diff / 7);
-  return addDays(adminStart, weeksPassed * 7);
+  return addDays(weekEpoch, weeksPassed * 7);
 }
 
 export function patientWeekEnd(weekStart: Date): Date {
@@ -69,9 +89,9 @@ export function getPatientWeekBounds(admissionDateStr: string | null | undefined
   let weekNumber = 1;
   
   if (admissionDateStr) {
-    const adminStart = startOfDay(new Date(`${admissionDateStr}T12:00:00`));
+    const weekEpoch = patientWeekEpoch(admissionDateStr);
     const viewed = startOfDay(viewedDate);
-    const diff = differenceInDays(viewed, adminStart);
+    const diff = differenceInDays(viewed, weekEpoch);
     if (diff >= 0) {
       weekNumber = Math.floor(diff / 7) + 1;
     }

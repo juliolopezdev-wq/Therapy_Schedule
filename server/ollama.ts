@@ -5,9 +5,17 @@ import {
   autoScheduleAllGaps,
   getJointCommissionAnalytics,
   getTeamRoster,
+  getDeliveryModeMix,
 } from "./scheduling";
-import { createTherapySession, updateTherapySession, deleteTherapySession, getSessionById, clearSchedule } from "./db";
-import { formatWeekRangeLabel, WeeklyMinutesSummary } from "../shared/weekUtils";
+import {
+  createTherapySession,
+  updateTherapySession,
+  deleteTherapySession,
+  getSessionById,
+  clearSchedule,
+  getStatusFlagsForDate,
+} from "./db";
+import { formatWeekRangeLabel, isMissedStatus, WeeklyMinutesSummary } from "../shared/weekUtils";
 
 /* ========================================================================== */
 /* THE PROMPT                                                                  */
@@ -20,30 +28,40 @@ import { formatWeekRangeLabel, WeeklyMinutesSummary } from "../shared/weekUtils"
 export const SCHEDULER_SYSTEM_PROMPT = `You are PAMi, an expert AI scheduling assistant embedded in a rehab therapy unit's scheduling app. You help staff fill therapy-minute gaps, balance therapist workload, stay Joint Commission compliant, and keep every patient on track to hit their weekly therapy-minute target before their personalized week resets.
 
 CONTEXT YOU'RE GIVEN
-Before every question you receive a live snapshot: Joint Commission/rehab analytics for the past 7 days, every active patient's weekly minute progress (each patient's week starts on their own admission day, not a shared Monday), open-slot suggestions for anyone behind target, and the team roster (which therapists are assigned to which patients, by ID). Treat this data as ground truth. Never invent patients, therapists, room numbers, IDs, or times that aren't in it. If something isn't in the data, say so plainly instead of guessing.
+Before every question you receive a live snapshot: Joint Commission/rehab analytics for the past 7 days (including a breakdown of missed sessions by reason -- refusal, clinical hold, staffing, other), every active patient's weekly minute progress broken out as scheduled / delivered / missed / still-pending minutes (each patient's week starts on their own admission day, not a shared Monday), which patients are on Medical Hold or otherwise flagged today, open-slot suggestions for anyone behind target, and the team roster (which therapists are assigned to which patients, by ID). Treat this data as ground truth. Never invent patients, therapists, room numbers, IDs, or times that aren't in it. If something isn't in the data, say so plainly instead of guessing.
+
+DELIVERED VS. SCHEDULED -- ALWAYS SAY WHICH ONE YOU MEAN
+A patient can look on-track from scheduled minutes alone and still miss target if those sessions get marked missed later in the week. Every time you cite a patient's minutes, be explicit about whether you mean minutes actually delivered (completed) or minutes booked/still-pending. "At risk" in the data is already a projection -- it accounts for remaining scheduled sessions, not just a same-day snapshot -- so when asked who's at risk and why, cite the specific missed-session reasons or the shortfall in projected total, not just "behind on minutes."
+
+WHO'S UNAVAILABLE
+A patient on Medical Hold cannot receive therapy right now -- never suggest scheduling a session for them, and don't count them as a "care gap" even if they haven't had therapy recently (the data already excludes them from care gaps for this reason). Other flags (Group Appropriate, Male/Female Therapist Only, Home Eval, Family Training, etc.) describe scheduling constraints on that patient -- factor them in when relevant.
 
 WHO CAN SEE WHOM
 Therapists are grouped into teams, and each patient belongs to one team. A therapist can technically treat anyone, but normally only treats patients on their own team -- that's the coverage rule staff care about. When asked who can see or cover a patient, answer with therapists on that patient's team first. Only suggest an off-team therapist if the roster shows nobody on-team is free, and say so explicitly when you do (e.g. "nobody on Team 2 is open Thursday, but Alex from Team 1 is free at 10am").
 
+CONCURRENT / GROUP MINUTE CAP
+PDPM caps combined concurrent + group minutes at 25% of a patient's total minutes per discipline per week. When booking or moving a session with delivery mode "concurrent" or "group", the tool result will tell you if that patient's discipline is now over the cap -- if so, warn the user plainly (don't silently place it, and don't refuse to place it either; it's a warning, not a block).
+
 YOUR JOB, IN ORDER OF PRIORITY
-1. Surface what needs attention first, even if not asked directly: patients behind on minutes -- especially anyone "at risk" -- any Joint Commission care gaps (0 minutes in the last 48 hours), and any day a team has nobody free.
+1. Surface what needs attention first, even if not asked directly: patients behind on minutes -- especially anyone "at risk" -- any Joint Commission care gaps (0 minutes in the last 48 hours, excluding Medical Hold), any concentration of missed sessions by reason (a staffing-driven pattern is different from a refusal pattern), and any day a team has nobody free.
 2. Recommend specific, concrete fixes: which patient, which therapist, what time, how many minutes. Never give vague advice like "schedule more sessions."
 3. When asked to actually do something (add, move, cancel a session, or auto-fill every gap), use your tools to make the real change, then confirm exactly what changed.
 4. Stay grounded in this unit's actual numbers. Cite room numbers/names, exact times, and minutes whenever you reference a patient or slot.
 
 USING YOUR TOOLS
-You have read tools (list_open_slots, get_at_risk_patients, get_team_roster, get_analytics) and write tools (create_session, move_session, cancel_session, auto_schedule_all_gaps, clear_schedule).
+You have read tools (list_open_slots, get_at_risk_patients, get_team_roster, get_analytics, get_delivery_mode_mix) and write tools (create_session, move_session, cancel_session, auto_schedule_all_gaps, clear_schedule).
 - Use read tools freely and proactively whenever more detail would help -- no need to ask permission to look something up.
 - Only use a write tool when the user has clearly asked for that action ("add", "schedule", "book", "move", "reschedule", "cancel", "remove", "fill every gap", "auto-schedule", "clear schedule"). Never make a change the user didn't ask for -- recommend it and let them confirm instead.
 - Prefer the precise tool over the blunt one: if the user names a specific patient, use create_session/move_session for that one patient. Only use auto_schedule_all_gaps when they clearly mean everyone ("fill all the gaps", "maximize minutes for the whole unit").
 - If a write tool fails, or the slot/therapist turns out not to be free, say so plainly and offer the closest real alternative from the data. Don't claim it worked if it didn't.
-- After a successful write, state plainly what changed (patient, therapist, day, time, duration, or how many sessions were auto-scheduled) so staff can verify it on the board.
+- After a successful write, state plainly what changed (patient, therapist, day, time, duration, or how many sessions were auto-scheduled) so staff can verify it on the board, and pass along any cap warning the tool returned.
 
 STYLE
 - Be direct and concise. Lead with the answer, then supporting detail.
 - Use short bullet lists when comparing multiple patients, therapists, or slots.
 - Speak like a sharp scheduling coordinator, not a generic chatbot -- no filler, no "I'd be happy to help!", no AI disclaimers.
-- If a question is ambiguous (e.g. which patient "Sarah" refers to when there are two), ask exactly one clarifying question instead of guessing.`;
+- If a question is ambiguous (e.g. which patient "Sarah" refers to when there are two), ask exactly one clarifying question instead of guessing.
+- This is a multi-turn conversation -- use the prior messages for context (e.g. "her" or "that slot" may refer to something a few turns back) instead of asking the user to repeat themselves.`;
 
 /* ========================================================================== */
 /* Tool definitions (Ollama / OpenAI-style function-calling schema)           */
@@ -106,6 +124,11 @@ const TOOLS = [
           therapyType: { type: "string", enum: ["PT", "OT", "SLP", "Eval"] },
           startTime: { type: "string", description: "ISO 8601 datetime, e.g. 2026-06-18T09:00:00" },
           durationMinutes: { type: "integer" },
+          deliveryMode: {
+            type: "string",
+            enum: ["individual", "concurrent", "group"],
+            description: "Defaults to individual. If concurrent or group, the result will flag whether this pushes the patient's discipline over the 25% PDPM cap.",
+          },
         },
         required: ["patientId", "therapistId", "therapyType", "startTime", "durationMinutes"],
       },
@@ -125,6 +148,22 @@ const TOOLS = [
           newTherapistId: { type: "integer", description: "Omit to keep the same therapist." },
         },
         required: ["sessionId", "newStartTime"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_delivery_mode_mix",
+      description:
+        "Check what percentage of a patient's minutes in a given discipline this week were delivered concurrently or in a group, against the 25% PDPM cap. Use before recommending or booking a concurrent/group session, or when asked about mix/cap compliance.",
+      parameters: {
+        type: "object",
+        properties: {
+          patientId: { type: "integer" },
+          therapyType: { type: "string", enum: ["PT", "OT", "SLP", "Eval"] },
+        },
+        required: ["patientId", "therapyType"],
       },
     },
   },
@@ -191,11 +230,16 @@ export async function buildSchedulerContext(referenceDate: Date = new Date()): P
   lines.push("Therapist Utilization:");
   analytics.therapistUtilization.forEach((t) => lines.push(`- ${t.name}: ${t.scheduledMinutes} min`));
   if (analytics.careGaps.length > 0) {
-    lines.push("CRITICAL GAPS IN CARE (0 minutes in last 48 hours):");
+    lines.push("CRITICAL GAPS IN CARE (0 minutes in last 48 hours, excluding Medical Hold patients):");
     analytics.careGaps.forEach((g) => lines.push(`- Room ${g.roomNumber} (${g.patientName})`));
   } else {
-    lines.push("Gaps in Care: None (All patients have received therapy recently)");
+    lines.push("Gaps in Care: None (All eligible patients have received therapy recently)");
   }
+  const missed = analytics.missedSessionsByReason;
+  const totalMissed = missed.missed_refusal + missed.missed_clinical_hold + missed.missed_staffing + missed.missed_other;
+  lines.push(
+    `Missed Sessions by Reason (past 7 days, total ${totalMissed}): refusal ${missed.missed_refusal}, clinical hold ${missed.missed_clinical_hold}, staffing ${missed.missed_staffing}, other ${missed.missed_other}.`,
+  );
   lines.push("==========================================================");
 
   if (summary.length === 0) {
@@ -204,17 +248,27 @@ export async function buildSchedulerContext(referenceDate: Date = new Date()): P
     return lines.join("\n");
   }
 
+  const todaysFlags = await getStatusFlagsForDate(referenceDate);
+  const flagsByPatient = new Map<number, string[]>();
+  for (const f of todaysFlags) {
+    if (!flagsByPatient.has(f.patientId)) flagsByPatient.set(f.patientId, []);
+    flagsByPatient.get(f.patientId)!.push(f.flagType);
+  }
+
   lines.push("");
-  lines.push("=== WEEKLY MINUTE PROGRESS (per patient, personalized week) ===");
+  lines.push("=== WEEKLY MINUTE PROGRESS (per patient, personalized week) -- delivered vs. scheduled shown separately ===");
   const underTarget: WeeklyMinutesSummary[] = [];
   for (const p of summary) {
-    const status = p.remainingMinutes <= 0 ? "ON TARGET" : p.atRisk ? "AT RISK" : "behind";
+    const status = p.remainingMinutes <= 0 ? "ON TARGET" : p.atRisk ? "AT RISK (projected to miss target)" : "behind, but still projected to catch up";
+    const flags = flagsByPatient.get(p.patientId);
+    const flagNote = flags && flags.length > 0 ? ` Flags today: ${flags.join(", ")}.` : "";
     lines.push(
       `- [id ${p.patientId}] Room ${p.roomNumber} (${p.patientName}), team ${p.teamId ?? "none"}: ` +
-        `${p.completedMinutes}/${p.target} min (${formatWeekRangeLabel(p.weekStart)}), ` +
-        `${p.remainingMinutes} min remaining, ${p.daysRemaining} day(s) left. Status: ${status}.`,
+        `delivered ${p.completedMinutes} min, missed ${p.missedMinutes} min, still-pending ${p.pendingMinutes} min, ` +
+        `projected total ${p.projectedTotalMinutes}/${p.target} min (${formatWeekRangeLabel(p.weekStart)}), ` +
+        `${p.remainingMinutes} min still needed to deliver, ${p.daysRemaining} day(s) left. Status: ${status}.${flagNote}`,
     );
-    if (p.remainingMinutes > 0) underTarget.push(p);
+    if (p.remainingMinutes > 0 && !(flags ?? []).includes("Medical Hold")) underTarget.push(p);
   }
 
   if (underTarget.length > 0) {
@@ -262,6 +316,19 @@ interface ToolCall {
   function: { name: string; arguments: Record<string, unknown> };
 }
 
+/** Warn (never block) when a just-booked concurrent/group session pushes a discipline over the 25% PDPM cap. */
+async function checkConcurrentGroupCap(
+  patientId: number,
+  therapyType: "PT" | "OT" | "SLP" | "Eval",
+  deliveryMode: "individual" | "concurrent" | "group",
+  referenceDate: Date,
+): Promise<string | null> {
+  if (deliveryMode === "individual") return null;
+  const mix = await getDeliveryModeMix(patientId, therapyType, referenceDate);
+  if (!mix.overCap) return null;
+  return `Warning: patient ${patientId}'s ${therapyType} minutes are now ${mix.pct}% concurrent/group this week, over the 25% PDPM cap (${mix.concurrentGroupMinutes}/${mix.totalMinutes} min).`;
+}
+
 async function executeTool(call: ToolCall, referenceDate: Date): Promise<string> {
   const { name, arguments: args } = call.function;
 
@@ -274,10 +341,10 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
 
       case "get_at_risk_patients": {
         const summary = await getWeeklyMinutesSummary(referenceDate);
-        const behind = summary
-          .filter((p) => p.remainingMinutes > 0)
-          .sort((a, b) => b.remainingMinutes - a.remainingMinutes);
-        return JSON.stringify(behind);
+        const atRisk = summary
+          .filter((p) => p.atRisk)
+          .sort((a, b) => (b.target - b.projectedTotalMinutes) - (a.target - a.projectedTotalMinutes));
+        return JSON.stringify(atRisk);
       }
 
       case "get_team_roster": {
@@ -292,16 +359,24 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
         const startTime = new Date(String(args.startTime));
         const durationMinutes = Number(args.durationMinutes);
         const endTime = new Date(startTime.getTime() + durationMinutes * 60_000);
+        const patientId = Number(args.patientId);
+        const therapyType = String(args.therapyType) as "PT" | "OT" | "SLP" | "Eval";
+        const deliveryMode = (args.deliveryMode ? String(args.deliveryMode) : "individual") as
+          | "individual"
+          | "concurrent"
+          | "group";
         const created = await createTherapySession({
-          patientId: Number(args.patientId),
+          patientId,
           therapistId: Number(args.therapistId),
-          therapyType: String(args.therapyType) as "PT" | "OT" | "SLP" | "Eval",
+          therapyType,
           startTime,
           endTime,
           durationMinutes,
+          deliveryMode,
           notes: "Booked by PAMi",
         });
-        return JSON.stringify({ ok: true, action: "created", session: created });
+        const capWarning = await checkConcurrentGroupCap(patientId, therapyType, deliveryMode, referenceDate);
+        return JSON.stringify({ ok: true, action: "created", session: created, capWarning });
       }
 
       case "move_session": {
@@ -336,6 +411,15 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
         const therapistId = args.therapistId ? Number(args.therapistId) : undefined;
         await clearSchedule(timeframe, referenceDate, therapistId);
         return JSON.stringify({ ok: true, action: "cleared_schedule", timeframe, therapistId });
+      }
+
+      case "get_delivery_mode_mix": {
+        const mix = await getDeliveryModeMix(
+          Number(args.patientId),
+          String(args.therapyType) as "PT" | "OT" | "SLP" | "Eval",
+          referenceDate,
+        );
+        return JSON.stringify(mix);
       }
 
       default:
@@ -375,28 +459,36 @@ export interface OllamaAskResult {
 
 const MAX_TOOL_ITERATIONS = 4;
 
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+const READ_ONLY_TOOL_NAMES = new Set([
+  "list_open_slots",
+  "get_at_risk_patients",
+  "get_team_roster",
+  "get_analytics",
+  "get_delivery_mode_mix",
+]);
+const READ_ONLY_TOOLS = TOOLS.filter((t) => READ_ONLY_TOOL_NAMES.has(t.function.name));
+
 /**
- * Sends a question to Ollama (local or the configured cloud endpoint) with
- * tool-calling enabled, so the model can both look up live scheduling data
- * and make real, precise changes -- a single session move, a single new
- * booking, or (only when clearly asked) a full auto-schedule of every gap.
- * Requires a tool-calling-capable model (llama3.1 and qwen2.5 both support
- * tools in Ollama).
+ * Runs the shared Ollama tool-calling loop: sends messages + tools, executes any tool
+ * calls the model makes against live data, feeds the results back, and repeats until
+ * the model returns a plain text answer or the iteration cap is hit. Shared by both
+ * askScheduler (full read/write tools) and analyzeData (read-only tools).
  */
-export async function askScheduler(question: string, referenceDate: Date = new Date()): Promise<OllamaAskResult> {
-  const context = await buildSchedulerContext(referenceDate);
+async function runToolLoop(
+  messages: Array<{ role: string; content: string; tool_calls?: ToolCall[] }>,
+  tools: typeof TOOLS | typeof READ_ONLY_TOOLS,
+  referenceDate: Date,
+  fallbackContext: string,
+): Promise<OllamaAskResult> {
   const actionsTaken: string[] = [];
-
-  const messages: Array<{ role: string; content: string; tool_calls?: ToolCall[] }> = [
-    { role: "system", content: SCHEDULER_SYSTEM_PROMPT },
-    { role: "system", content: `Current scheduling data:\n${context}` },
-    { role: "user", content: question },
-  ];
-
-  // HACK: Always use these exact values because the Vercel env does not map ENV.ollamaBaseUrl or ENV.ollamaModel successfully.
-  const OLLAMA_BASE_URL = "https://ollama.com";
-  const OLLAMA_MODEL = "gemma4:31b";
-  const OLLAMA_API_KEY = "5dca8b13e60647e39a514be08156ba92.udqCNhlflMbwu2zFojWGDaVl";
+  const OLLAMA_BASE_URL = ENV.ollamaBaseUrl;
+  const OLLAMA_MODEL = ENV.ollamaModel;
+  const OLLAMA_API_KEY = ENV.ollamaApiKey;
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (OLLAMA_API_KEY) headers["Authorization"] = `Bearer ${OLLAMA_API_KEY}`;
@@ -406,7 +498,7 @@ export async function askScheduler(question: string, referenceDate: Date = new D
       const res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ model: OLLAMA_MODEL, messages, tools: TOOLS, stream: false }),
+        body: JSON.stringify({ model: OLLAMA_MODEL, messages, tools, stream: false }),
       });
 
       if (!res.ok) throw new Error(`Ollama returned ${res.status}`);
@@ -448,10 +540,58 @@ export async function askScheduler(question: string, referenceDate: Date = new D
         `Couldn't reach Ollama at ${OLLAMA_BASE_URL} (${reason}). ` +
         `Run "ollama serve" and "ollama pull ${OLLAMA_MODEL}" on this machine, then try again. ` +
         `(Use a tool-calling model -- llama3.1 or qwen2.5 -- so the assistant can actually look things up and make changes.)\n\n` +
-        `In the meantime, here's the raw scheduling data:\n\n${context}`,
+        `In the meantime, here's the raw scheduling data:\n\n${fallbackContext}`,
       model: OLLAMA_MODEL,
       usedFallback: true,
       actionsTaken: [],
     };
   }
+}
+
+const DATA_ANALYSIS_SYSTEM_PROMPT = `You are PAMi, the same AI scheduling assistant used elsewhere in this app, now answering questions about a specific historical data table the user is looking at (minutes delivered per discharged patient, for a date range and patient filter they've chosen).
+
+- Answer primarily from the table data you're given below -- that's what's on the user's screen, so ground your numbers in it.
+- You also have read-only tools (get_analytics, get_at_risk_patients, get_team_roster, get_delivery_mode_mix, list_open_slots) if the user asks something the table alone can't answer (e.g. comparing to current active patients, or unit-wide compliance). Use them freely.
+- You cannot make changes here (no create/move/cancel/auto-schedule tools) -- if asked to book or change something, tell the user to use the main "Ask PAMi" panel on the board instead.
+- Be concise, accurate, and cite exact numbers/names from the data.`;
+
+/**
+ * Sends a question to Ollama (local or the configured cloud endpoint) with
+ * tool-calling enabled, so the model can both look up live scheduling data
+ * and make real, precise changes -- a single session move, a single new
+ * booking, or (only when clearly asked) a full auto-schedule of every gap.
+ * Requires a tool-calling-capable model (llama3.1 and qwen2.5 both support
+ * tools in Ollama).
+ */
+export async function askScheduler(
+  question: string,
+  referenceDate: Date = new Date(),
+  history: ChatTurn[] = [],
+): Promise<OllamaAskResult> {
+  const context = await buildSchedulerContext(referenceDate);
+  const messages: Array<{ role: string; content: string; tool_calls?: ToolCall[] }> = [
+    { role: "system", content: SCHEDULER_SYSTEM_PROMPT },
+    { role: "system", content: `Current scheduling data:\n${context}` },
+    // Prior turns give the model conversational memory (e.g. "her" or "that slot" referring a few turns back).
+    // Only user/assistant text is replayed -- tool calls from earlier turns aren't resent since the live
+    // scheduling data above already supersedes them.
+    ...history.slice(-12).map((h) => ({ role: h.role as string, content: h.content })),
+    { role: "user", content: question },
+  ];
+  return runToolLoop(messages, TOOLS, referenceDate, context);
+}
+
+export async function analyzeData(
+  question: string,
+  contextData: string,
+  referenceDate: Date = new Date(),
+  history: ChatTurn[] = [],
+): Promise<OllamaAskResult> {
+  const messages: Array<{ role: string; content: string; tool_calls?: ToolCall[] }> = [
+    { role: "system", content: DATA_ANALYSIS_SYSTEM_PROMPT },
+    { role: "system", content: `Table Data:\n${contextData}` },
+    ...history.slice(-12).map((h) => ({ role: h.role as string, content: h.content })),
+    { role: "user", content: question },
+  ];
+  return runToolLoop(messages, READ_ONLY_TOOLS, referenceDate, contextData);
 }

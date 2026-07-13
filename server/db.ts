@@ -20,6 +20,12 @@ import {
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
+// libsql's insert result exposes the new row's id as `lastInsertRowid`, not `insertId`/`[0]`.
+function extractInsertId(result: unknown): number {
+  const rowid = (result as { lastInsertRowid?: bigint | number } | undefined)?.lastInsertRowid;
+  return rowid != null ? Number(rowid) : 0;
+}
+
 let _db: ReturnType<typeof drizzle> | null = null;
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
@@ -31,8 +37,11 @@ export async function getDb() {
       return null;
     }
     try {
+      // @libsql/client/http only speaks http(s) -- a libsql:// URL connects but every
+      // query then fails with a 502 from the edge, silently emptying every query result.
+      const httpUrl = dbUrl.replace(/^libsql:\/\//, "https://");
       const client = createClient({
-        url: dbUrl,
+        url: httpUrl,
         authToken: process.env.TURSO_AUTH_TOKEN,
       });
       _db = drizzle(client);
@@ -137,7 +146,7 @@ export async function createPatient(data: InsertPatient) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const result = await db.insert(patients).values(data);
-  return { id: Number((result as unknown as { insertId: number }[])[0]?.insertId ?? 0) };
+  return { id: extractInsertId(result) };
 }
 
 export async function updatePatient(id: number, data: Partial<InsertPatient>) {
@@ -220,7 +229,7 @@ export async function createTherapySession(data: InsertTherapySession) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const result = await db.insert(therapySessions).values(data);
-  return { id: Number((result as unknown as { insertId: number }[])[0]?.insertId ?? 0) };
+  return { id: extractInsertId(result) };
 }
 
 export async function updateTherapySession(id: number, data: Partial<InsertTherapySession>) {
@@ -279,7 +288,7 @@ export async function createTherapist(data: InsertTherapist) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const result = await db.insert(therapists).values(data);
-  return { id: Number((result as unknown as { insertId: number }[])[0]?.insertId ?? 0) };
+  return { id: extractInsertId(result) };
 }
 
 export async function updateTherapist(id: number, data: Partial<InsertTherapist>) {
@@ -310,28 +319,104 @@ export async function createTeam(data: InsertTeam) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const result = await db.insert(teams).values(data);
-  return { id: Number((result as unknown as { insertId: number }[])[0]?.insertId ?? 0) };
+  return { id: extractInsertId(result) };
 }
 
 /* ---------------------------------------------------------------------------
  * Status Flags
  * ------------------------------------------------------------------------ */
 
+/**
+ * Flags carry forward: a flag set on day X stays active on every later day until a newer
+ * row for the same patient+flagType is written (either re-activated or explicitly turned off
+ * via setStatusFlag). So "active flags as of `date`" is the latest row per (patientId, flagType)
+ * at or before `date`, filtered to the ones still marked active.
+ */
 export async function getStatusFlagsForDate(date: Date) {
   const db = await getDb();
   if (!db) return [];
-  const { startOfDay, endOfDay } = dayBounds(date);
-  return db
+  const { endOfDay } = dayBounds(date);
+  const rows = await db
     .select()
     .from(statusFlags)
-    .where(and(gte(statusFlags.date, startOfDay), lte(statusFlags.date, endOfDay)));
+    .where(lte(statusFlags.date, endOfDay))
+    .orderBy(statusFlags.date, statusFlags.id);
+
+  const latestByKey = new Map<string, (typeof rows)[number]>();
+  for (const row of rows) {
+    latestByKey.set(`${row.patientId}:${row.flagType}`, row); // ascending order, so last write wins
+  }
+  return Array.from(latestByKey.values()).filter((row) => row.active);
+}
+
+/**
+ * Sets whether a patient's flag is active as of `date` -- this is the write side of the
+ * carry-forward model above. Updates the row for the exact date in place if one already
+ * exists (e.g. toggled twice in one day), otherwise inserts a new one.
+ */
+export async function setStatusFlag(
+  patientId: number,
+  flagType: InsertStatusFlag["flagType"],
+  date: Date,
+  active: boolean,
+): Promise<{ id: number; changed: boolean }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const flagsAsOfDate = await getStatusFlagsForDate(date);
+  const wasActive = flagsAsOfDate.some((f) => f.patientId === patientId && f.flagType === flagType);
+
+  const { startOfDay, endOfDay } = dayBounds(date);
+  const existing = await db
+    .select()
+    .from(statusFlags)
+    .where(
+      and(
+        eq(statusFlags.patientId, patientId),
+        eq(statusFlags.flagType, flagType),
+        gte(statusFlags.date, startOfDay),
+        lte(statusFlags.date, endOfDay),
+      ),
+    )
+    .limit(1);
+
+  let id: number;
+  if (existing.length > 0) {
+    await db.update(statusFlags).set({ active }).where(eq(statusFlags.id, existing[0].id));
+    id = existing[0].id;
+  } else {
+    const result = await db.insert(statusFlags).values({ patientId, flagType, date, active });
+    id = extractInsertId(result);
+  }
+
+  return { id, changed: wasActive !== active };
 }
 
 export async function createStatusFlag(data: InsertStatusFlag) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  
+  // Prevent duplicate flags for the same patient, flagType, and date
+  const { startOfDay, endOfDay } = dayBounds(data.date);
+  const existing = await db
+    .select()
+    .from(statusFlags)
+    .where(
+      and(
+        eq(statusFlags.patientId, data.patientId),
+        eq(statusFlags.flagType, data.flagType),
+        gte(statusFlags.date, startOfDay),
+        lte(statusFlags.date, endOfDay)
+      )
+    )
+    .limit(1);
+
+  if (existing.length > 0) {
+    return { id: existing[0].id, created: false };
+  }
+
   const result = await db.insert(statusFlags).values(data);
-  return { id: Number((result as unknown as { insertId: number }[])[0]?.insertId ?? 0) };
+  return { id: extractInsertId(result), created: true };
 }
 
 export async function deleteStatusFlag(id: number) {
@@ -343,7 +428,7 @@ export async function deleteStatusFlag(id: number) {
 
 export async function deleteStatusFlagByPatientAndType(
   patientId: number,
-  flagType: "DC" | "Name Alert" | "Weekend" | "In-Service" | "Appointment" | "Stroke Program" | "Shower",
+  flagType: InsertStatusFlag["flagType"],
   date: Date,
 ) {
   const db = await getDb();
@@ -366,21 +451,41 @@ export async function deleteStatusFlagByPatientAndType(
  * Board History (daily snapshots)
  * ------------------------------------------------------------------------ */
 
+// The Turso HTTP edge occasionally returns a transient 502 on an otherwise-valid query.
+// Snapshots are explicit user actions (click "save", click "print") rather than passive
+// polling, so it's worth a couple of quick retries instead of failing the user's click outright.
+async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.includes("502") && !message.includes("SERVER_ERROR")) throw err;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 250 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 export async function getBoardHistory() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(boardHistory).orderBy(boardHistory.date);
+  return withRetry(() => db.select().from(boardHistory).orderBy(boardHistory.date));
 }
 
 export async function getSnapshotForDate(date: Date) {
   const db = await getDb();
   if (!db) return undefined;
   const { startOfDay, endOfDay } = dayBounds(date);
-  const result = await db
-    .select()
-    .from(boardHistory)
-    .where(and(gte(boardHistory.date, startOfDay), lte(boardHistory.date, endOfDay)))
-    .limit(1);
+  const result = await withRetry(() =>
+    db
+      .select()
+      .from(boardHistory)
+      .where(and(gte(boardHistory.date, startOfDay), lte(boardHistory.date, endOfDay)))
+      .limit(1),
+  );
   return result[0];
 }
 
@@ -389,11 +494,20 @@ export async function saveBoardSnapshot(date: Date, snapshot: unknown) {
   if (!db) throw new Error("Database not available");
   // Remove existing snapshot for the date, then insert a fresh one
   const { startOfDay, endOfDay } = dayBounds(date);
-  await db
-    .delete(boardHistory)
-    .where(and(gte(boardHistory.date, startOfDay), lte(boardHistory.date, endOfDay)));
-  const result = await db.insert(boardHistory).values({ date, snapshot: snapshot as object });
-  return { id: Number((result as unknown as { insertId: number }[])[0]?.insertId ?? 0) };
+  await withRetry(() =>
+    db
+      .delete(boardHistory)
+      .where(and(gte(boardHistory.date, startOfDay), lte(boardHistory.date, endOfDay))),
+  );
+  const result = await withRetry(() => db.insert(boardHistory).values({ date, snapshot: snapshot as object }));
+  return { id: extractInsertId(result) };
+}
+
+export async function deleteBoardSnapshot(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await withRetry(() => db.delete(boardHistory).where(eq(boardHistory.id, id)));
+  return { success: true };
 }
 
 /* ---------------------------------------------------------------------------

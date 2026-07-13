@@ -24,17 +24,20 @@ import {
   getStatusFlagsForDate,
   createStatusFlag,
   deleteStatusFlag,
-  deleteStatusFlagByPatientAndType,
+  setStatusFlag,
   getBoardHistory,
   getSnapshotForDate,
   saveBoardSnapshot,
+  deleteBoardSnapshot,
   seedTeamsIfEmpty,
 } from "./db";
 import { getWeeklyMinutesSummary, getGapFillSuggestions } from "./scheduling";
-import { askScheduler } from "./ollama";
+import { askScheduler, analyzeData } from "./ollama";
 
-const therapyTypeEnum = z.enum(["PT", "OT", "SLP", "Eval"]);
-const flagTypeEnum = z.enum(["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program", "Shower"]);
+const therapyTypeEnum = z.enum(["PT", "OT", "SLP", "Eval", "Block"]);
+const flagTypeEnum = z.enum(["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program", "Shower", "Medical Hold", "Dialysis", "Block Time", "Group Appropriate", "Male Therapist Only", "Female Therapist Only", "Home Eval", "Family Training"]);
+const sessionStatusEnum = z.enum(["scheduled", "completed", "missed_refusal", "missed_clinical_hold", "missed_staffing", "missed_other"]);
+const deliveryModeEnum = z.enum(["individual", "concurrent", "group"]);
 
 export const appRouter = router({
   system: systemRouter,
@@ -111,8 +114,12 @@ export const appRouter = router({
           startTime: z.date(),
           endTime: z.date(),
           durationMinutes: z.number().positive(),
+          actualDurationMinutes: z.number().positive().optional(),
+          deliveryMode: deliveryModeEnum.optional(),
           therapistId: z.number().nullable().optional(),
           notes: z.string().optional(),
+          status: sessionStatusEnum.optional(),
+          missedReason: z.string().optional(),
         }),
       )
       .mutation(async ({ input }) =>
@@ -130,8 +137,12 @@ export const appRouter = router({
           startTime: z.date().optional(),
           endTime: z.date().optional(),
           durationMinutes: z.number().optional(),
+          actualDurationMinutes: z.number().positive().optional(),
+          deliveryMode: deliveryModeEnum.optional(),
           therapistId: z.number().nullable().optional(),
           notes: z.string().optional(),
+          status: sessionStatusEnum.optional(),
+          missedReason: z.string().optional(),
         }),
       )
       .mutation(async ({ input }) => {
@@ -232,14 +243,30 @@ export const appRouter = router({
         }),
       )
       .mutation(async ({ input }) => {
-        if (input.active) {
-          return createStatusFlag({
-            patientId: input.patientId,
-            flagType: input.flagType,
-            date: input.date,
-          });
+        const flag = await setStatusFlag(input.patientId, input.flagType, input.date, input.active);
+
+        // Only fire the DC side effects when the flag actually flips -- not on a redundant
+        // toggle of a flag that (thanks to carry-forward) was already active/inactive.
+        if (input.flagType === "DC" && flag.changed) {
+          if (input.active) {
+            const previousPatient = await getPatientById(input.patientId);
+            if (previousPatient && !previousPatient.isDischarged) {
+              await updatePatient(input.patientId, { isDischarged: true });
+              await createPatient({
+                roomNumber: previousPatient.roomNumber,
+                name: "Available",
+                notes: "",
+                isDischarged: false,
+                weeklyMinuteTarget: 900,
+                teamId: previousPatient.teamId ?? null,
+              });
+            }
+          } else {
+            await updatePatient(input.patientId, { isDischarged: false });
+          }
         }
-        return deleteStatusFlagByPatientAndType(input.patientId, input.flagType, input.date);
+
+        return flag;
       }),
   }),
 
@@ -254,6 +281,9 @@ export const appRouter = router({
     save: publicProcedure
       .input(z.object({ date: z.date(), snapshot: z.any() }))
       .mutation(async ({ input }) => saveBoardSnapshot(input.date, input.snapshot)),
+    delete: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => deleteBoardSnapshot(input.id)),
   }),
 
   /* ------------------------------------------------------------------ */
@@ -276,8 +306,28 @@ export const appRouter = router({
   /* ------------------------------------------------------------------ */
   ai: router({
     ask: publicProcedure
-      .input(z.object({ question: z.string().min(1), referenceDate: z.date().optional() }))
-      .mutation(async ({ input }) => askScheduler(input.question, input.referenceDate ?? new Date())),
+      .input(
+        z.object({
+          question: z.string().min(1),
+          referenceDate: z.date().optional(),
+          history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() })).optional(),
+        }),
+      )
+      .mutation(async ({ input }) =>
+        askScheduler(input.question, input.referenceDate ?? new Date(), input.history ?? []),
+      ),
+    analyzeData: publicProcedure
+      .input(
+        z.object({
+          question: z.string().min(1),
+          contextData: z.string(),
+          referenceDate: z.date().optional(),
+          history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() })).optional(),
+        }),
+      )
+      .mutation(async ({ input }) =>
+        analyzeData(input.question, input.contextData, input.referenceDate ?? new Date(), input.history ?? []),
+      ),
   }),
 });
 

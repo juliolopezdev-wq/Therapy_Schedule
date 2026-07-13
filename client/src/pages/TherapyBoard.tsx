@@ -57,6 +57,7 @@ import {
 import { SessionTile, type SessionTileData } from "@/components/board/SessionTile";
 import { GridCell } from "@/components/board/GridCell";
 import { FlagBadge, FlagToggle } from "@/components/board/StatusFlags";
+import { PatientDayQuickView, printAllPatientSchedules } from "@/components/board/PatientDayQuickView";
 import { BoardHeader } from "@/components/board/BoardHeader";
 import { SessionDialog, type SessionFormValue } from "@/components/board/SessionDialog";
 import { PatientDialog, type PatientFormValue } from "@/components/board/PatientDialog";
@@ -66,6 +67,7 @@ import { MySchedule } from "@/components/board/MySchedule";
 import { BoardHistoryDialog } from "@/components/board/BoardHistoryDialog";
 import { TargetReachedDialog, type WeekSessionRow } from "@/components/board/TargetReachedDialog";
 import { WeeklyMinutesPanel } from "@/components/board/WeeklyMinutesPanel";
+import { DataAnalysisModal } from "@/components/board/DataAnalysisModal";
 import { AskSchedulerPanel } from "@/components/board/AskSchedulerPanel";
 import { cn } from "@/lib/utils";
 
@@ -118,6 +120,7 @@ export default function TherapyBoard() {
   const [weeklyMinutesPanelOpen, setWeeklyMinutesPanelOpen] = useState(false);
   const [askSchedulerPanelOpen, setAskSchedulerPanelOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [dataAnalysisOpen, setDataAnalysisOpen] = useState(false);
   const [activeDrag, setActiveDrag] = useState<SessionTileData | null>(null);
   const [targetAlertData, setTargetAlertData] = useState<{
     patientName: string;
@@ -216,6 +219,9 @@ export default function TherapyBoard() {
         durationMinutes: s.durationMinutes,
         slotIndex,
         slotSpan,
+        status: s.status || "scheduled",
+        deliveryMode: s.deliveryMode || "individual",
+        missedReason: s.missedReason,
         notes: s.notes,
       };
     });
@@ -360,6 +366,19 @@ export default function TherapyBoard() {
     return map;
   }, [flags]);
 
+  // Set of patient IDs who had therapy in the last 2 days (or scheduled today)
+  const recentTherapyPatientIds = useMemo(() => {
+    const set = new Set<number>();
+    weekSessions.forEach((s) => {
+      if (s.therapyType === "Block") return;
+      const diff = differenceInDays(day, new Date(s.startTime));
+      if (diff >= 0 && diff <= 2) {
+        set.add(s.patientId);
+      }
+    });
+    return set;
+  }, [weekSessions, day]);
+
   const therapistName = (id: number | null) =>
     id ? therapists.find((t) => t.id === id)?.name : undefined;
 
@@ -439,6 +458,8 @@ export default function TherapyBoard() {
       therapistId: null,
       slotIndex,
       durationMinutes: 30,
+      deliveryMode: "individual",
+      status: "scheduled",
       notes: "",
     });
     setSessionDialogOpen(true);
@@ -452,6 +473,9 @@ export default function TherapyBoard() {
       therapistId: tile.therapistId,
       slotIndex: tile.slotIndex,
       durationMinutes: tile.durationMinutes,
+      deliveryMode: tile.deliveryMode || "individual",
+      status: tile.status || "scheduled",
+      missedReason: tile.missedReason || undefined,
       notes: tile.notes ?? "",
     });
     setSessionDialogOpen(true);
@@ -503,7 +527,11 @@ export default function TherapyBoard() {
         startTime: start,
         endTime: end,
         durationMinutes: value.durationMinutes,
+        actualDurationMinutes: value.actualDurationMinutes ?? undefined,
+        deliveryMode: value.deliveryMode,
         notes: value.notes,
+        status: value.status,
+        missedReason: value.missedReason,
       });
       toast.success("Session updated");
     } else {
@@ -514,7 +542,10 @@ export default function TherapyBoard() {
         startTime: start,
         endTime: end,
         durationMinutes: value.durationMinutes,
+        deliveryMode: value.deliveryMode,
         notes: value.notes,
+        status: value.status,
+        missedReason: value.missedReason,
       });
       toast.success("Session added");
     }
@@ -522,6 +553,7 @@ export default function TherapyBoard() {
 
   function savePatient(value: PatientFormValue) {
     if (value.id) {
+      const oldPatient = patients.find((p) => p.id === value.id);
       updatePatient.mutate({
         id: value.id,
         roomNumber: value.roomNumber,
@@ -531,6 +563,20 @@ export default function TherapyBoard() {
         admissionDate: value.admissionDate || undefined,
         weeklyMinuteTarget: value.weeklyMinuteTarget ?? 900,
         teamId: value.teamId ?? null,
+      }, {
+        onSuccess: () => {
+          // If the patient was just marked as discharged, leave an "Available" slot in that room
+          if (value.isDischarged && oldPatient && !oldPatient.isDischarged) {
+            createPatient.mutate({
+              roomNumber: value.roomNumber,
+              name: "Available",
+              notes: "",
+              isDischarged: false,
+              weeklyMinuteTarget: 900,
+              teamId: oldPatient.teamId ?? null,
+            });
+          }
+        }
       });
       toast.success("Patient updated");
     } else {
@@ -564,10 +610,12 @@ export default function TherapyBoard() {
   }
 
   function handleSnapshot() {
+    // Include therapists/teams so a saved snapshot is self-contained and can be printed
+    // later without needing today's live data (therapist/team names, not just IDs).
     saveSnapshot.mutate(
       {
         date: day,
-        snapshot: { sessions: rawSessions, patients, flags },
+        snapshot: { sessions: rawSessions, patients, flags, therapists, teams },
       },
       {
         onSuccess: () => toast.success("Board snapshot saved"),
@@ -576,16 +624,26 @@ export default function TherapyBoard() {
     );
   }
 
+  function handlePrintAllPatients() {
+    const activePatients = patientsBySection.flatMap((s) => s.patients);
+    printAllPatientSchedules(activePatients, day, tiles, therapists);
+  }
+
   // Group patients by team and filter based on teamFilter selection
   const patientsBySection = useMemo(() => {
+    const isPatientDC = (p: typeof patients[0]) => {
+      const pFlags = flagsByPatient.get(p.id) ?? [];
+      return p.isDischarged || pFlags.some((f) => f.flagType === "DC");
+    };
+
     const sectionsToRender = teamFilter === "all" ? teams : teams.filter(t => t.id === teamFilter);
     const result = sectionsToRender.map((section) => ({
       ...section,
-      patients: patients.filter((p) => p.teamId === section.id),
+      patients: patients.filter((p) => p.teamId === section.id && !isPatientDC(p)),
     }));
 
     if (teamFilter === "all") {
-      const unassigned = patients.filter(p => !p.teamId);
+      const unassigned = patients.filter(p => !p.teamId && !isPatientDC(p));
       if (unassigned.length > 0) {
         result.push({
           id: 0,
@@ -597,7 +655,7 @@ export default function TherapyBoard() {
       }
     }
     return result;
-  }, [patients, teams, teamFilter]);
+  }, [patients, teams, teamFilter, flagsByPatient]);
 
 
 
@@ -637,7 +695,9 @@ export default function TherapyBoard() {
         setWeeklyMinutesPanelOpen={setWeeklyMinutesPanelOpen}
         setAskSchedulerPanelOpen={setAskSchedulerPanelOpen}
         setHistoryOpen={setHistoryOpen}
+        setDataAnalysisOpen={setDataAnalysisOpen}
         handleSnapshot={handleSnapshot}
+        handlePrintAllPatients={handlePrintAllPatients}
         mySchedTherapist={mySchedTherapist}
         setMySchedTherapist={setMySchedTherapist}
         tiles={tiles}
@@ -794,6 +854,12 @@ export default function TherapyBoard() {
                       {!isCollapsed && section.patients.map((patient, rowIdx) => {
                         const pFlags = flagsByPatient.get(patient.id) ?? [];
                         const isDC = patient.isDischarged || pFlags.some((f) => f.flagType === "DC");
+                        const isMedicalHold = pFlags.some((f) => f.flagType === "Medical Hold");
+                        
+                        // Check if patient had therapy in the last 2 days (or has it scheduled today)
+                        const hasTherapyRecent = recentTherapyPatientIds.has(patient.id);
+                        const missedTherapyAlert = !isDC && !isMedicalHold && !hasTherapyRecent;
+
                         return (
                           <div key={patient.id} id={`patient-row-${patient.id}`} className={cn("group/row flex h-14 border-b border-slate-100 transition-colors last:border-b-0 hover:bg-slate-50/60", isDC && "bg-slate-200 opacity-60 grayscale")}>
                             {/* Patient label */}
@@ -824,6 +890,16 @@ export default function TherapyBoard() {
                                   <span className={cn("truncate text-[11px] font-bold text-slate-800", isDC && "text-slate-400 line-through")}>
                                     {patient.name}
                                   </span>
+                                  {missedTherapyAlert && (
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-500 animate-pulse" strokeWidth={2.5} />
+                                      </TooltipTrigger>
+                                      <TooltipContent side="top" className="text-xs font-semibold text-red-700 bg-red-50 border-red-200">
+                                        No therapy in 2+ days
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  )}
                                   <span className="shrink-0 inline-flex min-w-[2rem] justify-center rounded border border-slate-200 bg-slate-100 px-1 text-[9px] font-bold tabular-nums text-slate-600">
                                     {patient.roomNumber}
                                   </span>
@@ -865,6 +941,12 @@ export default function TherapyBoard() {
                                   toggleFlag.mutate({ patientId: patient.id, flagType: flag, date: day, active })
                                 }
                               />
+                              <PatientDayQuickView
+                                patient={patient}
+                                day={day}
+                                sessions={tiles}
+                                therapists={therapists}
+                              />
                             </div>
 
                             {/* Time cells */}
@@ -878,16 +960,16 @@ export default function TherapyBoard() {
 
                               if (slot.hour === 12 && slot.minute === 0) {
                                 return (
-                                  <div key={slot.index} style={{ flex: `0 0 ${SLOT_WIDTH * 2}px`, width: SLOT_WIDTH * 2, minWidth: SLOT_WIDTH * 2 }} className={cn("shrink-0", "border-r border-slate-200")}>
+                                  <div key={slot.index} style={{ flex: `0 0 ${SLOT_WIDTH * 2}px`, width: SLOT_WIDTH * 2, minWidth: SLOT_WIDTH * 2 }} className={cn("shrink-0", "border-r border-slate-200", isMedicalHold && "bg-slate-200/50 bg-[repeating-linear-gradient(45deg,rgba(0,0,0,0.03),rgba(0,0,0,0.03)_4px,transparent_4px,transparent_8px)] grayscale pointer-events-none opacity-80")}>
                                     <GridCell patientId={patient.id} slotIndex={slot.index} onAdd={openNewSession} isAlternate={rowIdx % 2 !== 0} isLunch={true} />
                                   </div>
                                 );
                               }
                               if (isOccupied) {
-                                return <div key={slot.index} style={{ flex: `0 0 ${SLOT_WIDTH}px`, width: SLOT_WIDTH, minWidth: SLOT_WIDTH }} className={cn("shrink-0", borderClass)} />;
+                                return <div key={slot.index} style={{ flex: `0 0 ${SLOT_WIDTH}px`, width: SLOT_WIDTH, minWidth: SLOT_WIDTH }} className={cn("shrink-0", borderClass, isMedicalHold && "bg-slate-200/50 bg-[repeating-linear-gradient(45deg,rgba(0,0,0,0.03),rgba(0,0,0,0.03)_4px,transparent_4px,transparent_8px)] grayscale pointer-events-none opacity-80")} />;
                               }
                               return (
-                                <div key={slot.index} style={{ flex: `0 0 ${SLOT_WIDTH}px`, width: SLOT_WIDTH, minWidth: SLOT_WIDTH }} className={cn("shrink-0", borderClass)}>
+                                <div key={slot.index} style={{ flex: `0 0 ${SLOT_WIDTH}px`, width: SLOT_WIDTH, minWidth: SLOT_WIDTH }} className={cn("shrink-0 transition-colors duration-300", borderClass, isMedicalHold && "bg-slate-200/50 bg-[repeating-linear-gradient(45deg,rgba(0,0,0,0.03),rgba(0,0,0,0.03)_4px,transparent_4px,transparent_8px)] grayscale opacity-80")}>
                                   <GridCell patientId={patient.id} slotIndex={slot.index} onAdd={openNewSession} isAlternate={rowIdx % 2 !== 0} isLunch={false}>
                                     {tile ? (
                                       <div
@@ -974,10 +1056,35 @@ export default function TherapyBoard() {
         onSave={savePatient}
       />
 
-      <WeeklyMinutesPanel open={weeklyMinutesPanelOpen} onOpenChange={setWeeklyMinutesPanelOpen} />
+      <WeeklyMinutesPanel
+        open={weeklyMinutesPanelOpen}
+        onOpenChange={setWeeklyMinutesPanelOpen}
+      />
       <AskSchedulerPanel open={askSchedulerPanelOpen} onOpenChange={setAskSchedulerPanelOpen} />
 
       <BoardHistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} />
+
+      <DataAnalysisModal
+        open={dataAnalysisOpen}
+        onOpenChange={setDataAnalysisOpen}
+        patients={patientsQuery.data ?? []}
+        onEditPatient={(id) => {
+          const patient = patientsQuery.data?.find(p => p.id === id);
+          if (patient) {
+            setPatientDraft({
+              id: patient.id,
+              roomNumber: patient.roomNumber,
+              name: patient.name,
+              notes: patient.notes ?? "",
+              isDischarged: patient.isDischarged,
+              admissionDate: (patient as any).admissionDate ?? "",
+              weeklyMinuteTarget: (patient as any).weeklyMinuteTarget ?? 900,
+              teamId: (patient as any).teamId ?? null,
+            });
+            setPatientDialogOpen(true);
+          }
+        }}
+      />
 
       <PatientPanel
         open={panelOpen}
@@ -1026,8 +1133,6 @@ export default function TherapyBoard() {
           toast.success("Staff member removed");
         }}
       />
-
-      <BoardHistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} />
 
       <TargetReachedDialog
         open={targetAlertData !== null}

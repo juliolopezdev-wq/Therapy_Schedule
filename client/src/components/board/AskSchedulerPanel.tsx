@@ -62,7 +62,11 @@ export function AskSchedulerPanel({ open, onOpenChange }: AskSchedulerPanelProps
     const trimmed = q.trim();
     if (!trimmed || ask.isPending) return;
     setQuestion("");
-    ask.mutate({ question: trimmed });
+    const chatHistory = history.flatMap((h) => [
+      { role: "user" as const, content: h.question },
+      { role: "assistant" as const, content: h.answer },
+    ]);
+    ask.mutate({ question: trimmed, history: chatHistory });
   };
 
   return (

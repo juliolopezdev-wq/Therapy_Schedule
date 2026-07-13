@@ -1,10 +1,26 @@
 // Board-wide constants and helpers
 
-export type TherapyType = "PT" | "OT" | "SLP" | "Eval";
-export type FlagType = "DC" | "Name Alert" | "Weekend" | "In-Service" | "Appointment" | "Stroke Program" | "Shower";
+import { type SessionStatus, isMissedStatus } from "../../../shared/weekUtils";
+export { type SessionStatus, isMissedStatus };
 
-export const THERAPY_TYPES: TherapyType[] = ["PT", "OT", "SLP", "Eval"];
-export const FLAG_TYPES: FlagType[] = ["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program", "Shower"];
+export type TherapyType = "PT" | "OT" | "SLP" | "Eval" | "Block";
+export type FlagType = "DC" | "Name Alert" | "Weekend" | "In-Service" | "Appointment" | "Stroke Program" | "Shower" | "Medical Hold" | "Dialysis" | "Block Time" | "Group Appropriate" | "Male Therapist Only" | "Female Therapist Only" | "Home Eval" | "Family Training";
+
+export const THERAPY_TYPES: TherapyType[] = ["PT", "OT", "SLP", "Eval", "Block"];
+export const FLAG_TYPES: FlagType[] = ["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program", "Shower", "Medical Hold", "Dialysis", "Block Time", "Group Appropriate", "Male Therapist Only", "Female Therapist Only", "Home Eval", "Family Training"];
+
+export const SESSION_STATUSES: SessionStatus[] = ["scheduled", "completed", "missed_refusal", "missed_clinical_hold", "missed_staffing", "missed_other"];
+export const SESSION_STATUS_META: Record<SessionStatus, { label: string; bg: string; fg: string }> = {
+  scheduled: { label: "Scheduled", bg: "#e0e7ff", fg: "#3730a3" },
+  completed: { label: "Completed", bg: "#dcfce7", fg: "#166534" },
+  missed_refusal: { label: "Missed — Refusal", bg: "#fee2e2", fg: "#991b1b" },
+  missed_clinical_hold: { label: "Missed — Clinical Hold", bg: "#fee2e2", fg: "#991b1b" },
+  missed_staffing: { label: "Missed — Staffing", bg: "#fee2e2", fg: "#991b1b" },
+  missed_other: { label: "Missed — Other", bg: "#fee2e2", fg: "#991b1b" },
+};
+
+export type DeliveryMode = "individual" | "concurrent" | "group";
+export const DELIVERY_MODES: DeliveryMode[] = ["individual", "concurrent", "group"];
 
 export const THERAPY_META: Record<
   TherapyType,
@@ -15,6 +31,7 @@ export const THERAPY_META: Record<
   OT: { label: "OT", full: "Occupational Therapy", bg: "#f3e8ff", fg: "#581c87", accent: "#a855f7", soft: "#faf5ff" },
   SLP: { label: "SLP", full: "Speech Therapy", bg: "#e0f2fe", fg: "#0c4a6e", accent: "#0ea5e9", soft: "#f0f9ff" },
   Eval: { label: "Eval", full: "Evaluation", bg: "#d1fae5", fg: "#064e3b", accent: "#10b981", soft: "#f0fdf4" },
+  Block: { label: "Block", full: "Block Time", bg: "#e2e8f0", fg: "#475569", accent: "#94a3b8", soft: "#f1f5f9" },
 };
 
 // Format a slot index into a short clock label, e.g. 8:00
@@ -34,6 +51,14 @@ export const FLAG_META: Record<
   Appointment: { label: "Appointment", bg: "#d1fae5", fg: "#065f46", description: "Off-unit clinical appointment" },
   "Stroke Program": { label: "Stroke Program", bg: "#fce7f3", fg: "#be185d", description: "Specialized Stroke Program Protocol" },
   Shower: { label: "Shower", bg: "#e0f2fe", fg: "#0369a1", description: "Patient Shower Scheduled" },
+  "Medical Hold": { label: "Medical Hold", bg: "#ef4444", fg: "#ffffff", description: "Patient on medical hold" },
+  Dialysis: { label: "Dialysis", bg: "#bfdbfe", fg: "#1e3a8a", description: "Dialysis patient" },
+  "Block Time": { label: "Block Time", bg: "#e5e7eb", fg: "#374151", description: "Time is blocked out" },
+  "Group Appropriate": { label: "Group", bg: "#dcfce7", fg: "#166534", description: "Appropriate for group therapy" },
+  "Male Therapist Only": { label: "Male Ther.", bg: "#dbeafe", fg: "#1e40af", description: "Requires male therapist" },
+  "Female Therapist Only": { label: "Female Ther.", bg: "#fce7f3", fg: "#9d174d", description: "Requires female therapist" },
+  "Home Eval": { label: "Home Eval", bg: "#f59e0b", fg: "#ffffff", description: "Home Evaluation Required" },
+  "Family Training": { label: "Fam Training", bg: "#fef3c7", fg: "#92400e", description: "Family training needed" },
 };
 
 import {

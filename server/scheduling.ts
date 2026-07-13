@@ -5,11 +5,13 @@ import {
   getTherapySessionsForDateRange,
   createTherapySession,
   getTeams,
+  getStatusFlagsForDate,
 } from "./db";
 import {
   patientWeekStart,
   patientWeekEnd,
   daysRemainingInWeek,
+  isMissedStatus,
   WeeklyMinutesSummary,
 } from "../shared/weekUtils";
 import {
@@ -60,18 +62,37 @@ export async function getWeeklyMinutesSummary(referenceDate: Date = new Date()):
     const weekStart = patientWeekStart(patient.admissionDate, referenceDate);
     const weekEnd = patientWeekEnd(weekStart);
 
-    const completedMinutes = sessionsInRange
-      .filter((s) => {
-        if (s.patientId !== patient.id) return false;
-        const t = new Date(s.startTime).getTime();
-        return t >= weekStart.getTime() && t <= weekEnd.getTime();
-      })
+    const patientSessions = sessionsInRange.filter((s) => {
+      if (s.patientId !== patient.id) return false;
+      if (s.therapyType === "Block") return false; // block time isn't real therapy minutes
+      const t = new Date(s.startTime).getTime();
+      return t >= weekStart.getTime() && t <= weekEnd.getTime();
+    });
+
+    const scheduledMinutes = patientSessions.reduce((sum, s) => sum + s.durationMinutes, 0);
+    const completedMinutes = patientSessions
+      .filter((s) => s.status === "completed")
+      .reduce((sum, s) => sum + (s.actualDurationMinutes ?? s.durationMinutes), 0);
+    const missedMinutes = patientSessions
+      .filter((s) => isMissedStatus(s.status))
+      .reduce((sum, s) => sum + s.durationMinutes, 0);
+    // Still-scheduled, unstarted minutes -- what could still be delivered this period with zero further attrition
+    const pendingMinutes = patientSessions
+      .filter((s) => s.status === "scheduled")
       .reduce((sum, s) => sum + s.durationMinutes, 0);
 
     const target = (patient as any).weeklyMinuteTarget ?? 900;
-    const remainingMinutes = Math.max(0, target - completedMinutes);
     const daysRemaining = daysRemainingInWeek(weekStart, referenceDate);
-    const atRisk = remainingMinutes > 0 && daysRemaining > 0 && (remainingMinutes / daysRemaining) > 150;
+    const daysElapsed = Math.max(0, 7 - daysRemaining);
+    const proRatedTarget = (target / 7) * daysElapsed;
+
+    const remainingMinutes = Math.max(0, target - completedMinutes);
+    const projectedTotalMinutes = completedMinutes + pendingMinutes;
+    // At risk if projected end-of-week total (assuming zero further attrition) still falls short of target,
+    // or if delivered-to-date is already behind the pro-rated target for elapsed days.
+    const behindProjection = projectedTotalMinutes < target;
+    const behindProRated = daysElapsed > 0 && completedMinutes < proRatedTarget;
+    const atRisk = remainingMinutes > 0 && (behindProjection || behindProRated);
 
     return {
       patientId: patient.id,
@@ -81,7 +102,11 @@ export async function getWeeklyMinutesSummary(referenceDate: Date = new Date()):
       weekStart,
       weekEnd,
       target,
+      scheduledMinutes,
       completedMinutes,
+      missedMinutes,
+      pendingMinutes,
+      projectedTotalMinutes,
       remainingMinutes,
       daysRemaining,
       atRisk,
@@ -102,10 +127,12 @@ export async function getGapFillSuggestions(patientId: number, referenceDate: Da
   ]);
 
   const target = (patient as any).weeklyMinuteTarget ?? 900;
-  const completed = weekSessions
-    .filter((s) => s.patientId === patient.id)
+  // Minutes already covered by a completed or still-pending (not missed) session -- missed sessions
+  // reopen the gap so they get suggested again.
+  const covered = weekSessions
+    .filter((s) => s.patientId === patient.id && s.therapyType !== "Block" && !isMissedStatus(s.status))
     .reduce((sum, s) => sum + s.durationMinutes, 0);
-  let remaining = Math.max(0, target - completed);
+  let remaining = Math.max(0, target - covered);
   if (remaining <= 0) return [];
 
   const sameTeam = patient.teamId ? therapists.filter((t) => t.teamId === patient.teamId) : [];
@@ -255,6 +282,12 @@ export interface JointCommissionAnalytics {
     roomNumber: string;
     daysWithoutTherapy: number;
   }>;
+  missedSessionsByReason: {
+    missed_refusal: number;
+    missed_clinical_hold: number;
+    missed_staffing: number;
+    missed_other: number;
+  };
 }
 
 export async function getJointCommissionAnalytics(referenceDate: Date = new Date()): Promise<JointCommissionAnalytics> {
@@ -293,12 +326,22 @@ export async function getJointCommissionAnalytics(referenceDate: Date = new Date
     scheduledMinutes: therapistMap.get(t.id) || 0,
   })).sort((a, b) => b.scheduledMinutes - a.scheduledMinutes);
 
-  // 4. Gaps in Care (Patients with 0 minutes in the last 2 days)
+  // 4. Gaps in Care (Patients with 0 real therapy minutes in the last 2 days, excluding anyone on Medical Hold)
   const careGaps: JointCommissionAnalytics["careGaps"] = [];
   const yesterdayStart = startOfDayLocal(addDaysLocal(referenceDate, -1));
-  
+  const todaysFlags = await getStatusFlagsForDate(referenceDate);
+  const medicalHoldPatientIds = new Set(
+    todaysFlags.filter((f) => f.flagType === "Medical Hold").map((f) => f.patientId),
+  );
+
   for (const patient of summary) {
-    const recentPatientSessions = recentSessions.filter(s => s.patientId === patient.patientId && new Date(s.startTime).getTime() >= yesterdayStart.getTime());
+    if (medicalHoldPatientIds.has(patient.patientId)) continue;
+    const recentPatientSessions = recentSessions.filter(
+      (s) =>
+        s.patientId === patient.patientId &&
+        s.therapyType !== "Block" &&
+        new Date(s.startTime).getTime() >= yesterdayStart.getTime(),
+    );
     if (recentPatientSessions.length === 0) {
       careGaps.push({
         patientName: patient.patientName,
@@ -308,11 +351,69 @@ export async function getJointCommissionAnalytics(referenceDate: Date = new Date
     }
   }
 
+  // 5. Missed sessions by reason (past 7 days) -- the "why" behind at-risk patients
+  const missedSessionsByReason = {
+    missed_refusal: 0,
+    missed_clinical_hold: 0,
+    missed_staffing: 0,
+    missed_other: 0,
+  };
+  recentSessions.forEach((s) => {
+    if (s.status in missedSessionsByReason) {
+      missedSessionsByReason[s.status as keyof typeof missedSessionsByReason]++;
+    }
+  });
+
   return {
     compliance,
     therapyBreakdown,
     therapistUtilization,
     careGaps,
+    missedSessionsByReason,
+  };
+}
+
+export interface DeliveryModeMix {
+  patientId: number;
+  therapyType: "PT" | "OT" | "SLP" | "Eval";
+  totalMinutes: number;
+  concurrentGroupMinutes: number;
+  pct: number;
+  overCap: boolean;
+}
+
+const CONCURRENT_GROUP_CAP_PCT = 25;
+
+/**
+ * PDPM caps combined concurrent + group minutes at 25% of total minutes per discipline per patient
+ * per period. Computes the current mix for one patient/discipline over their current week so a
+ * proposed new session's delivery mode can be checked against it before booking.
+ */
+export async function getDeliveryModeMix(
+  patientId: number,
+  therapyType: "PT" | "OT" | "SLP" | "Eval",
+  referenceDate: Date = new Date(),
+): Promise<DeliveryModeMix> {
+  const patient = await getPatientById(patientId);
+  const weekStart = patientWeekStart(patient?.admissionDate, referenceDate);
+  const weekEnd = patientWeekEnd(weekStart);
+  const sessions = (await getTherapySessionsForDateRange(weekStart, weekEnd)).filter(
+    (s) => s.patientId === patientId && s.therapyType === therapyType && !isMissedStatus(s.status),
+  );
+
+  const totalMinutes = sessions.reduce((sum, s) => sum + s.durationMinutes, 0);
+  const concurrentGroupMinutes = sessions
+    .filter((s) => s.deliveryMode === "concurrent" || s.deliveryMode === "group")
+    .reduce((sum, s) => sum + s.durationMinutes, 0);
+  const pct = totalMinutes > 0 ? Math.round((concurrentGroupMinutes / totalMinutes) * 100) : 0;
+
+  return {
+    patientId,
+    therapyType,
+    totalMinutes,
+    concurrentGroupMinutes,
+    pct,
+    overCap: pct > CONCURRENT_GROUP_CAP_PCT,
   };
 }
 
