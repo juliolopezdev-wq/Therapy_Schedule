@@ -333,8 +333,8 @@ export function BoardHeader({
                         <div key={idx} className="rounded-lg border border-rose-100 bg-white p-2.5 shadow-sm space-y-2">
                           <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                             <span className="font-semibold text-slate-800 flex items-center gap-1.5">
-                              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: THERAPY_META[pair.sessionA.type as TherapyType]?.accent || "#ccc" }} />
-                              {pair.sessionA.therapistName}
+                              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: THERAPY_META[pair.sessionA.therapyType as TherapyType]?.accent || "#ccc" }} />
+                              {therapists.find(t => t.id === pair.sessionA.therapistId)?.name || "Unassigned"}
                             </span>
                             <span className="text-xs font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
                               {TIME_SLOTS[pair.sessionA.slotIndex]?.label || "Unknown"}

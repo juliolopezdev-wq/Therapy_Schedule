@@ -118,6 +118,7 @@ export type InsertBoardHistory = typeof boardHistory.$inferInsert;
 // server/ollama.ts for the shape per actionType. `undone` is flipped once reversed so
 // undo_last_action always walks back from the most recent still-live action.
 export const aiActionLog = sqliteTable("aiActionLog", {
+  
   id: integer("id").primaryKey({ autoIncrement: true }),
   actionType: text("actionType", {
     enum: [

@@ -12,6 +12,7 @@ export interface SessionTileData {
   therapyType: TherapyType;
   therapistId: number | null;
   durationMinutes: number;
+  actualDurationMinutes?: number | null;
   slotIndex: number;
   slotSpan: number;
   status: SessionStatus;

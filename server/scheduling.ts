@@ -704,7 +704,9 @@ export async function getJointCommissionAnalytics(referenceDate: Date = new Date
   // proactively beats a therapist manually scanning the whole day at shift's end.
   const staleSessions: JointCommissionAnalytics["staleSessions"] = [];
   const todayStart = startOfDayLocal(referenceDate);
-  const todaySessions = await getTherapySessionsForDateRange(todayStart, todayStart);
+  // recentSessions already spans through the end of today (and beyond), so filter it in-memory
+  // instead of a second network round-trip to the remote DB for data already fetched above.
+  const todaySessions = recentSessions.filter((s) => new Date(s.startTime).getTime() >= todayStart.getTime());
   for (const s of todaySessions) {
     if (s.status !== "scheduled" || s.therapyType === "Block") continue;
     if (new Date(s.endTime).getTime() >= referenceDate.getTime()) continue;

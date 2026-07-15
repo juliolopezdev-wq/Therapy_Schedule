@@ -259,6 +259,7 @@ export default function TherapyBoard() {
         therapyType: s.therapyType as TherapyType,
         therapistId: s.therapistId,
         durationMinutes: s.durationMinutes,
+        actualDurationMinutes: s.actualDurationMinutes,
         slotIndex,
         slotSpan,
         status: s.status || "scheduled",

@@ -13,3 +13,9 @@ services:
         sync: false
       - key: TURSO_AUTH_TOKEN
         sync: false
+      - key: OLLAMA_BASE_URL
+        sync: false
+      - key: OLLAMA_MODEL
+        sync: false
+      - key: OLLAMA_API_KEY
+        sync: false

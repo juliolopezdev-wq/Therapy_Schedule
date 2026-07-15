@@ -232,11 +232,7 @@ export const appRouter = router({
   /* Teams                                                               */
   /* ------------------------------------------------------------------ */
   teams: router({
-    list: publicProcedure.query(async () => {
-      const ts = await getTeams();
-      console.log("[DEBUG] Teams list fetched:", ts);
-      return ts;
-    }),
+    list: publicProcedure.query(async () => getTeams()),
     create: publicProcedure
       .input(z.object({ name: z.string().min(1), color: z.string().optional() }))
       .mutation(async ({ input }) =>

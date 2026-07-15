@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, gte, inArray, lt, lte, ne, or } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, lt, lte, ne } from "drizzle-orm";
 import { createClient } from "@libsql/client/http";
 import { drizzle } from "drizzle-orm/libsql";
 import path from "path";
