@@ -8,9 +8,11 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Printer, ClipboardList } from "lucide-react";
+import { Printer, ClipboardList, MoveRight } from "lucide-react";
 import { THERAPY_META, TIME_SLOTS, formatLongDate, type TherapyType } from "@/lib/board";
 import type { SessionTileData } from "./SessionTile";
+import { trpc } from "@/lib/trpc";
+import { toast } from "sonner";
 
 interface PatientDayQuickViewProps {
   patient: { id: number; name: string; roomNumber: string };
@@ -180,6 +182,18 @@ export function printAllPatientSchedules(
 
 export function PatientDayQuickView({ patient, day, sessions, therapists }: PatientDayQuickViewProps) {
   const [open, setOpen] = useState(false);
+  const utils = trpc.useUtils();
+  const moveSessions = trpc.sessions.movePatientSessionsToNextDay.useMutation({
+    onSuccess: (res) => {
+      utils.sessions.list.invalidate();
+      utils.sessions.listForWeek.invalidate();
+      toast.success(`Transferred ${res.count} session(s) to tomorrow.`);
+      setOpen(false);
+    },
+    onError: () => {
+      toast.error("Could not transfer sessions to tomorrow.");
+    }
+  });
 
   const rows = useMemo<ScheduleRow[]>(
     () => getPatientScheduleRows(patient.id, sessions, therapists),
@@ -214,14 +228,29 @@ export function PatientDayQuickView({ patient, day, sessions, therapists }: Pati
               <span className="truncate">
                 {patient.name} · Rm {patient.roomNumber}
               </span>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 shrink-0 gap-1.5 text-xs"
-                onClick={() => printPatientDay(patient.name, patient.roomNumber, dateLabel, rows)}
-              >
-                <Printer className="h-3.5 w-3.5" /> Print
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 shrink-0 gap-1.5 text-xs text-amber-700 hover:text-amber-800 hover:bg-amber-50 border-amber-200"
+                  onClick={() => {
+                    if (confirm("Move all of this patient's sessions from today to tomorrow?")) {
+                      moveSessions.mutate({ patientId: patient.id, date: day });
+                    }
+                  }}
+                  disabled={moveSessions.isPending || rows.length === 0}
+                >
+                  <MoveRight className="h-3.5 w-3.5" /> Transfer
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 shrink-0 gap-1.5 text-xs"
+                  onClick={() => printPatientDay(patient.name, patient.roomNumber, dateLabel, rows)}
+                >
+                  <Printer className="h-3.5 w-3.5" /> Print
+                </Button>
+              </div>
             </DialogTitle>
             <DialogDescription>{dateLabel}</DialogDescription>
           </DialogHeader>

@@ -30,8 +30,16 @@ export const therapists = sqliteTable("therapists", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   userId: integer("userId"),
   name: text("name").notNull(),
+  color: text("color").notNull().default("#3b82f6"), // Default to a blue
   therapyType: text("therapyType", { enum: ["PT", "OT", "SLP"] }).notNull().default("PT"),
   teamId: integer("teamId"),
+  // Working hours, used to keep auto-placement/gap-fill from suggesting a therapist outside
+  // their actual shift. All three are nullable -- null means "no restriction" (available every
+  // day, full board hours), so existing staff with nothing set behave exactly as before this
+  // feature existed. workDays is a comma-separated list of JS Date#getDay() values (0=Sun..6=Sat).
+  workDays: text("workDays"),
+  workStartTime: text("workStartTime"), // "HH:MM", 24-hour
+  workEndTime: text("workEndTime"), // "HH:MM", 24-hour
   createdAt: integer("createdAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
   updatedAt: integer("updatedAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
 });
@@ -53,6 +61,7 @@ export const patients = sqliteTable("patients", {
   assessmentPeriodStart: text("assessmentPeriodStart"),
   assessmentPeriodEnd: text("assessmentPeriodEnd"),
   teamId: integer("teamId"),
+  orderIndex: real("orderIndex").default(0),
   createdAt: integer("createdAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
   updatedAt: integer("updatedAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
 });
@@ -104,6 +113,47 @@ export const boardHistory = sqliteTable("boardHistory", {
 export type BoardHistory = typeof boardHistory.$inferSelect;
 export type InsertBoardHistory = typeof boardHistory.$inferInsert;
 
+// One row per write action PAMi (the AI scheduling assistant) takes. `undoData` holds
+// whatever's needed to reverse that specific action type -- see reverseAiAction in
+// server/ollama.ts for the shape per actionType. `undone` is flipped once reversed so
+// undo_last_action always walks back from the most recent still-live action.
+export const aiActionLog = sqliteTable("aiActionLog", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  actionType: text("actionType", {
+    enum: [
+      "create_session",
+      "move_session",
+      "copy_session",
+      "cancel_session",
+      "auto_schedule_all_gaps",
+      "auto_schedule_patient_gaps",
+      "transfer_patient_sessions_to_next_day",
+      "copy_patient_sessions_to_next_day",
+      "copy_day_to_next_day",
+      "clear_schedule",
+    ],
+  }).notNull(),
+  description: text("description").notNull(),
+  undoData: text("undoData", { mode: "json" }).notNull(),
+  undone: integer("undone", { mode: "boolean" }).default(false).notNull(),
+  createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type AiActionLog = typeof aiActionLog.$inferSelect;
+export type InsertAiActionLog = typeof aiActionLog.$inferInsert;
+
+export const patientAdditionalMinutes = sqliteTable("patientAdditionalMinutes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  patientId: integer("patientId").notNull(),
+  date: integer("date", { mode: 'timestamp' }).notNull(),
+  additionalMinutes: integer("additionalMinutes").notNull(),
+  reason: text("reason"),
+  createdAt: integer("createdAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type PatientAdditionalMinutes = typeof patientAdditionalMinutes.$inferSelect;
+export type InsertPatientAdditionalMinutes = typeof patientAdditionalMinutes.$inferInsert;
+
 // Relations
 export const userRelations = relations(users, ({ one }) => ({
   therapist: one(therapists),
@@ -124,6 +174,7 @@ export const therapistRelations = relations(therapists, ({ one, many }) => ({
 export const patientRelations = relations(patients, ({ many }) => ({
   sessions: many(therapySessions),
   flags: many(statusFlags),
+  additionalMinutes: many(patientAdditionalMinutes),
 }));
 
 export const sessionRelations = relations(therapySessions, ({ one }) => ({

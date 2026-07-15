@@ -5,7 +5,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   ChevronLeft, ChevronRight, AlertTriangle, Calendar as CalendarIcon,
-  History, Users, UserRound, Clock, Bot, Smartphone, BarChart3, Camera, Printer
+  History, Users, UserRound, Clock, Bot, Smartphone, BarChart3, Camera, Printer, Copy
 } from "lucide-react";
 import { 
   THERAPY_TYPES, THERAPY_META, TIME_SLOTS, type TherapyType,
@@ -28,10 +28,10 @@ function FilterButton({ active, onClick, children, color, activeBg, activeFg }: 
           : {}
       }
       className={cn(
-        "rounded px-2.5 py-1 text-xs font-medium transition-all duration-200 cursor-pointer border",
+        "rounded-md px-2.5 py-1 text-[11px] font-semibold transition-all duration-200 cursor-pointer border",
         active
-          ? (!isCustomColor ? "bg-slate-800 text-white border-slate-800 shadow-sm" : "shadow-sm font-semibold")
-          : "bg-transparent text-slate-600 border-transparent hover:bg-slate-100"
+          ? (!isCustomColor ? "bg-slate-800 text-white border-slate-800 shadow-sm" : "shadow-sm")
+          : "bg-transparent text-slate-500 border-transparent hover:bg-slate-100 hover:text-slate-800"
       )}
     >
       <div className="flex items-center gap-1.5">
@@ -70,6 +70,7 @@ export interface BoardHeaderProps {
   mySchedTherapist: number | null;
   setMySchedTherapist: Dispatch<SetStateAction<number | null>>;
   tiles: SessionTileData[];
+  handleCopyDay: () => void;
 }
 
 export function BoardHeader({
@@ -77,247 +78,130 @@ export function BoardHeader({
   patientsUnderTarget, weekMinsByPatient, conflictCount, conflictPairs,
   therapists, patients, jumpToPatient, setPanelOpen, setStaffPanelOpen,
   setWeeklyMinutesPanelOpen, setAskSchedulerPanelOpen, setHistoryOpen, setDataAnalysisOpen, handleSnapshot,
-  handlePrintAllPatients, mySchedTherapist, setMySchedTherapist, tiles
+  handlePrintAllPatients, mySchedTherapist, setMySchedTherapist, tiles, handleCopyDay
 }: BoardHeaderProps) {
   const weekStart = startOfWeek(day);
   const weekLabel = weekRangeLabel(weekStart);
 
   return (
-    <header className="sticky top-0 z-30 border-b border-slate-200/50 bg-white/80 backdrop-blur-xl shadow-sm transition-all">
-      <div className="flex flex-wrap items-center justify-between gap-y-3 gap-x-4 px-4 py-3 sm:px-6">
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex shrink-0 items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-blue-600 text-primary-foreground shadow-sm">
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
-              </svg>
-            </div>
-            <div className="hidden flex-col leading-none sm:flex">
-              <span className="text-sm font-extrabold tracking-tight text-slate-900">PAM</span>
-              <span className="text-[9px] font-semibold uppercase tracking-widest text-primary">Rehab Scheduler</span>
-            </div>
+    <header className="sticky top-0 z-30 flex flex-col shadow-[0_4px_20px_-4px_rgba(0,0,0,0.1)] transition-all border-b border-slate-200">
+      {/* 1. Global Command Bar (Dark Mode, Deep Blue Theme) */}
+      <div className="relative flex flex-wrap items-center justify-between px-4 py-3 sm:px-6 bg-gradient-to-r from-blue-800 via-sky-600 to-blue-800 text-blue-50 min-h-[88px] shadow-md border-b border-blue-700/50">
+        
+        {/* Left: Logo */}
+        <div className="flex shrink-0 items-center gap-4 w-1/3 group cursor-default">
+          <div className="relative flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-400 via-blue-600 to-sky-600 shadow-[0_0_25px_rgba(59,130,246,0.5)] border border-white/20 overflow-hidden transition-all duration-500 group-hover:shadow-[0_0_30px_rgba(59,130,246,0.7)] group-hover:-translate-y-0.5">
+            <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent mix-blend-overlay" />
+            <div className="absolute top-0 left-0 w-full h-1/2 bg-gradient-to-b from-white/30 to-transparent" />
+            <svg viewBox="0 0 24 24" className="relative z-10 h-7 w-7 text-white drop-shadow-[0_2px_5px_rgba(0,0,0,0.4)] transform transition-transform duration-500 group-hover:scale-110 group-hover:rotate-3" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="12 3 3 8 12 13 21 8 12 3" fill="currentColor" fillOpacity="0.25"/>
+              <polyline points="3 13 12 18 21 13" />
+              <polyline points="3 18 12 23 21 18" />
+            </svg>
           </div>
-
-          <div className="hidden h-5 w-px bg-slate-200 sm:block" />
-
-          {/* Date navigation */}
-          <div className="flex items-center gap-1 bg-slate-50/50 rounded-md p-0.5 border border-slate-100">
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500 hover:text-slate-800 hover:bg-white hover:shadow-sm transition-all" onClick={() => setDay(subDays(day, 1))}>
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <div className="flex flex-col items-center px-2 min-w-[140px]">
-              <span className="text-sm font-bold text-slate-800">{formatLongDate(day)}</span>
-              <span className="text-[10px] font-medium text-slate-500">{weekLabel}</span>
-            </div>
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500 hover:text-slate-800 hover:bg-white hover:shadow-sm transition-all" onClick={() => setDay(addDays(day, 1))}>
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="sm" className="h-8 px-2.5 text-xs font-medium text-primary hover:bg-primary/10 ml-1 transition-colors" onClick={() => setDay(startOfDay(new Date()))}>
-              Today
-            </Button>
-          </div>
-
-          <div className="hidden h-5 w-px bg-slate-200 md:block" />
-
-          {/* Badges */}
-          <div className="flex items-center gap-2">
-            {patientsUnderTarget.length > 0 && (
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button className="flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-100 transition-colors cursor-pointer shadow-sm">
-                    <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-                    </span>
-                    <span>{patientsUnderTarget.length} At Risk</span>
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent align="start" className="w-80 p-0 overflow-hidden shadow-xl border-amber-200" sideOffset={8}>
-                  <div className="p-3 border-b border-amber-200/40 bg-amber-100/50">
-                    <p className="font-semibold text-amber-900 text-sm">Patients Under Target</p>
-                    <p className="text-xs text-amber-700/80 mt-0.5">Custom weekly targets based on admission</p>
-                  </div>
-                  <ScrollArea className="h-[300px]">
-                    <ul className="p-3 space-y-2">
-                      {patientsUnderTarget.map((p) => {
-                        const mins = weekMinsByPatient.get(p.id) ?? 0;
-                        const target = (p as any).weeklyMinuteTarget ?? 900;
-                        const bounds = getPatientWeekBounds((p as any).admissionDate, day);
-                        const endLabel = bounds.end.toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
-                        const adminStr = (p as any).admissionDate;
-                        const adminDate = adminStr ? new Date(`${adminStr}T12:00:00`) : null;
-                        const adminLabel = adminDate ? adminDate.toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" }) : "N/A";
-                        
-                        return (
-                          <li key={p.id} className="text-sm flex flex-col pb-2.5 mb-2 border-b border-amber-200/40 last:border-0 last:pb-0 last:mb-0">
-                            <div className="flex justify-between items-start">
-                              <span className="font-semibold text-amber-950">{p.name} <span className="text-amber-700/80 font-normal ml-1">(Week {bounds.weekNumber})</span></span>
-                              <span className="text-xs font-medium bg-amber-200/60 px-1.5 py-0.5 rounded text-amber-950">
-                                {mins} / {target} mins
-                              </span>
-                            </div>
-                            <div className="flex justify-between items-center mt-1.5 text-xs text-amber-800/90">
-                              <span>Admitted: <span className="font-medium">{adminLabel}</span></span>
-                              {adminStr && <span>Ends: <span className="font-medium">{endLabel}</span></span>}
-                            </div>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </ScrollArea>
-                </PopoverContent>
-              </Popover>
-            )}
-            
-            {conflictCount > 0 ? (
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button className="flex items-center gap-1.5 rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-700 hover:bg-red-100 transition-colors cursor-pointer shadow-sm">
-                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                    <span>{conflictCount} conflict{conflictCount !== 1 ? "s" : ""}</span>
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent align="start" className="w-80 p-0 overflow-hidden shadow-xl border-red-200" sideOffset={8}>
-                  <div className="p-3 border-b border-red-200/40 bg-red-50">
-                    <p className="font-semibold text-red-900 text-sm flex items-center gap-1.5">
-                      <AlertTriangle className="h-4 w-4" />
-                      Scheduling Conflicts
-                    </p>
-                    <p className="text-xs text-red-700/80 mt-0.5">Please resolve the following double-bookings</p>
-                  </div>
-                  <ScrollArea className="max-h-[300px]">
-                    <ul className="p-3 space-y-3 bg-white">
-                      {conflictPairs.map((pair) => {
-                        const isTherapist = pair.type === "therapist";
-                        const t = therapists.find(th => th.id === pair.sessionA.therapistId);
-                        const pA = patients.find(p => p.id === pair.sessionA.patientId);
-                        const pB = patients.find(p => p.id === pair.sessionB.patientId);
-                        const timeA = TIME_SLOTS[pair.sessionA.slotIndex]?.shortLabel || "Unknown";
-                        const timeB = TIME_SLOTS[pair.sessionB.slotIndex]?.shortLabel || "Unknown";
-
-                        return (
-                          <li key={pair.id} className="text-sm flex flex-col pb-3 border-b border-red-100 last:border-0 last:pb-0">
-                            <div className="font-medium text-red-950 mb-1.5 leading-tight">
-                              {isTherapist ? (
-                                <>⚠️ Therapist <span className="font-bold">{t?.name || "Unknown"}</span> is double-booked</>
-                              ) : (
-                                <>⚠️ Patient <span className="font-bold">{pA?.name || "Unknown"}</span> is double-booked</>
-                              )}
-                            </div>
-                            <div className="space-y-1.5">
-                              <div className="flex items-center justify-between bg-slate-50 p-1.5 rounded border border-slate-100">
-                                <span className="text-xs text-slate-700">{timeA} with {isTherapist ? pA?.name : t?.name}</span>
-                                <button onClick={() => jumpToPatient(pair.sessionA.patientId)} className="text-[10px] bg-white border border-slate-200 text-slate-700 px-2 py-1 rounded shadow-sm hover:bg-slate-100 transition-colors">Jump to Patient</button>
-                              </div>
-                              <div className="flex items-center justify-between bg-slate-50 p-1.5 rounded border border-slate-100">
-                                <span className="text-xs text-slate-700">{timeB} with {isTherapist ? pB?.name : t?.name}</span>
-                                <button onClick={() => jumpToPatient(pair.sessionB.patientId)} className="text-[10px] bg-white border border-slate-200 text-slate-700 px-2 py-1 rounded shadow-sm hover:bg-slate-100 transition-colors">Jump to Patient</button>
-                              </div>
-                            </div>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </ScrollArea>
-                </PopoverContent>
-              </Popover>
-            ) : (
-              <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                No conflicts
-              </div>
-            )}
+          <div className="hidden flex-col leading-none sm:flex">
+            <span className="text-[20px] font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-blue-200 drop-shadow-sm">PAM</span>
+            <span className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-blue-300 mt-1 opacity-90">Rehab Scheduler</span>
           </div>
         </div>
 
-        {/* Action buttons */}
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" className="h-8 border-slate-200 font-medium text-slate-600 hover:bg-slate-50 shadow-sm transition-all" onClick={() => setPanelOpen(true)}>
-            <Users className="mr-1.5 h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Patients</span>
+        {/* Right: Global Actions */}
+        <div className="flex items-center justify-end gap-2.5 w-1/3 ml-auto">
+          <Button variant="ghost" size="sm" className="h-10 rounded-full px-4 font-medium text-blue-100 hover:bg-blue-500/20 hover:text-white transition-all" onClick={() => setPanelOpen(true)}>
+            <Users className="mr-2 h-4.5 w-4.5" />
+            <span className="hidden xl:inline text-sm">Patients</span>
           </Button>
-          <Button variant="outline" size="sm" className="h-8 border-slate-200 font-medium text-slate-600 hover:bg-slate-50 shadow-sm transition-all" onClick={() => setStaffPanelOpen(true)}>
-            <UserRound className="mr-1.5 h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Staff</span>
+          <Button variant="ghost" size="sm" className="h-10 rounded-full px-4 font-medium text-blue-100 hover:bg-blue-500/20 hover:text-white transition-all" onClick={() => setStaffPanelOpen(true)}>
+            <UserRound className="mr-2 h-4.5 w-4.5" />
+            <span className="hidden xl:inline text-sm">Staff</span>
           </Button>
-          <Button variant="outline" size="sm" className="h-8 border-slate-200 font-medium text-slate-600 hover:bg-slate-50 shadow-sm transition-all" onClick={() => setWeeklyMinutesPanelOpen(true)}>
-            <Clock className="mr-1.5 h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Weekly Minutes</span>
+          <Button variant="ghost" size="sm" className="h-10 rounded-full px-4 font-medium text-blue-100 hover:bg-blue-500/20 hover:text-white transition-all" onClick={() => setWeeklyMinutesPanelOpen(true)}>
+            <Clock className="mr-2 h-4.5 w-4.5" />
+            <span className="hidden xl:inline text-sm">Mins</span>
           </Button>
-          <Button variant="outline" size="sm" className="h-8 border-slate-200 font-medium text-slate-600 hover:bg-slate-50 shadow-sm transition-all bg-gradient-to-r hover:from-blue-50 hover:to-cyan-50" onClick={() => setAskSchedulerPanelOpen(true)}>
-            <Bot className="mr-1.5 h-3.5 w-3.5 text-blue-600" />
-            <span className="hidden sm:inline text-blue-700">Ask PAMi</span>
+          <Button variant="ghost" size="sm" className="h-10 rounded-full px-4 font-medium text-blue-100 hover:bg-blue-500/20 hover:text-white transition-all" onClick={() => setDataAnalysisOpen(true)}>
+            <BarChart3 className="mr-2 h-4.5 w-4.5" />
+            <span className="hidden xl:inline text-sm">Data</span>
           </Button>
-          <Button variant="outline" size="sm" className="h-8 border-slate-200 font-medium text-slate-600 hover:bg-slate-50 shadow-sm transition-all" onClick={() => setDataAnalysisOpen(true)}>
-            <BarChart3 className="mr-1.5 h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Data Analysis</span>
+          
+          <div className="mx-1.5 h-6 w-[1px] bg-blue-500/20" />
+          
+          <Button variant="ghost" size="sm" className="h-10 rounded-full px-6 font-extrabold text-white bg-gradient-to-r from-sky-500 via-blue-600 to-indigo-600 hover:from-sky-400 hover:via-blue-500 hover:to-indigo-500 border border-sky-300/50 transition-all duration-300 shadow-[0_0_20px_rgba(14,165,233,0.5)] hover:shadow-[0_0_30px_rgba(14,165,233,0.8)] hover:-translate-y-0.5" onClick={() => setAskSchedulerPanelOpen(true)}>
+            <Bot className="mr-2 h-5 w-5 text-white drop-shadow-sm" />
+            <span className="hidden xl:inline text-sm tracking-wide drop-shadow-sm">Ask PAMi</span>
           </Button>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="outline" size="icon" className="h-8 w-8 border-slate-200 text-slate-500 hover:bg-slate-50 shadow-sm transition-all" onClick={handleSnapshot}>
-                <Camera className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Save board snapshot</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="outline" size="icon" className="h-8 w-8 border-slate-200 text-slate-500 hover:bg-slate-50 shadow-sm transition-all" onClick={() => setHistoryOpen(true)}>
-                <History className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>View & print board history</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="outline" size="icon" className="h-8 w-8 border-slate-200 text-slate-500 hover:bg-slate-50 shadow-sm transition-all" onClick={handlePrintAllPatients}>
-                <Printer className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Print all patient schedules</TooltipContent>
-          </Tooltip>
         </div>
       </div>
 
-      {/* Filter bar */}
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-slate-200/50 bg-slate-50/50 px-4 py-2.5 sm:px-6 backdrop-blur-md">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Discipline</span>
-          <div className="flex flex-wrap items-center gap-0.5 rounded-md border border-slate-200/80 bg-white/50 p-0.5 shadow-sm">
-            <FilterButton active={filter === "all"} onClick={() => setFilter("all")}>All</FilterButton>
-            {THERAPY_TYPES.map((t) => (
-              <FilterButton
-                key={t}
-                active={filter === t}
-                onClick={() => setFilter(t)}
-                color={THERAPY_META[t].accent}
-                activeBg={THERAPY_META[t].soft}
-                activeFg={THERAPY_META[t].fg}
-              >
-                {t}
-              </FilterButton>
-            ))}
+      {/* 2. Board Toolbar (Light Mode / Glassmorphism) */}
+      <div className="relative flex flex-wrap items-center justify-between gap-x-6 gap-y-3 bg-white/95 px-4 py-3 sm:px-6 min-h-[68px]">
+        
+        {/* Left: Filters */}
+        <div className="flex flex-wrap items-center gap-5 z-10">
+          <div className="flex items-center gap-2">
+            <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400">Discipline</span>
+            <div className="flex items-center gap-0.5">
+              <FilterButton active={filter === "all"} onClick={() => setFilter("all")}>All</FilterButton>
+              {THERAPY_TYPES.map((t) => (
+                <FilterButton
+                  key={t}
+                  active={filter === t}
+                  onClick={() => setFilter(t)}
+                  color={THERAPY_META[t].accent}
+                  activeBg={THERAPY_META[t].soft}
+                  activeFg={THERAPY_META[t].fg}
+                >
+                  {t}
+                </FilterButton>
+              ))}
+            </div>
+          </div>
+          <div className="w-[1px] h-4 bg-slate-200" />
+          <div className="flex items-center gap-2">
+            <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400">Team</span>
+            <div className="flex items-center gap-0.5">
+              <FilterButton active={teamFilter === "all"} onClick={() => setTeamFilter("all")}>All</FilterButton>
+              {teams.map((team) => (
+                <FilterButton
+                  key={team.id}
+                  active={teamFilter === team.id}
+                  onClick={() => setTeamFilter(team.id)}
+                  color={team.color}
+                >
+                  {team.name}
+                </FilterButton>
+              ))}
+            </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Team</span>
-          <div className="flex flex-wrap items-center gap-0.5 rounded-md border border-slate-200/80 bg-white/50 p-0.5 shadow-sm">
-            <FilterButton active={teamFilter === "all"} onClick={() => setTeamFilter("all")}>All Teams</FilterButton>
-            {teams.map((team) => (
-              <FilterButton
-                key={team.id}
-                active={teamFilter === team.id}
-                onClick={() => setTeamFilter(team.id)}
-                color={team.color}
-              >
-                {team.name}
-              </FilterButton>
-            ))}
+        {/* Center: Date Chooser */}
+        <div className="flex items-center justify-center absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10 hidden lg:flex">
+          <div className="flex items-center gap-2 bg-white/95 backdrop-blur-md rounded-full p-1.5 border border-slate-200 shadow-sm transition-all hover:shadow-md">
+            <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-all" onClick={() => setDay(subDays(day, 1))}>
+              <ChevronLeft className="h-5 w-5" />
+            </Button>
+            
+            <div className="flex flex-col items-center px-6 min-w-[190px] cursor-default">
+              <span className="text-base font-extrabold tracking-tight text-slate-800">{formatLongDate(day)}</span>
+              <span className="text-[10.5px] font-bold text-sky-600 uppercase tracking-widest mt-0.5">{weekLabel}</span>
+            </div>
+            
+            <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-all" onClick={() => setDay(addDays(day, 1))}>
+              <ChevronRight className="h-5 w-5" />
+            </Button>
+            
+            <div className="ml-2 pl-3 border-l border-slate-200 py-0.5">
+              <Button variant="ghost" size="sm" className="h-8 rounded-full px-4 text-xs font-bold tracking-wider text-slate-500 hover:text-sky-700 hover:bg-sky-50 transition-colors" onClick={() => setDay(startOfDay(new Date()))}>
+                TODAY
+              </Button>
+            </div>
           </div>
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        {/* Right: Board Tools & Status */}
+        <div className="flex items-center gap-3 ml-auto">
+          
           <MySchedule
             therapists={therapists}
             value={mySchedTherapist}
@@ -326,12 +210,185 @@ export function BoardHeader({
             patients={patients}
             day={day}
           />
+
+          <div className="flex items-center gap-0.5 rounded-full border border-slate-200 bg-slate-50 p-0.5">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full text-slate-500 hover:bg-white hover:text-slate-800 hover:shadow-sm transition-all" onClick={() => {
+                  if (confirm("Copy all sessions on this day to tomorrow?")) handleCopyDay();
+                }}>
+                  <Copy className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Copy all sessions to tomorrow</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full text-slate-500 hover:bg-white hover:text-slate-800 hover:shadow-sm transition-all" onClick={handleSnapshot}>
+                  <Camera className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Save board snapshot</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full text-slate-500 hover:bg-white hover:text-slate-800 hover:shadow-sm transition-all" onClick={() => setHistoryOpen(true)}>
+                  <History className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>View & print board history</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full text-slate-500 hover:bg-white hover:text-slate-800 hover:shadow-sm transition-all" onClick={handlePrintAllPatients}>
+                  <Printer className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Print all patient schedules</TooltipContent>
+            </Tooltip>
+          </div>
+
+          <div className="w-[1px] h-4 bg-slate-200" />
+
+          {/* Status Badges */}
+          <div className="flex items-center gap-2">
+            {patientsUnderTarget.length > 0 ? (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button className="group flex items-center gap-1.5 text-[11px] font-bold tracking-wide text-amber-700 bg-gradient-to-br from-amber-50 to-amber-100 hover:from-amber-100 hover:to-amber-200 px-3 py-1.5 rounded-full shadow-sm border border-amber-200/50 transition-all hover:shadow-md">
+                    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-white shadow-inner">
+                      <span className="text-[10px] font-black">{patientsUnderTarget.length}</span>
+                    </span>
+                    At Risk
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className="w-80 p-0" align="end" sideOffset={8}>
+                  <div className="border-b border-amber-100 bg-amber-50 px-4 py-3">
+                    <h4 className="font-semibold text-amber-900">Patients At Risk</h4>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      These patients are projected to fall short of their weekly minute targets.
+                    </p>
+                  </div>
+                  <ScrollArea className="h-64">
+                    <div className="p-2 space-y-1">
+                      {patientsUnderTarget.map((p) => {
+                        const target = p.weeklyMinuteTarget;
+                        const current = weekMinsByPatient.get(p.id) ?? 0;
+                        const progress = Math.min(100, Math.round((current / target) * 100));
+                        return (
+                          <button
+                            key={p.id}
+                            onClick={() => jumpToPatient(p.id)}
+                            className="w-full text-left rounded-lg p-2 hover:bg-slate-50 transition-colors flex flex-col gap-1.5 group"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium text-sm text-slate-800 group-hover:text-indigo-600 transition-colors">{p.name}</span>
+                              <span className="text-xs font-bold tabular-nums text-amber-600">
+                                {current} <span className="text-slate-400 font-normal">/ {target}m</span>
+                              </span>
+                            </div>
+                            <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-amber-500 rounded-full transition-all"
+                                style={{ width: `${progress}%` }}
+                              />
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </ScrollArea>
+                </PopoverContent>
+              </Popover>
+            ) : (
+              <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wide text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-100 shadow-sm">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+                Target
+              </div>
+            )}
+
+            {conflictCount > 0 ? (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button className="group flex items-center gap-1.5 text-[11px] font-bold tracking-wide text-rose-700 bg-gradient-to-br from-rose-50 to-rose-100 hover:from-rose-100 hover:to-rose-200 px-3 py-1.5 rounded-full shadow-sm border border-rose-200/50 transition-all hover:shadow-md animate-pulse">
+                    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-white shadow-inner">
+                      <span className="text-[10px] font-black">{conflictCount}</span>
+                    </span>
+                    Conflicts
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[400px] p-0" align="end" sideOffset={8}>
+                  <div className="border-b border-rose-100 bg-rose-50 px-4 py-3">
+                    <h4 className="font-semibold flex items-center gap-2 text-rose-900">
+                      <AlertTriangle className="h-4 w-4 text-rose-600" />
+                      Scheduling Conflicts
+                    </h4>
+                    <p className="text-xs text-rose-700 mt-0.5">
+                      The following sessions are double-booked.
+                    </p>
+                  </div>
+                  <ScrollArea className="h-64">
+                    <div className="p-2 space-y-1">
+                      {conflictPairs.map((pair, idx) => (
+                        <div key={idx} className="rounded-lg border border-rose-100 bg-white p-2.5 shadow-sm space-y-2">
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                            <span className="font-semibold text-slate-800 flex items-center gap-1.5">
+                              <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: THERAPY_META[pair.sessionA.type as TherapyType]?.accent || "#ccc" }} />
+                              {pair.sessionA.therapistName}
+                            </span>
+                            <span className="text-xs font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
+                              {TIME_SLOTS[pair.sessionA.slotIndex]?.label || "Unknown"}
+                            </span>
+                          </div>
+                          
+                          <div className="space-y-1.5">
+                            <button 
+                              onClick={() => jumpToPatient(pair.sessionA.patientId)}
+                              className="w-full text-left flex items-center justify-between text-sm hover:bg-slate-50 p-1.5 rounded group"
+                            >
+                              <span className="text-slate-600 group-hover:text-indigo-600 transition-colors">
+                                {patients.find(p => p.id === pair.sessionA.patientId)?.name || "Unknown"}
+                              </span>
+                              <span className="text-xs font-medium text-slate-400 bg-slate-100 px-1.5 rounded">
+                                Rm {patients.find(p => p.id === pair.sessionA.patientId)?.roomNumber || "?"}
+                              </span>
+                            </button>
+                            <div className="flex items-center justify-center gap-2 text-rose-400">
+                              <div className="h-[1px] flex-1 bg-rose-100" />
+                              <span className="text-[10px] font-bold uppercase tracking-widest text-rose-500">Conflict</span>
+                              <div className="h-[1px] flex-1 bg-rose-100" />
+                            </div>
+                            <button 
+                              onClick={() => jumpToPatient(pair.sessionB.patientId)}
+                              className="w-full text-left flex items-center justify-between text-sm hover:bg-slate-50 p-1.5 rounded group"
+                            >
+                              <span className="text-slate-600 group-hover:text-indigo-600 transition-colors">
+                                {patients.find(p => p.id === pair.sessionB.patientId)?.name || "Unknown"}
+                              </span>
+                              <span className="text-xs font-medium text-slate-400 bg-slate-100 px-1.5 rounded">
+                                Rm {patients.find(p => p.id === pair.sessionB.patientId)?.roomNumber || "?"}
+                              </span>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                </PopoverContent>
+              </Popover>
+            ) : (
+              <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wide text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-100 shadow-sm">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+                Schedule
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Mobile hint */}
-      <div className="flex items-center gap-2 border-t border-slate-200/50 bg-indigo-50/50 px-4 py-2 text-xs text-indigo-700 sm:hidden backdrop-blur-sm">
-        <Smartphone className="h-3.5 w-3.5 shrink-0" />
+      <div className="flex items-center gap-2 bg-indigo-50/50 px-4 py-1.5 text-[11px] text-indigo-700 sm:hidden">
+        <Smartphone className="h-3 w-3 shrink-0" />
         <span>Tap <strong className="font-semibold">My Schedule</strong> for a focused view. Swipe the grid to see all times.</span>
       </div>
     </header>

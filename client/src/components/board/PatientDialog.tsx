@@ -25,6 +25,8 @@ import {
   TIME_SLOTS,
   type TherapyType,
 } from "@/lib/board";
+import { trpc } from "@/lib/trpc";
+import { Trash2 } from "lucide-react";
 
 export interface PatientFormValue {
   id?: number;
@@ -77,6 +79,30 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
 
   const isEditing = Boolean(form.id);
   const canSave = form.roomNumber.trim() && form.name.trim();
+
+  // Additional Minutes Data
+  const utils = trpc.useUtils();
+  const { data: additionalMinutes = [] } = trpc.additionalMinutes.listByPatient.useQuery(
+    { patientId: form.id as number },
+    { enabled: isEditing }
+  );
+  const createAdditionalMinutes = trpc.additionalMinutes.create.useMutation({
+    onSuccess: () => {
+      utils.additionalMinutes.listByPatient.invalidate({ patientId: form.id as number });
+      setNewAdjDate("");
+      setNewAdjMinutes(0);
+      setNewAdjReason("");
+    },
+  });
+  const deleteAdditionalMinutes = trpc.additionalMinutes.delete.useMutation({
+    onSuccess: () => {
+      utils.additionalMinutes.listByPatient.invalidate({ patientId: form.id as number });
+    },
+  });
+
+  const [newAdjDate, setNewAdjDate] = useState("");
+  const [newAdjMinutes, setNewAdjMinutes] = useState(0);
+  const [newAdjReason, setNewAdjReason] = useState("");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -174,6 +200,81 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
               Mark as Discharged (DC)
             </Label>
           </div>
+
+          {isEditing && (
+            <div className="rounded-lg border border-slate-200/60 bg-slate-50/50 p-5 space-y-4 mt-6 shadow-sm">
+              <div className="border-b border-slate-200/60 pb-3">
+                <Label className="text-base font-semibold text-slate-800">Daily Minute Adjustments</Label>
+                <p className="text-xs text-slate-500 mt-1">Add or subtract extra target minutes for specific dates.</p>
+              </div>
+
+              {additionalMinutes.length > 0 ? (
+                <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                  {additionalMinutes.map((adj) => (
+                    <div key={adj.id} className="flex items-center justify-between bg-white border border-slate-200 p-2.5 rounded-md shadow-sm text-sm transition-all hover:border-slate-300">
+                      <div className="flex items-center gap-3">
+                        <span className="font-medium text-slate-700 min-w-[70px]">
+                          {new Date(adj.date).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}
+                        </span>
+                        <span className={`font-bold ${adj.additionalMinutes > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                          {adj.additionalMinutes > 0 ? `+${adj.additionalMinutes}` : adj.additionalMinutes} min
+                        </span>
+                        {adj.reason && <span className="text-slate-500 italic text-xs truncate max-w-[120px]">({adj.reason})</span>}
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0 text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                        onClick={() => deleteAdditionalMinutes.mutate({ id: adj.id })}
+                        disabled={deleteAdditionalMinutes.isPending}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="py-4 text-center border-2 border-dashed border-slate-200 rounded-md bg-white/50">
+                  <p className="text-sm text-slate-500 italic">No adjustments currently.</p>
+                </div>
+              )}
+
+              <div className="flex flex-col gap-3 pt-3 border-t border-slate-200/60">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold text-slate-600">Date</Label>
+                    <Input className="h-9" type="date" value={newAdjDate} onChange={(e) => setNewAdjDate(e.target.value)} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold text-slate-600">Minutes (+ or -)</Label>
+                    <Input className="h-9" type="number" step={15} value={newAdjMinutes} onChange={(e) => setNewAdjMinutes(Number(e.target.value))} />
+                  </div>
+                </div>
+                <div className="flex items-end gap-3">
+                  <div className="space-y-1.5 flex-1">
+                    <Label className="text-xs font-semibold text-slate-600">Reason (optional)</Label>
+                    <Input className="h-9" placeholder="e.g. Missed session makeup" value={newAdjReason} onChange={(e) => setNewAdjReason(e.target.value)} />
+                  </div>
+                  <Button
+                    size="sm"
+                    className="h-9 px-5 shadow-sm"
+                    disabled={!newAdjDate || newAdjMinutes === 0 || createAdditionalMinutes.isPending}
+                    onClick={() => {
+                      const dateObj = new Date(newAdjDate + "T12:00:00");
+                      createAdditionalMinutes.mutate({
+                        patientId: form.id as number,
+                        date: dateObj,
+                        additionalMinutes: newAdjMinutes,
+                        reason: newAdjReason || undefined,
+                      });
+                    }}
+                  >
+                    Add
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Initial Session Scheduling (Optional) */}
           {!isEditing && (

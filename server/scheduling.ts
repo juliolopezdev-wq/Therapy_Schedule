@@ -6,6 +6,9 @@ import {
   createTherapySession,
   getTeams,
   getStatusFlagsForDate,
+  getAdditionalMinutesForDateRange,
+  getMostRecentSessionsForPatients,
+  SchedulingConflictError,
 } from "./db";
 import {
   patientWeekStart,
@@ -17,6 +20,8 @@ import {
 import {
   TOTAL_SLOTS,
   SLOT_MINUTES,
+  START_HOUR,
+  END_HOUR,
   dateToSlotIndex,
   slotIndexToDate,
   durationToSlots,
@@ -57,6 +62,7 @@ export async function getWeeklyMinutesSummary(referenceDate: Date = new Date()):
   const minStart = new Date(Math.min(...ranges.map((r) => r.weekStart.getTime())));
   const maxEnd = new Date(Math.max(...ranges.map((r) => r.weekEnd.getTime())));
   const sessionsInRange = await getTherapySessionsForDateRange(minStart, maxEnd);
+  const additionalMinutesInRange = await getAdditionalMinutesForDateRange(minStart, maxEnd);
 
   return active.map((patient) => {
     const weekStart = patientWeekStart(patient.admissionDate, referenceDate);
@@ -81,7 +87,16 @@ export async function getWeeklyMinutesSummary(referenceDate: Date = new Date()):
       .filter((s) => s.status === "scheduled")
       .reduce((sum, s) => sum + s.durationMinutes, 0);
 
-    const target = (patient as any).weeklyMinuteTarget ?? 900;
+    const baseTarget = (patient as any).weeklyMinuteTarget ?? 900;
+    const extraMinutes = additionalMinutesInRange
+      .filter((a) => {
+        if (a.patientId !== patient.id) return false;
+        const t = new Date(a.date).getTime();
+        return t >= weekStart.getTime() && t <= weekEnd.getTime();
+      })
+      .reduce((sum, a) => sum + a.additionalMinutes, 0);
+    const target = baseTarget + extraMinutes;
+
     const daysRemaining = daysRemainingInWeek(weekStart, referenceDate);
     const daysElapsed = Math.max(0, 7 - daysRemaining);
     const proRatedTarget = (target / 7) * daysElapsed;
@@ -114,17 +129,75 @@ export async function getWeeklyMinutesSummary(referenceDate: Date = new Date()):
   });
 }
 
-export async function getGapFillSuggestions(patientId: number, referenceDate: Date = new Date()): Promise<GapFillSuggestion[]> {
+function parseTimeToMinutes(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map(Number);
+  return h * 60 + m;
+}
+
+/**
+ * Whether a therapist is actually on shift for the given day/slot span, per their optional
+ * workDays/workStartTime/workEndTime. Any of the three left unset means "no restriction" on
+ * that dimension -- a therapist with nothing set is available every day, full board hours,
+ * exactly as gap-fill behaved before this field existed.
+ */
+function therapistWorksAt(
+  t: { workDays: string | null; workStartTime: string | null; workEndTime: string | null },
+  day: Date,
+  slot: number,
+  span: number,
+): boolean {
+  if (t.workDays) {
+    const days = t.workDays.split(",").map(Number);
+    if (!days.includes(day.getDay())) return false;
+  }
+  const slotStartMin = START_HOUR * 60 + slot * SLOT_MINUTES;
+  const slotEndMin = slotStartMin + span * SLOT_MINUTES;
+  if (t.workStartTime && slotStartMin < parseTimeToMinutes(t.workStartTime)) return false;
+  if (t.workEndTime && slotEndMin > parseTimeToMinutes(t.workEndTime)) return false;
+  return true;
+}
+
+/**
+ * How many bookable minutes a therapist actually has on a given calendar day, for productivity
+ * math -- their shift window (or the full 7am-6pm board grid if unset) minus the board's fixed
+ * lunch hour (12:00-1:00) when the shift spans it, or 0 entirely if workDays excludes that day.
+ */
+function availableShiftMinutesForDay(
+  t: { workDays: string | null; workStartTime: string | null; workEndTime: string | null },
+  day: Date,
+): number {
+  if (t.workDays) {
+    const days = t.workDays.split(",").map(Number);
+    if (!days.includes(day.getDay())) return 0;
+  }
+  const startMin = t.workStartTime ? parseTimeToMinutes(t.workStartTime) : START_HOUR * 60;
+  const endMin = t.workEndTime ? parseTimeToMinutes(t.workEndTime) : END_HOUR * 60;
+  let available = Math.max(0, endMin - startMin);
+  const lunchStart = 12 * 60;
+  const lunchEnd = 13 * 60;
+  if (startMin < lunchEnd && endMin > lunchStart) available = Math.max(0, available - 60);
+  return available;
+}
+
+export async function getGapFillSuggestions(
+  patientId: number,
+  referenceDate: Date = new Date(),
+  disciplineFilter?: "PT" | "OT" | "SLP",
+): Promise<GapFillSuggestion[]> {
   const patient = await getPatientById(patientId);
   if (!patient || patient.isDischarged) return [];
 
   const weekStart = patientWeekStart(patient.admissionDate, referenceDate);
   const weekEnd = patientWeekEnd(weekStart);
-  
-  const [weekSessions, therapists] = await Promise.all([
+
+  const [weekSessions, allTherapists] = await Promise.all([
     getTherapySessionsForDateRange(weekStart, weekEnd),
     getTherapists(),
   ]);
+  // When a discipline is specified (e.g. auto-scheduling a PT-shortfall session), only a
+  // PT-credentialed therapist is a legitimate candidate -- without this filter the pool search
+  // below would happily hand a PT session to whichever OT/SLP happened to be free first.
+  const therapists = disciplineFilter ? allTherapists.filter((t) => t.therapyType === disciplineFilter) : allTherapists;
 
   const target = (patient as any).weeklyMinuteTarget ?? 900;
   // Minutes already covered by a completed or still-pending (not missed) session -- missed sessions
@@ -137,7 +210,7 @@ export async function getGapFillSuggestions(patientId: number, referenceDate: Da
 
   const sameTeam = patient.teamId ? therapists.filter((t) => t.teamId === patient.teamId) : [];
   const candidatePool = sameTeam.length > 0 ? [...sameTeam, ...therapists] : therapists;
-  
+
   // Create unique pool (sameTeam members appear first, so Set handles dupes naturally if we just map)
   const pool = Array.from(new Map(candidatePool.map((t) => [t.id, t])).values());
 
@@ -184,6 +257,7 @@ export async function getGapFillSuggestions(patientId: number, referenceDate: Da
 
         let chosen = null;
         for (const t of pool) {
+          if (!therapistWorksAt(t, day, slot, span)) continue;
           const busy = busyByTherapist.get(t.id);
           let free = true;
           if (busy) {
@@ -230,35 +304,132 @@ export async function getGapFillSuggestions(patientId: number, referenceDate: Da
   return suggestions;
 }
 
-export async function autoScheduleAllGaps(referenceDate: Date = new Date()): Promise<number> {
+/**
+ * Which discipline to book for a gap-fill session, based on the patient's actual shortfall
+ * against their optional per-discipline targets (ptTarget/otTarget/slpTarget) -- previously
+ * auto-schedule hardcoded "PT" regardless of what the patient actually needed. Falls back to
+ * PT (the prior, unconditional behavior) when a patient has none of the three targets set,
+ * since there's no per-discipline data to reason from in that case.
+ */
+async function pickAutoScheduleDiscipline(
+  patientId: number,
+  referenceDate: Date,
+): Promise<"PT" | "OT" | "SLP"> {
+  const patient = await getPatientById(patientId);
+  const ptTarget = (patient as any)?.ptTarget as number | null | undefined;
+  const otTarget = (patient as any)?.otTarget as number | null | undefined;
+  const slpTarget = (patient as any)?.slpTarget as number | null | undefined;
+  if (!patient || (!ptTarget && !otTarget && !slpTarget)) return "PT";
+
+  const weekStart = patientWeekStart(patient.admissionDate, referenceDate);
+  const weekEnd = patientWeekEnd(weekStart);
+  const weekSessions = await getTherapySessionsForDateRange(weekStart, weekEnd);
+
+  const deliveredOrPending = (type: "PT" | "OT" | "SLP") =>
+    weekSessions
+      .filter((s) => s.patientId === patientId && s.therapyType === type && !isMissedStatus(s.status))
+      .reduce((sum, s) => sum + s.durationMinutes, 0);
+
+  const shortfalls: { type: "PT" | "OT" | "SLP"; remaining: number }[] = [
+    { type: "PT", remaining: Math.max(0, (ptTarget ?? 0) - deliveredOrPending("PT")) },
+    { type: "OT", remaining: Math.max(0, (otTarget ?? 0) - deliveredOrPending("OT")) },
+    { type: "SLP", remaining: Math.max(0, (slpTarget ?? 0) - deliveredOrPending("SLP")) },
+  ];
+  shortfalls.sort((a, b) => b.remaining - a.remaining);
+  return shortfalls[0].remaining > 0 ? shortfalls[0].type : "PT";
+}
+
+type DisciplineCounts = { PT: number; OT: number; SLP: number };
+
+export async function autoScheduleAllGaps(
+  referenceDate: Date = new Date(),
+): Promise<{ count: number; sessionIds: number[]; skippedConflicts: number; byDiscipline: DisciplineCounts }> {
   const summary = await getWeeklyMinutesSummary(referenceDate);
-  let totalScheduled = 0;
+  const sessionIds: number[] = [];
+  const byDiscipline: DisciplineCounts = { PT: 0, OT: 0, SLP: 0 };
+  let skippedConflicts = 0;
 
   for (const patient of summary) {
     if (patient.remainingMinutes <= 0) continue;
 
-    const suggestions = await getGapFillSuggestions(patient.patientId, referenceDate);
+    const discipline = await pickAutoScheduleDiscipline(patient.patientId, referenceDate);
+    const suggestions = await getGapFillSuggestions(patient.patientId, referenceDate, discipline);
     for (const suggestion of suggestions) {
       if (!suggestion.therapistId) continue;
 
       const startTime = suggestion.startTime;
       const endTime = new Date(startTime.getTime() + suggestion.durationMinutes * 60000);
 
-      await createTherapySession({
+      try {
+        const created = await createTherapySession({
+          patientId: patient.patientId,
+          therapistId: suggestion.therapistId,
+          therapyType: discipline,
+          startTime,
+          endTime,
+          durationMinutes: suggestion.durationMinutes,
+          notes: "Auto-scheduled by AI Assistant",
+        });
+        sessionIds.push(created.id);
+        byDiscipline[discipline]++;
+      } catch (err) {
+        if (err instanceof SchedulingConflictError) {
+          skippedConflicts++;
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
+  return { count: sessionIds.length, sessionIds, skippedConflicts, byDiscipline };
+}
+
+export async function autoSchedulePatientGaps(
+  patientId: number,
+  referenceDate: Date = new Date(),
+): Promise<{ count: number; sessionIds: number[]; skippedConflicts: number; byDiscipline: DisciplineCounts }> {
+  const summary = await getWeeklyMinutesSummary(referenceDate);
+  const patient = summary.find(p => p.patientId === patientId);
+  const emptyDiscipline: DisciplineCounts = { PT: 0, OT: 0, SLP: 0 };
+  if (!patient || patient.remainingMinutes <= 0) {
+    return { count: 0, sessionIds: [], skippedConflicts: 0, byDiscipline: emptyDiscipline };
+  }
+
+  const discipline = await pickAutoScheduleDiscipline(patientId, referenceDate);
+  const sessionIds: number[] = [];
+  const byDiscipline: DisciplineCounts = { PT: 0, OT: 0, SLP: 0 };
+  let skippedConflicts = 0;
+  const suggestions = await getGapFillSuggestions(patient.patientId, referenceDate, discipline);
+
+  for (const suggestion of suggestions) {
+    if (!suggestion.therapistId) continue;
+
+    const startTime = suggestion.startTime;
+    const endTime = new Date(startTime.getTime() + suggestion.durationMinutes * 60000);
+
+    try {
+      const created = await createTherapySession({
         patientId: patient.patientId,
         therapistId: suggestion.therapistId,
-        therapyType: "PT", // Default to PT for auto-scheduled sessions
+        therapyType: discipline,
         startTime,
         endTime,
         durationMinutes: suggestion.durationMinutes,
         notes: "Auto-scheduled by AI Assistant",
       });
-
-      totalScheduled++;
+      sessionIds.push(created.id);
+      byDiscipline[discipline]++;
+    } catch (err) {
+      if (err instanceof SchedulingConflictError) {
+        skippedConflicts++;
+        continue;
+      }
+      throw err;
     }
   }
 
-  return totalScheduled;
+  return { count: sessionIds.length, sessionIds, skippedConflicts, byDiscipline };
 }
 
 export interface JointCommissionAnalytics {
@@ -276,11 +447,14 @@ export interface JointCommissionAnalytics {
   therapistUtilization: Array<{
     name: string;
     scheduledMinutes: number;
+    availableMinutes: number;
+    /** scheduledMinutes/availableMinutes as a 0-100 percent, or null if they had no shift in the window at all. */
+    productivityPct: number | null;
   }>;
   careGaps: Array<{
     patientName: string;
     roomNumber: string;
-    daysWithoutTherapy: number;
+    daysWithoutTherapy: number | null; // null = no real session on record at all (e.g. brand-new admission)
   }>;
   missedSessionsByReason: {
     missed_refusal: number;
@@ -288,15 +462,51 @@ export interface JointCommissionAnalytics {
     missed_staffing: number;
     missed_other: number;
   };
+  /** Who each missed session (past 7 days) actually was -- the aggregate counts above can't
+   *  answer "which patient," so this is what makes that answerable without a guess. */
+  missedSessionsDetail: Array<{
+    patientName: string;
+    roomNumber: string;
+    therapyType: string;
+    date: Date;
+    reason: string;
+    missedReason: string | null;
+  }>;
+  /** Patients trending toward chronic refusal (recent status history), with a data-driven suggestion. */
+  refusalPatterns: Array<{
+    patientName: string;
+    roomNumber: string;
+    refusalCount: number;
+    totalRecentSessions: number;
+    suggestion: string;
+  }>;
+  /** "Group Appropriate" patients who share a team + discipline shortfall -- real candidates to book together. */
+  groupTherapyOpportunities: Array<{
+    teamName: string;
+    therapyType: "PT" | "OT" | "SLP";
+    patients: Array<{ id: number; name: string; roomNumber: string }>;
+  }>;
+  /** Sessions whose end time has already passed today but are still sitting as "scheduled" -- unmarked admin pileup. */
+  staleSessions: Array<{
+    sessionId: number;
+    patientName: string;
+    roomNumber: string;
+    therapyType: string;
+    endTime: Date;
+  }>;
 }
 
 export async function getJointCommissionAnalytics(referenceDate: Date = new Date()): Promise<JointCommissionAnalytics> {
-  const summary = await getWeeklyMinutesSummary(referenceDate);
-  const therapists = await getTherapists();
-
   const past7DaysStart = startOfDayLocal(addDaysLocal(referenceDate, -6));
   const todayEnd = startOfDayLocal(addDaysLocal(referenceDate, 1));
-  const recentSessions = await getTherapySessionsForDateRange(past7DaysStart, todayEnd);
+  // None of these three depend on each other -- run concurrently instead of one-at-a-time
+  // against the remote DB.
+  const [summary, therapists, recentSessions] = await Promise.all([
+    getWeeklyMinutesSummary(referenceDate),
+    getTherapists(),
+    getTherapySessionsForDateRange(past7DaysStart, todayEnd),
+  ]);
+  const patientById = new Map(summary.map((p) => [p.patientId, p]));
 
   // 1. Compliance
   const compliance = {
@@ -314,17 +524,28 @@ export async function getJointCommissionAnalytics(referenceDate: Date = new Date
     else if (s.therapyType === "Eval") therapyBreakdown.Eval += s.durationMinutes;
   });
 
-  // 3. Therapist Utilization
+  // 3. Therapist Utilization + productivity (scheduled minutes against actual available shift
+  // minutes over the same 7-day window) -- SNF rehab teams typically target ~90-95% productivity,
+  // so a bare minutes count without this denominator doesn't tell you who's over/under-loaded.
   const therapistMap = new Map<number, number>();
   recentSessions.forEach(s => {
     if (s.therapistId) {
       therapistMap.set(s.therapistId, (therapistMap.get(s.therapistId) || 0) + s.durationMinutes);
     }
   });
-  const therapistUtilization = therapists.map(t => ({
-    name: t.name,
-    scheduledMinutes: therapistMap.get(t.id) || 0,
-  })).sort((a, b) => b.scheduledMinutes - a.scheduledMinutes);
+  const therapistUtilization = therapists.map(t => {
+    let availableMinutes = 0;
+    for (let i = 0; i < 7; i++) {
+      availableMinutes += availableShiftMinutesForDay(t, addDaysLocal(past7DaysStart, i));
+    }
+    const scheduledMinutes = therapistMap.get(t.id) || 0;
+    return {
+      name: t.name,
+      scheduledMinutes,
+      availableMinutes,
+      productivityPct: availableMinutes > 0 ? Math.round((scheduledMinutes / availableMinutes) * 100) : null,
+    };
+  }).sort((a, b) => b.scheduledMinutes - a.scheduledMinutes);
 
   // 4. Gaps in Care (Patients with 0 real therapy minutes in the last 2 days, excluding anyone on Medical Hold)
   const careGaps: JointCommissionAnalytics["careGaps"] = [];
@@ -334,21 +555,30 @@ export async function getJointCommissionAnalytics(referenceDate: Date = new Date
     todaysFlags.filter((f) => f.flagType === "Medical Hold").map((f) => f.patientId),
   );
 
-  for (const patient of summary) {
-    if (medicalHoldPatientIds.has(patient.patientId)) continue;
-    const recentPatientSessions = recentSessions.filter(
+  const gapCandidates = summary.filter((patient) => {
+    if (medicalHoldPatientIds.has(patient.patientId)) return false;
+    const hasRecentSession = recentSessions.some(
       (s) =>
         s.patientId === patient.patientId &&
         s.therapyType !== "Block" &&
         new Date(s.startTime).getTime() >= yesterdayStart.getTime(),
     );
-    if (recentPatientSessions.length === 0) {
-      careGaps.push({
-        patientName: patient.patientName,
-        roomNumber: patient.roomNumber,
-        daysWithoutTherapy: 2, // Approximated for "yesterday and today"
-      });
-    }
+    return !hasRecentSession;
+  });
+  // The 7-day window already ruled out anything recent -- look back further (uncapped) for each
+  // candidate's true last real session so the gap length is accurate, not a flat guess. Batched
+  // into one query for every candidate instead of N sequential per-patient round-trips.
+  const lastSessionByPatient = await getMostRecentSessionsForPatients(gapCandidates.map((p) => p.patientId));
+  for (const patient of gapCandidates) {
+    const lastSession = lastSessionByPatient.get(patient.patientId);
+    const daysWithoutTherapy = lastSession
+      ? Math.floor((startOfDayLocal(referenceDate).getTime() - startOfDayLocal(new Date(lastSession.startTime)).getTime()) / 86_400_000)
+      : null; // never had a real session on record
+    careGaps.push({
+      patientName: patient.patientName,
+      roomNumber: patient.roomNumber,
+      daysWithoutTherapy,
+    });
   }
 
   // 5. Missed sessions by reason (past 7 days) -- the "why" behind at-risk patients
@@ -358,11 +588,135 @@ export async function getJointCommissionAnalytics(referenceDate: Date = new Date
     missed_staffing: 0,
     missed_other: 0,
   };
+  const missedReasonLabels: Record<string, string> = {
+    missed_refusal: "refusal",
+    missed_clinical_hold: "clinical hold",
+    missed_staffing: "staffing",
+    missed_other: "other",
+  };
+  const missedSessionsDetail: JointCommissionAnalytics["missedSessionsDetail"] = [];
   recentSessions.forEach((s) => {
     if (s.status in missedSessionsByReason) {
       missedSessionsByReason[s.status as keyof typeof missedSessionsByReason]++;
+      const patient = patientById.get(s.patientId);
+      missedSessionsDetail.push({
+        patientName: patient?.patientName ?? `patient ${s.patientId}`,
+        roomNumber: patient?.roomNumber ?? "?",
+        therapyType: s.therapyType,
+        date: new Date(s.startTime),
+        reason: missedReasonLabels[s.status] ?? s.status,
+        missedReason: s.missedReason,
+      });
     }
   });
+
+  const therapistNameById = new Map(therapists.map((t) => [t.id, t.name]));
+
+  // 6. Refusal patterns -- PDPM removed the payment incentive to chase a refusing patient, so
+  // this is exactly the kind of drift that needs to be caught proactively. Looks back 14 days
+  // (wider than the 7-day window above) so a pattern is visible even if this week alone doesn't
+  // show it yet.
+  const refusalPatterns: JointCommissionAnalytics["refusalPatterns"] = [];
+  const refusalLookbackStart = startOfDayLocal(addDaysLocal(referenceDate, -13));
+  const refusalLookbackSessions = await getTherapySessionsForDateRange(refusalLookbackStart, todayEnd);
+  for (const patient of summary) {
+    const patientSessions = refusalLookbackSessions.filter(
+      (s) => s.patientId === patient.patientId && s.therapyType !== "Block" && (s.status === "completed" || isMissedStatus(s.status)),
+    );
+    if (patientSessions.length < 4) continue; // not enough recent history to call it a pattern
+    const refusals = patientSessions.filter((s) => s.status === "missed_refusal");
+    if (refusals.length === 0) continue;
+    const refusalRate = refusals.length / patientSessions.length;
+    if (refusals.length < 3 && refusalRate < 0.5) continue;
+
+    let suggestion = `Refused ${refusals.length} of ${patientSessions.length} recent sessions.`;
+
+    const isAM = (s: (typeof patientSessions)[number]) => new Date(s.startTime).getHours() < 12;
+    const completed = patientSessions.filter((s) => s.status === "completed");
+    const refusedAM = refusals.filter(isAM).length;
+    const refusedPM = refusals.length - refusedAM;
+    const completedAM = completed.filter(isAM).length;
+    const completedPM = completed.length - completedAM;
+    if (refusedAM > refusedPM && completedPM >= completedAM && completed.length > 0) {
+      suggestion += ` Refusals cluster in the morning (${refusedAM} AM vs ${refusedPM} PM) while afternoons go better -- try scheduling afternoons.`;
+    } else if (refusedPM > refusedAM && completedAM >= completedPM && completed.length > 0) {
+      suggestion += ` Refusals cluster in the afternoon (${refusedPM} PM vs ${refusedAM} AM) while mornings go better -- try scheduling mornings.`;
+    }
+
+    // Conservative therapist hint: only surface it when every refusal was with one therapist AND
+    // a different therapist has at least one completed session with this patient -- avoids
+    // reading a correlation into too little data.
+    const refusalTherapistIds = new Set(refusals.map((s) => s.therapistId).filter((id): id is number => id != null));
+    const completedTherapistIds = new Set(completed.map((s) => s.therapistId).filter((id): id is number => id != null));
+    if (refusalTherapistIds.size === 1) {
+      const soleId = Array.from(refusalTherapistIds)[0];
+      const otherSuccessId = Array.from(completedTherapistIds).find((id) => id !== soleId);
+      if (otherSuccessId != null) {
+        const soleName = therapistNameById.get(soleId) ?? `therapist ${soleId}`;
+        const otherName = therapistNameById.get(otherSuccessId) ?? `therapist ${otherSuccessId}`;
+        suggestion += ` All refusals were with ${soleName}, while sessions with ${otherName} were completed -- consider trying ${otherName} instead.`;
+      }
+    }
+
+    refusalPatterns.push({
+      patientName: patient.patientName,
+      roomNumber: patient.roomNumber,
+      refusalCount: refusals.length,
+      totalRecentSessions: patientSessions.length,
+      suggestion,
+    });
+  }
+
+  // 7. Group therapy opportunities -- "Group Appropriate" patients on the same team with the same
+  // discipline shortfall are real, actionable candidates to book together (up to CMS's 6-patient
+  // group definition), turning several individual sessions into one therapist's time.
+  const groupTherapyOpportunities: JointCommissionAnalytics["groupTherapyOpportunities"] = [];
+  const groupAppropriateIds = new Set(todaysFlags.filter((f) => f.flagType === "Group Appropriate").map((f) => f.patientId));
+  if (groupAppropriateIds.size >= 2) {
+    const teams = await getTeams();
+    const groupCandidates = summary.filter(
+      (p) => groupAppropriateIds.has(p.patientId) && !medicalHoldPatientIds.has(p.patientId) && p.remainingMinutes > 0 && p.teamId != null,
+    );
+    // Concurrent, not sequential -- each pickAutoScheduleDiscipline call is its own round-trip
+    // to the (remote, HTTP-backed) database, and this loop's cost otherwise scales with however
+    // many patients happen to be flagged Group Appropriate that day.
+    const disciplines = await Promise.all(groupCandidates.map((p) => pickAutoScheduleDiscipline(p.patientId, referenceDate)));
+    const buckets = new Map<string, { teamId: number; discipline: "PT" | "OT" | "SLP"; patients: typeof groupCandidates }>();
+    groupCandidates.forEach((p, i) => {
+      const discipline = disciplines[i];
+      const key = `${p.teamId}:${discipline}`;
+      if (!buckets.has(key)) buckets.set(key, { teamId: p.teamId!, discipline, patients: [] });
+      buckets.get(key)!.patients.push(p);
+    });
+    for (const bucket of Array.from(buckets.values())) {
+      if (bucket.patients.length < 2) continue;
+      const team = teams.find((t) => t.id === bucket.teamId);
+      groupTherapyOpportunities.push({
+        teamName: team?.name ?? `Team ${bucket.teamId}`,
+        therapyType: bucket.discipline,
+        patients: bucket.patients.slice(0, 6).map((p) => ({ id: p.patientId, name: p.patientName, roomNumber: p.roomNumber })),
+      });
+    }
+  }
+
+  // 8. Stale sessions -- ended but never marked completed/missed. This is the specific admin
+  // pileup research flags as eating into the same time budget as direct treatment; catching it
+  // proactively beats a therapist manually scanning the whole day at shift's end.
+  const staleSessions: JointCommissionAnalytics["staleSessions"] = [];
+  const todayStart = startOfDayLocal(referenceDate);
+  const todaySessions = await getTherapySessionsForDateRange(todayStart, todayStart);
+  for (const s of todaySessions) {
+    if (s.status !== "scheduled" || s.therapyType === "Block") continue;
+    if (new Date(s.endTime).getTime() >= referenceDate.getTime()) continue;
+    const patient = patientById.get(s.patientId);
+    staleSessions.push({
+      sessionId: s.id,
+      patientName: patient?.patientName ?? `patient ${s.patientId}`,
+      roomNumber: patient?.roomNumber ?? "?",
+      therapyType: s.therapyType,
+      endTime: new Date(s.endTime),
+    });
+  }
 
   return {
     compliance,
@@ -370,6 +724,10 @@ export async function getJointCommissionAnalytics(referenceDate: Date = new Date
     therapistUtilization,
     careGaps,
     missedSessionsByReason,
+    missedSessionsDetail,
+    refusalPatterns,
+    groupTherapyOpportunities,
+    staleSessions,
   };
 }
 
@@ -454,4 +812,72 @@ export async function getTeamRoster(): Promise<TeamRosterEntry[]> {
   }
 
   return entries;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Calendar view -- the actual booked schedule for a date range, with names */
+/* joined in so PAMi doesn't have to cross-reference IDs against the roster */
+/* ------------------------------------------------------------------------ */
+
+export interface CalendarViewEntry {
+  sessionId: number;
+  patientId: number;
+  patientName: string;
+  roomNumber: string;
+  therapistId: number | null;
+  therapistName: string | null;
+  therapyType: string;
+  startTime: Date;
+  endTime: Date;
+  durationMinutes: number;
+  deliveryMode: string;
+  status: string;
+  missedReason: string | null;
+  notes: string | null;
+}
+
+/**
+ * The booked schedule for [startDate, endDate], optionally narrowed to one patient and/or
+ * therapist. Unlike the daily context snapshot (today only, plus gap suggestions for
+ * patients behind target), this lets PAMi answer "what's on the calendar for <any day/range>"
+ * for a specific patient, therapist, or the whole unit.
+ */
+export async function getCalendarView(
+  startDate: Date,
+  endDate: Date,
+  options: { patientId?: number; therapistId?: number } = {},
+): Promise<CalendarViewEntry[]> {
+  const [sessions, patients, therapists] = await Promise.all([
+    getTherapySessionsForDateRange(startDate, endDate),
+    getPatients(),
+    getTherapists(),
+  ]);
+
+  const patientById = new Map(patients.map((p) => [p.id, p]));
+  const therapistById = new Map(therapists.map((t) => [t.id, t]));
+
+  return sessions
+    .filter((s) => (options.patientId == null || s.patientId === options.patientId))
+    .filter((s) => (options.therapistId == null || s.therapistId === options.therapistId))
+    .map((s) => {
+      const patient = patientById.get(s.patientId);
+      const therapist = s.therapistId != null ? therapistById.get(s.therapistId) : undefined;
+      return {
+        sessionId: s.id,
+        patientId: s.patientId,
+        patientName: patient?.name ?? `Unknown patient ${s.patientId}`,
+        roomNumber: patient?.roomNumber ?? "?",
+        therapistId: s.therapistId,
+        therapistName: therapist?.name ?? null,
+        therapyType: s.therapyType,
+        startTime: new Date(s.startTime),
+        endTime: new Date(s.endTime),
+        durationMinutes: s.durationMinutes,
+        deliveryMode: s.deliveryMode,
+        status: s.status,
+        missedReason: s.missedReason,
+        notes: s.notes,
+      };
+    })
+    .sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
 }

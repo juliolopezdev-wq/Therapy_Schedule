@@ -30,6 +30,13 @@ import {
   saveBoardSnapshot,
   deleteBoardSnapshot,
   seedTeamsIfEmpty,
+  copyDayToNextDay,
+  copyPatientSessionsToNextDay,
+  movePatientSessionsToNextDay,
+  deleteStatusFlagByPatientAndType,
+  getAdditionalMinutesForPatient,
+  createAdditionalMinutes,
+  deleteAdditionalMinutes,
 } from "./db";
 import { getWeeklyMinutesSummary, getGapFillSuggestions } from "./scheduling";
 import { askScheduler, analyzeData } from "./ollama";
@@ -82,6 +89,7 @@ export const appRouter = router({
           admissionDate: z.string().optional(),
           weeklyMinuteTarget: z.number().optional(),
           teamId: z.number().nullable().optional(),
+          orderIndex: z.number().optional(),
         }),
       )
       .mutation(async ({ input }) => {
@@ -152,6 +160,15 @@ export const appRouter = router({
     delete: publicProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => deleteTherapySession(input.id)),
+    copyDayToNextDay: publicProcedure
+      .input(z.object({ date: z.date() }))
+      .mutation(async ({ input }) => copyDayToNextDay(input.date)),
+    copyPatientSessionsToNextDay: publicProcedure
+      .input(z.object({ patientId: z.number(), date: z.date() }))
+      .mutation(async ({ input }) => copyPatientSessionsToNextDay(input.patientId, input.date)),
+    movePatientSessionsToNextDay: publicProcedure
+      .input(z.object({ patientId: z.number(), date: z.date() }))
+      .mutation(async ({ input }) => movePatientSessionsToNextDay(input.patientId, input.date)),
   }),
 
   /* ------------------------------------------------------------------ */
@@ -166,16 +183,27 @@ export const appRouter = router({
           teamId: z.number().nullable().optional(),
           userId: z.number().nullable().optional(),
           therapyType: z.enum(["PT", "OT", "SLP"]).optional(),
+          // Working hours for auto-placement. workDays is 0=Sun..6=Sat; null/omitted on any
+          // of the three means "no restriction" for that dimension.
+          workDays: z.array(z.number().min(0).max(6)).nullable().optional(),
+          workStartTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+          workEndTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
         }),
       )
-      .mutation(async ({ input }) =>
-        createTherapist({
+      .mutation(async ({ input }) => {
+        const therapists = await getTherapists();
+        const hue = Math.floor((therapists.length * 137.5) % 360).toString();
+        return createTherapist({
           name: input.name,
           teamId: input.teamId ?? null,
           userId: input.userId ?? null,
+          color: hue,
           therapyType: input.therapyType ?? "PT",
-        }),
-      ),
+          workDays: input.workDays ? input.workDays.join(",") : null,
+          workStartTime: input.workStartTime ?? null,
+          workEndTime: input.workEndTime ?? null,
+        });
+      }),
     update: publicProcedure
       .input(
         z.object({
@@ -183,11 +211,17 @@ export const appRouter = router({
           name: z.string().optional(),
           teamId: z.number().nullable().optional(),
           therapyType: z.enum(["PT", "OT", "SLP"]).optional(),
+          workDays: z.array(z.number().min(0).max(6)).nullable().optional(),
+          workStartTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+          workEndTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
         }),
       )
       .mutation(async ({ input }) => {
-        const { id, ...data } = input;
-        return updateTherapist(id, data);
+        const { id, workDays, ...rest } = input;
+        return updateTherapist(id, {
+          ...rest,
+          ...(workDays !== undefined ? { workDays: workDays ? workDays.join(",") : null } : {}),
+        });
       }),
     delete: publicProcedure
       .input(z.object({ id: z.number() }))
@@ -268,6 +302,28 @@ export const appRouter = router({
 
         return flag;
       }),
+  }),
+
+  /* ------------------------------------------------------------------ */
+  /* Additional Minutes                                                  */
+  /* ------------------------------------------------------------------ */
+  additionalMinutes: router({
+    listByPatient: publicProcedure
+      .input(z.object({ patientId: z.number() }))
+      .query(async ({ input }) => getAdditionalMinutesForPatient(input.patientId)),
+    create: publicProcedure
+      .input(
+        z.object({
+          patientId: z.number(),
+          date: z.date(),
+          additionalMinutes: z.number(),
+          reason: z.string().optional(),
+        })
+      )
+      .mutation(async ({ input }) => createAdditionalMinutes(input)),
+    delete: publicProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => deleteAdditionalMinutes(input.id)),
   }),
 
   /* ------------------------------------------------------------------ */

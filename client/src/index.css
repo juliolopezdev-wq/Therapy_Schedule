@@ -52,31 +52,31 @@
     --color-blue: #3b82f6;
 
     /* Clinical accent (PAM Health Blue) */
-    --clinical-50: #f0f7fd;
-    --clinical-100: #e0effa;
-    --clinical-200: #bce0f5;
-    --clinical-500: #005696;
-    --clinical-600: #004880;
-    --clinical-700: #003a6b;
+    --clinical-50: #f0f9ff;
+    --clinical-100: #e0f2fe;
+    --clinical-200: #bae6fd;
+    --clinical-500: #0ea5e9;
+    --clinical-600: #0284c7;
+    --clinical-700: #0369a1;
 
     /* Semantic Colors — clinical light theme */
-    --background: #f1f4f7;
+    --background: #f8fafc;
     --foreground: #0f172a;
     --card: #ffffff;
     --card-foreground: #0f172a;
-    --primary: #005696;
+    --primary: #0284c7;
     --primary-foreground: #ffffff;
     --secondary: #475569;
     --secondary-foreground: #ffffff;
     --muted: #f1f5f9;
     --muted-foreground: #64748b;
-    --accent: #004880;
+    --accent: #1e40af;
     --accent-foreground: #ffffff;
     --destructive: #ef4444;
     --destructive-foreground: #ffffff;
     --border: #e2e8f0;
     --input: #e2e8f0;
-    --ring: #005696;
+    --ring: #0284c7;
 
     /* Refined shadow scale (soft, layered) */
     --shadow-sm: 0 1px 2px 0 rgba(15, 23, 42, 0.04);

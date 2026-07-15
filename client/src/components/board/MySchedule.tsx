@@ -204,12 +204,11 @@ export function MySchedule({
   return (
     <>
       <Button
-        variant="outline"
         size="sm"
-        className="h-8 bg-white"
+        className="h-9 rounded-full bg-gradient-to-r from-blue-800 via-sky-600 to-blue-800 px-5 shadow-[0_4px_14px_0_rgba(2,132,199,0.4)] font-bold text-white hover:from-blue-900 hover:via-sky-700 hover:to-blue-900 hover:shadow-[0_6px_20px_rgba(2,132,199,0.5)] border border-sky-400/30 transition-all hover:-translate-y-0.5"
         onClick={() => setOpen(true)}
       >
-        <CalendarClock className="mr-1 h-4 w-4" /> My Schedule
+        <CalendarClock className="mr-2 h-4 w-4" /> My Schedule
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>

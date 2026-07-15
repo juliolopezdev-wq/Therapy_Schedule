@@ -1,4 +1,4 @@
-import { and, eq, gte, lte } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, lt, lte, ne, or } from "drizzle-orm";
 import { createClient } from "@libsql/client/http";
 import { drizzle } from "drizzle-orm/libsql";
 import path from "path";
@@ -12,11 +12,16 @@ import {
   teams,
   statusFlags,
   boardHistory,
+  aiActionLog,
+  patientAdditionalMinutes,
   InsertPatient,
   InsertTherapySession,
   InsertStatusFlag,
   InsertTherapist,
   InsertTeam,
+  InsertPatientAdditionalMinutes,
+  InsertAiActionLog,
+  TherapySession,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
@@ -132,7 +137,7 @@ export async function getUserByOpenId(openId: string) {
 export async function getPatients() {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(patients).orderBy(patients.roomNumber);
+  return db.select().from(patients).orderBy(patients.orderIndex, patients.roomNumber);
 }
 
 export async function getPatientById(id: number) {
@@ -225,9 +230,105 @@ export async function getSessionById(id: number) {
   return result[0];
 }
 
+/**
+ * Most recent real (non-Block) session, of any status, for each of the given patients -- used
+ * to compute how long a care gap has actually run. One query covering every candidate patient
+ * (not N sequential per-patient round-trips) -- with a remote HTTP-backed SQLite client, N
+ * sequential awaits was costing multiple seconds on every single PAMi turn.
+ */
+export async function getMostRecentSessionsForPatients(patientIds: number[]): Promise<Map<number, TherapySession>> {
+  const result = new Map<number, TherapySession>();
+  if (patientIds.length === 0) return result;
+  const db = await getDb();
+  if (!db) return result;
+  const rows = await db
+    .select()
+    .from(therapySessions)
+    .where(and(inArray(therapySessions.patientId, patientIds), ne(therapySessions.therapyType, "Block")));
+  for (const row of rows) {
+    const existing = result.get(row.patientId);
+    if (!existing || new Date(row.startTime).getTime() > new Date(existing.startTime).getTime()) {
+      result.set(row.patientId, row);
+    }
+  }
+  return result;
+}
+
+/** Thrown by createTherapySession/updateTherapySession when the requested time would
+ *  double-book the patient, or double-book the therapist outside a legitimate
+ *  concurrent/group pairing. Callers that book in bulk (auto-schedule, copy-day, etc.)
+ *  should catch this per-item and skip rather than let one conflict abort the whole batch. */
+export class SchedulingConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SchedulingConflictError";
+  }
+}
+
+/**
+ * A patient can never legitimately be in two sessions at once, regardless of delivery mode.
+ * A therapist CAN legitimately overlap with themselves when every overlapping session -- the
+ * new one and each existing one it overlaps -- is "concurrent" or "group" (that's the whole
+ * point of those delivery modes). Any overlap involving an "individual" session on either side
+ * is a real conflict.
+ */
+async function assertNoSchedulingConflict(params: {
+  patientId: number;
+  therapistId: number | null | undefined;
+  startTime: Date;
+  endTime: Date;
+  deliveryMode: "individual" | "concurrent" | "group" | undefined;
+  excludeSessionId?: number;
+}): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const { patientId, therapistId, startTime, endTime, excludeSessionId } = params;
+  const deliveryMode = params.deliveryMode ?? "individual";
+
+  const overlapCond = and(lt(therapySessions.startTime, endTime), gt(therapySessions.endTime, startTime));
+  const idCond = excludeSessionId != null ? ne(therapySessions.id, excludeSessionId) : undefined;
+
+  const patientMatches = await db
+    .select()
+    .from(therapySessions)
+    .where(and(eq(therapySessions.patientId, patientId), overlapCond, idCond));
+  if (patientMatches.length > 0) {
+    const conflict = patientMatches[0];
+    throw new SchedulingConflictError(
+      `Patient ${patientId} already has a session (#${conflict.id}, ${conflict.therapyType}) overlapping this time.`,
+    );
+  }
+
+  if (therapistId != null) {
+    const therapistMatches = await db
+      .select()
+      .from(therapySessions)
+      .where(and(eq(therapySessions.therapistId, therapistId), overlapCond, idCond));
+    const realConflicts = therapistMatches.filter((existing) => {
+      const bothGroupOrConcurrent =
+        (deliveryMode === "concurrent" || deliveryMode === "group") &&
+        (existing.deliveryMode === "concurrent" || existing.deliveryMode === "group");
+      return !bothGroupOrConcurrent;
+    });
+    if (realConflicts.length > 0) {
+      const conflict = realConflicts[0];
+      throw new SchedulingConflictError(
+        `Therapist ${therapistId} is already booked (#${conflict.id}, ${conflict.therapyType} with patient ${conflict.patientId}) overlapping this time.`,
+      );
+    }
+  }
+}
+
 export async function createTherapySession(data: InsertTherapySession) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  await assertNoSchedulingConflict({
+    patientId: data.patientId,
+    therapistId: data.therapistId,
+    startTime: new Date(data.startTime),
+    endTime: new Date(data.endTime),
+    deliveryMode: data.deliveryMode,
+  });
   const result = await db.insert(therapySessions).values(data);
   return { id: extractInsertId(result) };
 }
@@ -235,6 +336,23 @@ export async function createTherapySession(data: InsertTherapySession) {
 export async function updateTherapySession(id: number, data: Partial<InsertTherapySession>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+
+  // Only re-check when the change could actually create a new overlap -- editing notes/status
+  // shouldn't pay for a conflict scan.
+  if (data.startTime || data.endTime || data.therapistId !== undefined || data.patientId !== undefined) {
+    const existing = await getSessionById(id);
+    if (existing) {
+      await assertNoSchedulingConflict({
+        patientId: data.patientId ?? existing.patientId,
+        therapistId: data.therapistId !== undefined ? data.therapistId : existing.therapistId,
+        startTime: data.startTime ? new Date(data.startTime) : new Date(existing.startTime),
+        endTime: data.endTime ? new Date(data.endTime) : new Date(existing.endTime),
+        deliveryMode: data.deliveryMode ?? existing.deliveryMode,
+        excludeSessionId: id,
+      });
+    }
+  }
+
   await db.update(therapySessions).set(data).where(eq(therapySessions.id, id));
   return { success: true };
 }
@@ -270,8 +388,134 @@ export async function clearSchedule(timeframe: "daily" | "weekly", referenceDate
     conditions = and(conditions, eq(therapySessions.therapistId, therapistId));
   }
 
+  const deleted = await db.select().from(therapySessions).where(conditions);
   await db.delete(therapySessions).where(conditions);
-  return { success: true, timeframe, therapistId };
+  return { success: true, timeframe, therapistId, deletedSessions: deleted };
+}
+
+export async function copyDayToNextDay(referenceDate: Date) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const { startOfDay, endOfDay } = dayBounds(referenceDate);
+  const sessionsToCopy = await db
+    .select()
+    .from(therapySessions)
+    .where(and(gte(therapySessions.startTime, startOfDay), lte(therapySessions.startTime, endOfDay)));
+
+  if (sessionsToCopy.length === 0) return { success: true, count: 0, skippedConflicts: 0, sessionIds: [] as number[] };
+
+  // Looped (not a single batch insert) so one conflicting copy doesn't abort the rest --
+  // each session is checked and created independently, and conflicts are skipped and counted.
+  const sessionIds: number[] = [];
+  let skippedConflicts = 0;
+  for (const s of sessionsToCopy) {
+    try {
+      const created = await createTherapySession({
+        patientId: s.patientId,
+        therapistId: s.therapistId,
+        therapyType: s.therapyType,
+        startTime: new Date(new Date(s.startTime).getTime() + 24 * 60 * 60 * 1000),
+        endTime: new Date(new Date(s.endTime).getTime() + 24 * 60 * 60 * 1000),
+        durationMinutes: s.durationMinutes,
+        deliveryMode: s.deliveryMode,
+        notes: s.notes,
+        status: s.status,
+      });
+      sessionIds.push(created.id);
+    } catch (err) {
+      if (err instanceof SchedulingConflictError) {
+        skippedConflicts++;
+        continue;
+      }
+      throw err;
+    }
+  }
+  return { success: true, count: sessionIds.length, skippedConflicts, sessionIds };
+}
+
+export async function copyPatientSessionsToNextDay(patientId: number, referenceDate: Date) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const { startOfDay, endOfDay } = dayBounds(referenceDate);
+  const sessionsToCopy = await db
+    .select()
+    .from(therapySessions)
+    .where(
+      and(
+        eq(therapySessions.patientId, patientId),
+        gte(therapySessions.startTime, startOfDay),
+        lte(therapySessions.startTime, endOfDay)
+      )
+    );
+
+  if (sessionsToCopy.length === 0) return { success: true, count: 0, skippedConflicts: 0, sessionIds: [] as number[] };
+
+  const sessionIds: number[] = [];
+  let skippedConflicts = 0;
+  for (const s of sessionsToCopy) {
+    try {
+      const created = await createTherapySession({
+        patientId: s.patientId,
+        therapistId: s.therapistId,
+        therapyType: s.therapyType,
+        startTime: new Date(new Date(s.startTime).getTime() + 24 * 60 * 60 * 1000),
+        endTime: new Date(new Date(s.endTime).getTime() + 24 * 60 * 60 * 1000),
+        durationMinutes: s.durationMinutes,
+        deliveryMode: s.deliveryMode,
+        notes: s.notes,
+        status: s.status,
+      });
+      sessionIds.push(created.id);
+    } catch (err) {
+      if (err instanceof SchedulingConflictError) {
+        skippedConflicts++;
+        continue;
+      }
+      throw err;
+    }
+  }
+  return { success: true, count: sessionIds.length, skippedConflicts, sessionIds };
+}
+
+export async function movePatientSessionsToNextDay(patientId: number, referenceDate: Date) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const { startOfDay, endOfDay } = dayBounds(referenceDate);
+  const sessionsToMove = await db
+    .select()
+    .from(therapySessions)
+    .where(
+      and(
+        eq(therapySessions.patientId, patientId),
+        gte(therapySessions.startTime, startOfDay),
+        lte(therapySessions.startTime, endOfDay)
+      )
+    );
+
+  if (sessionsToMove.length === 0) return { success: true, count: 0, skippedConflicts: 0, sessionIds: [] as number[] };
+
+  const sessionIds: number[] = [];
+  let skippedConflicts = 0;
+  for (const s of sessionsToMove) {
+    try {
+      await updateTherapySession(s.id, {
+        startTime: new Date(new Date(s.startTime).getTime() + 24 * 60 * 60 * 1000),
+        endTime: new Date(new Date(s.endTime).getTime() + 24 * 60 * 60 * 1000),
+      });
+      sessionIds.push(s.id);
+    } catch (err) {
+      if (err instanceof SchedulingConflictError) {
+        skippedConflicts++;
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  return { success: true, count: sessionIds.length, skippedConflicts, sessionIds };
 }
 
 /* ---------------------------------------------------------------------------
@@ -469,6 +713,47 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
   throw lastErr;
 }
 
+/* ---------------------------------------------------------------------------
+ * Additional Minutes
+ * ------------------------------------------------------------------------ */
+
+export async function getAdditionalMinutesForDateRange(startDate: Date, endDate: Date) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(patientAdditionalMinutes)
+    .where(
+      and(
+        gte(patientAdditionalMinutes.date, startDate),
+        lte(patientAdditionalMinutes.date, endDate),
+      ),
+    );
+}
+
+export async function getAdditionalMinutesForPatient(patientId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(patientAdditionalMinutes)
+    .where(eq(patientAdditionalMinutes.patientId, patientId))
+    .orderBy(desc(patientAdditionalMinutes.date));
+}
+
+export async function createAdditionalMinutes(data: InsertPatientAdditionalMinutes) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(patientAdditionalMinutes).values(data).returning();
+  return result[0];
+}
+
+export async function deleteAdditionalMinutes(id: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(patientAdditionalMinutes).where(eq(patientAdditionalMinutes.id, id));
+}
+
 export async function getBoardHistory() {
   const db = await getDb();
   if (!db) return [];
@@ -508,6 +793,36 @@ export async function deleteBoardSnapshot(id: number) {
   if (!db) throw new Error("Database not available");
   await withRetry(() => db.delete(boardHistory).where(eq(boardHistory.id, id)));
   return { success: true };
+}
+
+/* ---------------------------------------------------------------------------
+ * AI action log (undo support for PAMi)
+ * ------------------------------------------------------------------------ */
+
+export async function logAiAction(entry: Omit<InsertAiActionLog, "id" | "undone" | "createdAt">) {
+  const db = await getDb();
+  if (!db) return;
+  await withRetry(() => db.insert(aiActionLog).values(entry));
+}
+
+/** Most recent still-live (not yet undone) actions, newest first. */
+export async function getUndoableActions(limit: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return withRetry(() =>
+    db
+      .select()
+      .from(aiActionLog)
+      .where(eq(aiActionLog.undone, false))
+      .orderBy(desc(aiActionLog.id))
+      .limit(limit),
+  );
+}
+
+export async function markAiActionUndone(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await withRetry(() => db.update(aiActionLog).set({ undone: true }).where(eq(aiActionLog.id, id)));
 }
 
 /* ---------------------------------------------------------------------------

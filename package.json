@@ -17,6 +17,7 @@
     "@aws-sdk/s3-request-presigner": "^3.693.0",
     "@builder.io/vite-plugin-jsx-loc": "^0.1.1",
     "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@hookform/resolvers": "^5.2.2",
     "@libsql/client": "^0.17.4",

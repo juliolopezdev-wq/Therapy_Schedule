@@ -97,7 +97,7 @@ export function FlagToggle({ activeFlags, onToggle }: FlagToggleProps) {
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-auto min-w-[15rem] p-2.5 border border-slate-200 shadow-lg bg-white rounded-lg" align="end">
-        <p className="px-2 pb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Clinical Status Flags</p>
+        <p className="px-2 pb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400">Clinical Status Flags</p>
         <ScrollArea className="h-[260px] pr-3 -mr-1">
           <div className="space-y-1 pb-1">
             {FLAG_TYPES.map((flag) => {

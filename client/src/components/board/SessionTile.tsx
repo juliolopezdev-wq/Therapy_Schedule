@@ -24,6 +24,7 @@ export interface SessionTileData {
 interface SessionTileProps {
   session: SessionTileData;
   therapistName?: string;
+  therapistColor?: string;
   onClick?: (session: SessionTileData) => void;
   slotWidth: number;
   isOverlay?: boolean;
@@ -33,6 +34,7 @@ interface SessionTileProps {
 export function SessionTile({
   session,
   therapistName,
+  therapistColor,
   onClick,
   slotWidth,
   isOverlay = false,
@@ -96,13 +98,27 @@ export function SessionTile({
   const showFullInfo = visualSpan >= 2;
   const tileWidth = visualSpan * slotWidth - 6;
   const isMissed = isMissedStatus(session.status);
+  // Completed sessions get grayed out (on top of the green checkmark below) so a glance at
+  // the board shows what's still outstanding vs. already delivered.
+  const isCompleted = session.status === "completed";
+  
+  let bgColor = isCompleted ? "#e2e8f0" : meta.bg; // slate-200
+  let textColor = isCompleted ? "#64748b" : meta.fg; // slate-500
+  let accentColor = isCompleted ? "#94a3b8" : meta.accent; // slate-400
+
+  if (!isCompleted && therapistColor && !isNaN(Number(therapistColor))) {
+    const hue = Number(therapistColor);
+    bgColor = `hsl(${hue}, 80%, 85%)`;
+    textColor = `hsl(${hue}, 80%, 25%)`;
+    accentColor = `hsl(${hue}, 80%, 45%)`;
+  }
 
   const style: React.CSSProperties = {
-    backgroundColor: meta.bg,
-    color: meta.fg,
+    backgroundColor: bgColor,
+    color: textColor,
     width: isOverlay ? width : (resizeDeltaSlots !== 0 ? tileWidth : "100%"),
     transform: CSS.Translate.toString(transform),
-    opacity: isDragging && !isOverlay ? 0.3 : (isMissed ? 0.6 : 1),
+    opacity: isDragging && !isOverlay ? 0.3 : (isMissed ? 0.6 : isCompleted ? 0.75 : 1),
     boxShadow: isOverlay
       ? "0 12px 28px -4px rgba(15,23,42,0.3)"
       : "0 1px 3px 0 rgba(0, 0, 0, 0.05), inset 0 1px 0 0 rgba(255, 255, 255, 0.4)",
@@ -133,26 +149,45 @@ export function SessionTile({
       <span
         aria-hidden
         className="absolute inset-y-0 left-0 w-[3px]"
-        style={{ backgroundColor: meta.accent }}
+        style={{ backgroundColor: accentColor }}
       />
+
+      {/* Completed/missed badge -- deliberately larger/higher-contrast than the other inline
+          status icons so "delivered" vs. "missed" reads at a glance even once the tile is
+          grayed/dimmed out. Statuses are mutually exclusive, so these never both render. */}
+      {isCompleted && (
+        <span
+          aria-hidden
+          className="absolute right-1 top-1 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-white shadow-sm ring-1 ring-green-600/20"
+        >
+          <CheckCircle2 className="h-3.5 w-3.5 text-green-600" strokeWidth={2.5} fill="white" />
+        </span>
+      )}
+      {isMissed && (
+        <span
+          aria-hidden
+          className="absolute right-1 top-1 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-white shadow-sm ring-1 ring-red-600/20"
+        >
+          <XCircle className="h-3.5 w-3.5 text-red-600" strokeWidth={2.5} fill="white" />
+        </span>
+      )}
 
       <div className="flex min-w-0 flex-1 items-center gap-1.5 pl-1">
         <div className="flex min-w-0 flex-1 flex-col leading-none">
           <div className="flex items-center gap-1">
-            {session.therapyType === "Block" && <Lock className="h-2.5 w-2.5" style={{ color: meta.fg }} strokeWidth={3} />}
-            {session.status === "completed" && <CheckCircle2 className="h-2.5 w-2.5" style={{ color: meta.fg }} strokeWidth={2.5} />}
-            {isMissed && <XCircle className="h-2.5 w-2.5" style={{ color: meta.fg }} strokeWidth={2.5} />}
-            <span className={cn("text-[10px] font-bold uppercase tracking-wide", isMissed && "line-through")} style={{ color: meta.fg }}>
+            {session.therapyType === "Block" && <Lock className="h-2.5 w-2.5" style={{ color: textColor }} strokeWidth={3} />}
+            {isMissed && <XCircle className="h-2.5 w-2.5" style={{ color: textColor }} strokeWidth={2.5} />}
+            <span className={cn("text-[10px] font-bold uppercase tracking-wide", isMissed && "line-through")} style={{ color: textColor }}>
               {session.therapyType === "Block" ? "Blocked" : meta.label}
             </span>
             {showFullInfo && (
-              <span className={cn("text-[9px] opacity-60 tabular-nums truncate", isMissed && "line-through")} style={{ color: meta.fg }}>
+              <span className={cn("text-[9px] opacity-60 tabular-nums truncate", isMissed && "line-through")} style={{ color: textColor }}>
                 {session.durationMinutes}m
               </span>
             )}
           </div>
           {showFullInfo && therapistName ? (
-            <span className="truncate text-[10px] font-medium opacity-75" style={{ color: meta.fg }}>
+            <span className="truncate text-[9px] font-medium opacity-75" style={{ color: textColor }}>
               {therapistName}
             </span>
           ) : null}

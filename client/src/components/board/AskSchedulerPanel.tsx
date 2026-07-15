@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Sheet,
   SheetContent,
@@ -9,8 +9,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
-import { Bot, Send, Sparkles, CheckCircle2 } from "lucide-react";
+import { Bot, Send, Sparkles, CheckCircle2, Copy, Check, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -27,64 +28,117 @@ interface ChatEntry {
 }
 
 const SUGGESTED_PROMPTS = [
+  "Give me a full shift-start briefing.",
+  "Any refusal patterns or group therapy opportunities I should know about?",
   "Which patients are at risk of missing target this week, and why?",
-  "Who can see Room 214 if their usual therapist is out?",
-  "Find an open slot for Room 214 and book it.",
+  "Undo that.",
 ];
+
+function CopyAnswerButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      title="Copy answer"
+      onClick={async () => {
+        await navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      className="shrink-0 rounded p-1 text-slate-300 opacity-0 transition-opacity hover:bg-slate-100 hover:text-slate-500 group-hover:opacity-100"
+    >
+      {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+    </button>
+  );
+}
 
 export function AskSchedulerPanel({ open, onOpenChange }: AskSchedulerPanelProps) {
   const [question, setQuestion] = useState("");
   const [history, setHistory] = useState<ChatEntry[]>([]);
+  // Echoed the instant a question is sent, before the response lands -- otherwise the user has
+  // zero confirmation of what they asked while waiting (this can now take 10-20+ seconds).
+  const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   const utils = trpc.useUtils();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Bumped on every submit and on cancel, so a response that lands after the user gave up
+  // waiting on it doesn't silently append to history out of nowhere.
+  const requestIdRef = useRef(0);
 
-  const ask = trpc.ai.ask.useMutation({
-    onSuccess: (result, variables) => {
-      setHistory((h) => [
-        ...h,
-        {
-          question: variables.question,
-          answer: result.answer,
-          usedFallback: result.usedFallback,
-          actionsTaken: result.actionsTaken ?? [],
-        },
-      ]);
-      if ((result.actionsTaken ?? []).length > 0) {
-        // The AI created/moved/cancelled/auto-scheduled real sessions -- refresh the board.
-        utils.sessions.list.invalidate();
-        utils.sessions.listForWeek.invalidate();
-        utils.weeklyMinutes.summary.invalidate();
-        utils.gapFill.suggestions.invalidate();
-      }
-    },
-  });
+  // Bare hook: all business logic lives in per-call options below (not the hook-level
+  // onSuccess/onError), so a cancelled/superseded request's eventual response can be told apart
+  // from the current one and discarded instead of unconditionally appending to history.
+  const ask = trpc.ai.ask.useMutation();
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [history.length, pendingQuestion]);
 
   const submit = (q: string) => {
     const trimmed = q.trim();
-    if (!trimmed || ask.isPending) return;
+    if (!trimmed || pendingQuestion !== null) return;
     setQuestion("");
+    setPendingQuestion(trimmed);
     const chatHistory = history.flatMap((h) => [
       { role: "user" as const, content: h.question },
       { role: "assistant" as const, content: h.answer },
     ]);
-    ask.mutate({ question: trimmed, history: chatHistory });
+    const myRequestId = ++requestIdRef.current;
+    ask.mutate(
+      { question: trimmed, history: chatHistory },
+      {
+        onSuccess: (result) => {
+          if (myRequestId !== requestIdRef.current) return; // cancelled or superseded -- discard
+          setPendingQuestion(null);
+          setHistory((h) => [
+            ...h,
+            {
+              question: trimmed,
+              answer: result.answer,
+              usedFallback: result.usedFallback,
+              actionsTaken: result.actionsTaken ?? [],
+            },
+          ]);
+          if ((result.actionsTaken ?? []).length > 0) {
+            // The AI created/moved/cancelled/auto-scheduled real sessions -- refresh the board.
+            utils.sessions.list.invalidate();
+            utils.sessions.listForWeek.invalidate();
+            utils.weeklyMinutes.summary.invalidate();
+            utils.gapFill.suggestions.invalidate();
+          }
+        },
+        onError: (error) => {
+          if (myRequestId !== requestIdRef.current) return;
+          setPendingQuestion(null);
+          toast.error("PAMi couldn't respond", { description: error.message });
+        },
+      },
+    );
+  };
+
+  const cancelPending = () => {
+    // The in-flight server request keeps running (there's no cheap way to abort an
+    // already-dispatched Ollama tool-calling loop) -- this bumps requestIdRef so that request's
+    // eventual response gets discarded above, and immediately frees the UI to send another.
+    requestIdRef.current += 1;
+    setPendingQuestion(null);
   };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-md">
-        <SheetHeader className="bg-white/80 p-5 backdrop-blur-md border-b border-slate-100 shadow-sm z-10">
-          <SheetTitle className="flex items-center gap-2 text-lg font-bold text-slate-800">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 text-white shadow-md">
+        <SheetHeader className="border-b border-slate-200 p-5">
+          <SheetTitle className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 text-white shadow-sm">
               <Bot className="h-4 w-4" />
             </div>
             PAMi
           </SheetTitle>
-          <SheetDescription className="text-slate-500">
+          <SheetDescription>
             Ask about gaps, coverage, or compliance — or tell it to book, move, or cancel a session and it'll do it for real.
           </SheetDescription>
         </SheetHeader>
 
-        <div className="flex-1 space-y-4 overflow-y-auto bg-slate-50/50 p-4 pb-8">
+        <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto bg-slate-50/50 p-4 pb-8">
           {history.length === 0 && (
             <div className="space-y-2">
               <p className="pl-1 text-xs font-bold uppercase tracking-wider text-slate-400">
@@ -95,7 +149,7 @@ export function AskSchedulerPanel({ open, onOpenChange }: AskSchedulerPanelProps
                   key={p}
                   type="button"
                   onClick={() => submit(p)}
-                  className="group flex w-full items-start gap-3 rounded-xl border border-blue-100/50 bg-white p-3 text-left text-[13px] text-slate-600 shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md"
+                  className="group flex w-full items-start gap-3 rounded-xl border border-blue-100/50 bg-white p-3 text-left text-sm text-slate-600 shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md"
                 >
                   <div className="mt-0.5 rounded-full bg-blue-50 p-1 text-blue-500 group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors">
                     <Sparkles className="h-3.5 w-3.5" />
@@ -109,21 +163,26 @@ export function AskSchedulerPanel({ open, onOpenChange }: AskSchedulerPanelProps
           {history.map((entry, i) => (
             <div key={i} className="space-y-2">
               {/* User Bubble */}
-              <div className="ml-auto w-fit max-w-[85%] rounded-2xl rounded-tr-sm bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-2.5 text-[13px] text-white shadow-md">
+              <div className="ml-auto w-fit max-w-[85%] rounded-2xl rounded-tr-sm bg-primary px-4 py-2.5 text-sm text-white shadow-md">
                 {entry.question}
               </div>
               
               {/* AI Bubble */}
               <div
                 className={cn(
-                  "w-fit max-w-[95%] rounded-2xl rounded-tl-sm border px-4 py-3 text-[13px] shadow-sm",
+                  "group relative w-fit max-w-[95%] rounded-2xl rounded-tl-sm border px-4 py-3 text-sm shadow-sm",
                   entry.usedFallback
                     ? "border-amber-200 bg-amber-50 text-amber-900"
                     : "border-slate-100 bg-white text-slate-700",
                   "[&>p]:mb-2 [&>p:last-child]:mb-0 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ul:last-child]:mb-0 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-4 [&_ol:last-child]:mb-0 [&_strong]:font-semibold"
                 )}
               >
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.answer}</ReactMarkdown>
+                <div className="absolute right-1.5 top-1.5">
+                  <CopyAnswerButton text={entry.answer} />
+                </div>
+                <div className="pr-4">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.answer}</ReactMarkdown>
+                </div>
               </div>
               {entry.actionsTaken.length > 0 && (
                 <div className="flex flex-wrap gap-2 pt-1">
@@ -140,22 +199,36 @@ export function AskSchedulerPanel({ open, onOpenChange }: AskSchedulerPanelProps
             </div>
           ))}
 
-          {ask.isPending && (
-            <div className="flex items-center gap-2 pl-2 pt-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 text-white shadow-sm">
-                <Bot className="h-3.5 w-3.5" />
+          {pendingQuestion !== null && (
+            <div className="space-y-2">
+              {/* Echo the question immediately -- otherwise there's no confirmation of what was
+                  asked while waiting, which can now take 10-20+ seconds. */}
+              <div className="ml-auto w-fit max-w-[85%] rounded-2xl rounded-tr-sm bg-primary px-4 py-2.5 text-sm text-white shadow-md">
+                {pendingQuestion}
               </div>
-              <div className="flex items-center gap-1 rounded-2xl rounded-tl-sm bg-white border border-slate-100 px-3 py-2 shadow-sm">
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.3s]"></span>
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.15s]"></span>
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400"></span>
+              <div className="flex items-center gap-2 pl-2 pt-2">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 text-white shadow-sm">
+                  <Bot className="h-3.5 w-3.5" />
+                </div>
+                <div className="flex items-center gap-1 rounded-2xl rounded-tl-sm bg-white border border-slate-100 px-3 py-2 shadow-sm">
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.3s]"></span>
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.15s]"></span>
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400"></span>
+                </div>
+                <button
+                  type="button"
+                  onClick={cancelPending}
+                  className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold text-slate-400 shadow-sm transition-colors hover:border-red-200 hover:text-red-500"
+                >
+                  <X className="h-3 w-3" /> Cancel
+                </button>
               </div>
             </div>
           )}
         </div>
 
         <div className="bg-white p-4 shadow-[0_-4px_20px_-10px_rgba(0,0,0,0.1)] z-10 border-t border-slate-100">
-          <div className="flex items-end gap-2 rounded-xl bg-slate-50 border border-slate-200 p-2 focus-within:ring-2 focus-within:ring-emerald-500/20 focus-within:border-emerald-300 transition-all shadow-sm">
+          <div className="flex items-end gap-2 rounded-xl bg-slate-50 border border-slate-200 p-2 focus-within:ring-2 focus-within:ring-ring/20 focus-within:border-ring transition-all shadow-sm">
             <Textarea
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
@@ -166,16 +239,16 @@ export function AskSchedulerPanel({ open, onOpenChange }: AskSchedulerPanelProps
                 }
               }}
               placeholder="Ask PAMi anything..."
-              className="min-h-[44px] flex-1 resize-none border-0 bg-transparent text-[13px] focus-visible:ring-0 focus-visible:ring-offset-0 px-2 py-3 shadow-none"
+              className="min-h-[44px] flex-1 resize-none border-0 bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 px-2 py-3 shadow-none"
             />
             <Button
               size="icon"
               className={cn(
                 "mb-1 mr-1 h-9 w-9 shrink-0 rounded-lg shadow-sm transition-all",
-                question.trim() ? "bg-emerald-500 hover:bg-emerald-600 text-white" : "bg-slate-200 text-slate-400 hover:bg-slate-300"
+                question.trim() ? "bg-primary hover:bg-primary/90 text-primary-foreground" : "bg-slate-200 text-slate-400 hover:bg-slate-300"
               )}
               onClick={() => submit(question)}
-              disabled={ask.isPending || !question.trim()}
+              disabled={pendingQuestion !== null || !question.trim()}
             >
               <Send className="h-4 w-4" />
             </Button>
