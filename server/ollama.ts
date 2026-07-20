@@ -8,6 +8,7 @@ import {
   getTeamRoster,
   getDeliveryModeMix,
   getCalendarView,
+  getPredictiveForecast,
 } from "./scheduling";
 import {
   createTherapySession,
@@ -22,8 +23,13 @@ import {
   logAiAction,
   getUndoableActions,
   markAiActionUndone,
+  getTherapistAbsences,
+  getPatientById,
+  getTherapists,
 } from "./db";
 import { formatWeekRangeLabel, isMissedStatus, WeeklyMinutesSummary } from "../shared/weekUtils";
+import { assessActionRisk, isTeamShortStaffed, type RiskContext } from "./riskAssessment";
+import { getLearnedPreferencesContext } from "./preferenceLearning";
 
 /* ========================================================================== */
 /* THE PROMPT                                                                  */
@@ -60,8 +66,8 @@ YOUR JOB, IN ORDER OF PRIORITY
 4. Stay grounded in this unit's actual numbers. Cite room numbers/names, exact times, and minutes whenever you reference a patient or slot.
 
 USING YOUR TOOLS
-- You have read tools (list_open_slots, get_at_risk_patients, get_team_roster, get_analytics, get_delivery_mode_mix, view_calendar) and write tools (create_session, move_session, copy_session, cancel_session, auto_schedule_all_gaps, auto_schedule_patient_gaps, transfer_patient_sessions_to_next_day, copy_patient_sessions_to_next_day, copy_day_to_next_day, clear_schedule, undo_last_action).
-- Use read tools freely and proactively whenever more detail would help -- no need to ask permission to look something up.
+- You have read tools (list_open_slots, get_at_risk_patients, get_team_roster, get_analytics, get_delivery_mode_mix, view_calendar, get_predictive_forecast) and write tools (create_session, move_session, copy_session, cancel_session, auto_schedule_all_gaps, auto_schedule_patient_gaps, transfer_patient_sessions_to_next_day, copy_patient_sessions_to_next_day, copy_day_to_next_day, clear_schedule, undo_last_action).
+- Use read tools freely and proactively whenever more detail would help -- no need to ask permission to look something up. For example, if asked "How is tomorrow looking?" or about future gaps, use get_predictive_forecast to see historical call-offs and get coverage suggestions.
 - Your default context only covers today (plus gap-fill suggestions for patients behind target). Use view_calendar for anything about a different day, a date range, or a specific patient's/therapist's actual booked schedule -- e.g. "what's on the calendar Thursday", "what does Room 214 have next week", "is therapist 6 free at 2pm Friday".
 - The gap-fill suggestions list is capped to the 6 most urgent patients behind target (at-risk first, then furthest behind) to keep the context brief -- if more exist, they're named explicitly with a note telling you to call list_open_slots for them. If asked broadly "who needs help" and that note is present, don't stop at the 6 shown -- mention the omitted patients by name too, and look them up if the user wants specifics.
 - Only use a write tool when the user has clearly asked for that action ("add", "schedule", "book", "move", "reschedule", "copy", "duplicate", "paste", "cancel", "remove", "fill every gap", "auto-schedule", "clear schedule", "transfer to tomorrow", "copy to tomorrow", "undo", "revert"). Never make a change the user didn't ask for -- recommend it and let them confirm instead.
@@ -74,6 +80,16 @@ USING YOUR TOOLS
 - Every write tool you use is remembered, so if the user says "undo that", "undo the last change", or "revert", call undo_last_action -- it reverses your most recent change(s) in order (booking, move, copy, cancel, auto-schedule, transfer, or clear), most recent first. If they say "undo the last 3" or similar, pass that count. If nothing is left to undo, or an undo fails partway (e.g. someone already changed that session manually), say exactly what did and didn't get reversed -- don't claim a full undo if it wasn't.
 - If a write tool fails, or the slot/therapist turns out not to be free, say so plainly and offer the closest real alternative from the data. Don't claim it worked if it didn't.
 - After a successful write, state plainly what changed (patient, therapist, day, time, duration, or how many sessions were auto-scheduled) so staff can verify it on the board, and pass along any cap warning the tool returned.
+
+RISK-TIERED AUTO-EXECUTION -- SOME ACTIONS NEED A HUMAN "YES" FIRST
+- Most single-session writes (create_session, move_session, copy_session, cancel_session) are low-risk and you should just do them once asked -- no extra confirmation beyond the normal "only write when asked" rule above.
+- But if a call would touch a PRN/per-diem therapist, a patient flagged for discharge today, or a team that's down to one or zero therapists working that day, the tool returns needsConfirmation: true plus a list of reasons instead of making the change. When that happens: relay the reasons in plain language (e.g. "Heads up -- Karin's PRN, so her availability isn't guaranteed. Still want me to book her for this?"), then wait for an explicit yes in the next message. Only on that explicit confirmation, call the exact same tool again with confirmed set to true in the arguments -- don't just say it's done, actually make the follow-up call.
+- clear_schedule always needs that same explicit "yes" round-trip regardless of who's involved -- it's a full wipe, and always high-risk.
+
+LEARNED PREFERENCES -- A SELF-CORRECTING FEEDBACK LOOP
+- Every time staff move, reassign, or cancel a session you booked, that gets logged. When the same (therapist, day-of-week, time-of-day) combination has been overridden enough times, you'll see a "Learned scheduling preferences" system message listing them as standing rules (e.g. "avoid scheduling Karin overnight on Fridays").
+- Treat those exactly like a rule the user stated out loud in this conversation -- apply them automatically to any booking/auto-schedule/gap-fill suggestion without re-asking or re-explaining, even though nobody typed that rule this session. Don't cite the mechanism unless asked (no "the system learned that..." -- just "I'd steer clear of Karin for that Friday overnight slot" the same way you'd state any other constraint).
+- If what the user is asking for right now directly conflicts with one of these learned preferences, follow the user's explicit instruction (they outrank a mined pattern) but say plainly that you're going against the usual pattern this one time.
 
 STYLE
 - Be direct and concise. Lead with the answer, then supporting detail.
@@ -156,6 +172,21 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "get_predictive_forecast",
+      description:
+        "Get a predictive forecast for a specific future date based on historical patterns. It returns expected call-offs, expected admission surges, and which therapists have the most open capacity to act as float coverage. Use whenever asked 'how is tomorrow looking', 'what gaps should we expect', or to forecast future coverage needs.",
+      parameters: {
+        type: "object",
+        properties: {
+          targetDate: { type: "string", description: "ISO 8601 date, e.g. 2026-07-21." },
+        },
+        required: ["targetDate"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "create_session",
       description:
         "Schedule a brand-new therapy session for one patient. Only call when the user explicitly asks to add, schedule, or book a session for a specific patient.",
@@ -172,6 +203,7 @@ const TOOLS = [
             enum: ["individual", "concurrent", "group"],
             description: "Defaults to individual. If concurrent or group, the result will flag whether this pushes the patient's discipline over the 25% PDPM cap.",
           },
+          confirmed: { type: "boolean", description: "Set true only after the user has explicitly confirmed a needsConfirmation response from a prior call with the same arguments." },
         },
         required: ["patientId", "therapistId", "therapyType", "startTime", "durationMinutes"],
       },
@@ -189,6 +221,7 @@ const TOOLS = [
           sessionId: { type: "integer" },
           newStartTime: { type: "string", description: "ISO 8601 datetime" },
           newTherapistId: { type: "integer", description: "Omit to keep the same therapist." },
+          confirmed: { type: "boolean", description: "Set true only after the user has explicitly confirmed a needsConfirmation response from a prior call with the same arguments." },
         },
         required: ["sessionId", "newStartTime"],
       },
@@ -206,6 +239,7 @@ const TOOLS = [
           sessionId: { type: "integer" },
           newStartTime: { type: "string", description: "ISO 8601 datetime" },
           newTherapistId: { type: "integer", description: "Omit to keep the same therapist." },
+          confirmed: { type: "boolean", description: "Set true only after the user has explicitly confirmed a needsConfirmation response from a prior call with the same arguments." },
         },
         required: ["sessionId", "newStartTime"],
       },
@@ -235,7 +269,10 @@ const TOOLS = [
         "Cancel and delete an existing session. Only call when the user explicitly asks to cancel or remove a session.",
       parameters: {
         type: "object",
-        properties: { sessionId: { type: "integer" } },
+        properties: {
+          sessionId: { type: "integer" },
+          confirmed: { type: "boolean", description: "Set true only after the user has explicitly confirmed a needsConfirmation response from a prior call with the same arguments." },
+        },
         required: ["sessionId"],
       },
     },
@@ -274,6 +311,7 @@ const TOOLS = [
         type: "object",
         properties: {
           patientId: { type: "integer", description: "The patient's numeric ID" },
+          confirmed: { type: "boolean", description: "Set true only after the user has explicitly confirmed a needsConfirmation response from a prior call with the same arguments." },
         },
         required: ["patientId"],
       },
@@ -289,6 +327,7 @@ const TOOLS = [
         type: "object",
         properties: {
           patientId: { type: "integer", description: "The patient's numeric ID" },
+          confirmed: { type: "boolean", description: "Set true only after the user has explicitly confirmed a needsConfirmation response from a prior call with the same arguments." },
         },
         required: ["patientId"],
       },
@@ -314,6 +353,7 @@ const TOOLS = [
         properties: {
           timeframe: { type: "string", enum: ["daily", "weekly"], description: "Whether to clear the schedule for just today or the entire week." },
           therapistId: { type: "integer", description: "The ID of the therapist whose schedule to clear. Omit to clear ALL therapists." },
+          confirmed: { type: "boolean", description: "Set true only after the user has explicitly confirmed a needsConfirmation response from a prior call with the same arguments." },
         },
         required: ["timeframe"],
       },
@@ -351,6 +391,15 @@ export async function buildSchedulerContext(referenceDate: Date = new Date()): P
   lines.push("");
 
   const analytics = await getJointCommissionAnalytics(referenceDate);
+  const absences = await getTherapistAbsences(referenceDate);
+
+  if (absences.length > 0) {
+    const absentIds = absences.map(a => a.therapistId);
+    lines.push(`*** ATTENDANCE ALERT ***`);
+    lines.push(`The following therapists have CALLED OFF (absent) today and are unavailable for scheduling: Therapist IDs [${absentIds.join(", ")}]. Do NOT attempt to book sessions with them.`);
+    lines.push("");
+  }
+
   lines.push("=== JOINT COMMISSION & REHAB ANALYTICS (Past 7 Days) ===");
   lines.push(
     `Compliance: ${analytics.compliance.onTarget} on target, ${analytics.compliance.atRisk} at risk (Total Active: ${analytics.compliance.totalActive})`,
@@ -432,11 +481,12 @@ export async function buildSchedulerContext(referenceDate: Date = new Date()): P
     const status = p.remainingMinutes <= 0 ? "ON TARGET" : p.atRisk ? "AT RISK (projected to miss target)" : "behind, but still projected to catch up";
     const flags = flagsByPatient.get(p.patientId);
     const flagNote = flags && flags.length > 0 ? ` Flags today: ${flags.join(", ")}.` : "";
+    const dcNote = p.estimatedDischargeDate ? ` Est. DC: ${p.estimatedDischargeDate}.` : "";
     lines.push(
       `- [id ${p.patientId}] Room ${p.roomNumber} (${p.patientName}), team ${p.teamId ?? "none"}: ` +
         `delivered ${p.completedMinutes} min, missed ${p.missedMinutes} min, still-pending ${p.pendingMinutes} min, ` +
         `projected total ${p.projectedTotalMinutes}/${p.target} min (${formatWeekRangeLabel(p.weekStart)}), ` +
-        `${p.remainingMinutes} min still needed to deliver, ${p.daysRemaining} day(s) left. Status: ${status}.${flagNote}`,
+        `${p.remainingMinutes} min still needed to deliver, ${p.daysRemaining} day(s) left. Status: ${status}.${flagNote}${dcNote}`,
     );
     if (p.remainingMinutes > 0 && !(flags ?? []).includes("Medical Hold")) underTarget.push(p);
   }
@@ -517,6 +567,65 @@ async function checkConcurrentGroupCap(
 }
 
 /**
+ * Fetches whatever's needed to build a RiskContext for one write-tool call: the therapist's PRN
+ * status, whether the patient is discharge-flagged for `date`, and whether the patient's team is
+ * short-staffed that day. Any of patientId/therapistId can be omitted when not applicable to a
+ * given tool (e.g. clear_schedule may target a therapist with no single patient).
+ */
+async function buildRiskContext(
+  toolName: string,
+  patientId: number | null,
+  therapistId: number | null,
+  date: Date,
+): Promise<RiskContext> {
+  const [allTherapists, patient, todaysFlags] = await Promise.all([
+    getTherapists(),
+    patientId != null ? getPatientById(patientId) : Promise.resolve(undefined),
+    patientId != null ? getStatusFlagsForDate(date) : Promise.resolve([]),
+  ]);
+
+  const therapist = therapistId != null ? allTherapists.find((t) => t.id === therapistId) : undefined;
+  const patientDischargeFlagged = patientId != null
+    ? todaysFlags.some((f) => f.patientId === patientId && f.flagType === "DC")
+    : false;
+  const teamShortStaffed = patient?.teamId != null
+    ? isTeamShortStaffed(allTherapists.filter((t) => t.teamId === patient.teamId), date)
+    : false;
+
+  return {
+    toolName,
+    therapistIsPRN: therapist?.isPRN ? { name: therapist.name } : null,
+    patientDischargeFlagged,
+    teamShortStaffed,
+  };
+}
+
+/**
+ * Mechanical confirmation gate for the single-target write tools: resolves the actual risk tier
+ * for this specific call and, if it's "high" and the model hasn't already passed
+ * `confirmed: true` (only valid after the user has explicitly agreed), returns a
+ * needsConfirmation response instead of proceeding. Returns null when it's safe to proceed.
+ */
+async function checkRiskGate(
+  toolName: string,
+  args: Record<string, unknown>,
+  patientId: number | null,
+  therapistId: number | null,
+  date: Date,
+): Promise<string | null> {
+  if (args.confirmed === true) return null;
+  const ctx = await buildRiskContext(toolName, patientId, therapistId, date);
+  const assessment = assessActionRisk(ctx);
+  if (assessment.tier !== "high") return null;
+  return JSON.stringify({
+    ok: false,
+    needsConfirmation: true,
+    riskTier: assessment.tier,
+    reasons: assessment.reasons,
+  });
+}
+
+/**
  * Reverses one logged PAMi write action. Each actionType's undoData shape is set where
  * it's logged in executeTool below -- keep the two in sync when adding a new write tool.
  * Throws (rather than silently no-op'ing) when the underlying data has moved out from
@@ -535,7 +644,7 @@ async function reverseAiAction(entry: {
     case "create_session": {
       const existing = await getSessionById(data.sessionId);
       if (!existing) throw new Error("that session no longer exists");
-      await deleteTherapySession(data.sessionId);
+      await deleteTherapySession(data.sessionId, "ai");
       return `Removed the session booked by "${entry.description}"`;
     }
 
@@ -546,7 +655,7 @@ async function reverseAiAction(entry: {
         startTime: new Date(data.previousStartTime),
         endTime: new Date(data.previousEndTime),
         therapistId: data.previousTherapistId,
-      });
+      }, false, "ai");
       return `Moved session ${data.sessionId} back to its previous time`;
     }
 
@@ -564,7 +673,7 @@ async function reverseAiAction(entry: {
         status: s.status,
         missedReason: s.missedReason ?? undefined,
         notes: s.notes ?? undefined,
-      });
+      }, false, "ai");
       return `Restored the cancelled session (now session ${recreated.id})`;
     }
 
@@ -572,7 +681,7 @@ async function reverseAiAction(entry: {
     case "auto_schedule_patient_gaps": {
       const ids: number[] = data.sessionIds ?? [];
       for (const id of ids) {
-        await deleteTherapySession(id).catch(() => {});
+        await deleteTherapySession(id, "ai").catch(() => {});
       }
       return `Removed ${ids.length} auto-scheduled session(s)`;
     }
@@ -586,7 +695,7 @@ async function reverseAiAction(entry: {
         await updateTherapySession(id, {
           startTime: new Date(new Date(existing.startTime).getTime() - 24 * 60 * 60 * 1000),
           endTime: new Date(new Date(existing.endTime).getTime() - 24 * 60 * 60 * 1000),
-        });
+        }, false, "ai");
         reverted++;
       }
       return `Moved ${reverted} session(s) back a day`;
@@ -600,7 +709,7 @@ async function reverseAiAction(entry: {
       for (const id of ids) {
         const existing = await getSessionById(id);
         if (existing) {
-          await deleteTherapySession(id);
+          await deleteTherapySession(id, "ai");
           reverted++;
         }
       }
@@ -622,7 +731,7 @@ async function reverseAiAction(entry: {
           status: s.status,
           missedReason: s.missedReason ?? undefined,
           notes: s.notes ?? undefined,
-        });
+        }, false, "ai");
       }
       return `Restored ${sessions.length} session(s) from the cleared schedule`;
     }
@@ -673,6 +782,11 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
       case "get_analytics": {
         return JSON.stringify(await getJointCommissionAnalytics(referenceDate));
       }
+      case "get_predictive_forecast": {
+        const targetDate = new Date(String(args.targetDate));
+        const forecast = await getPredictiveForecast(targetDate);
+        return JSON.stringify(forecast);
+      }
 
       case "view_calendar": {
         const startDate = parseLocalDate(String(args.startDate));
@@ -693,6 +807,8 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
           | "individual"
           | "concurrent"
           | "group";
+        const gate = await checkRiskGate("create_session", args, patientId, Number(args.therapistId), startTime);
+        if (gate) return gate;
         const created = await createTherapySession({
           patientId,
           therapistId: Number(args.therapistId),
@@ -702,7 +818,7 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
           durationMinutes,
           deliveryMode,
           notes: "Booked by PAMi",
-        });
+        }, false, "ai");
         const capWarning = await checkConcurrentGroupCap(patientId, therapyType, deliveryMode, referenceDate);
         await logAiAction({
           actionType: "create_session",
@@ -722,7 +838,11 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
         const update: Record<string, unknown> = { startTime: newStartTime, endTime: newEndTime };
         if (args.newTherapistId != null) update.therapistId = Number(args.newTherapistId);
 
-        const updated = await updateTherapySession(sessionId, update);
+        const moveTherapistId = args.newTherapistId != null ? Number(args.newTherapistId) : existing.therapistId;
+        const gate = await checkRiskGate("move_session", args, existing.patientId, moveTherapistId, newStartTime);
+        if (gate) return gate;
+
+        const updated = await updateTherapySession(sessionId, update, false, "ai");
         await logAiAction({
           actionType: "move_session",
           description: `Moved session ${sessionId} from ${existing.startTime.toLocaleString()} to ${newStartTime.toLocaleString()}`,
@@ -743,7 +863,11 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
 
         const newStartTime = new Date(String(args.newStartTime));
         const newEndTime = new Date(newStartTime.getTime() + existing.durationMinutes * 60_000);
-        
+
+        const copyTherapistId = args.newTherapistId != null ? Number(args.newTherapistId) : existing.therapistId;
+        const copyGate = await checkRiskGate("copy_session", args, existing.patientId, copyTherapistId, newStartTime);
+        if (copyGate) return copyGate;
+
         const copied = await createTherapySession({
           patientId: existing.patientId,
           therapistId: args.newTherapistId != null ? Number(args.newTherapistId) : existing.therapistId,
@@ -753,7 +877,7 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
           durationMinutes: existing.durationMinutes,
           deliveryMode: existing.deliveryMode,
           notes: "Copied by PAMi",
-        });
+        }, false, "ai");
 
         await logAiAction({
           actionType: "copy_session",
@@ -767,7 +891,11 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
         const sessionId = Number(args.sessionId);
         const existing = await getSessionById(sessionId);
         if (!existing) return JSON.stringify({ ok: false, error: `No session with id ${sessionId} exists.` });
-        await deleteTherapySession(sessionId);
+
+        const cancelGate = await checkRiskGate("cancel_session", args, existing.patientId, existing.therapistId, new Date(existing.startTime));
+        if (cancelGate) return cancelGate;
+
+        await deleteTherapySession(sessionId, "ai");
         await logAiAction({
           actionType: "cancel_session",
           description: `Cancelled session ${sessionId} for patient ${existing.patientId}`,
@@ -817,7 +945,7 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
 
       case "transfer_patient_sessions_to_next_day": {
         const patientId = Number(args.patientId);
-        const result = await movePatientSessionsToNextDay(patientId, referenceDate);
+        const result = await movePatientSessionsToNextDay(patientId, referenceDate, "ai");
         if (result.count > 0) {
           await logAiAction({
             actionType: "transfer_patient_sessions_to_next_day",
@@ -830,7 +958,7 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
 
       case "copy_patient_sessions_to_next_day": {
         const patientId = Number(args.patientId);
-        const result = await copyPatientSessionsToNextDay(patientId, referenceDate);
+        const result = await copyPatientSessionsToNextDay(patientId, referenceDate, "ai");
         if (result.count > 0) {
           await logAiAction({
             actionType: "copy_patient_sessions_to_next_day",
@@ -842,7 +970,7 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
       }
 
       case "copy_day_to_next_day": {
-        const result = await copyDayToNextDay(referenceDate);
+        const result = await copyDayToNextDay(referenceDate, "ai");
         if (result.count > 0) {
           await logAiAction({
             actionType: "copy_day_to_next_day",
@@ -1069,9 +1197,13 @@ export async function askScheduler(
   referenceDate: Date = new Date(),
   history: ChatTurn[] = [],
 ): Promise<OllamaAskResult> {
-  const context = await buildSchedulerContext(referenceDate);
+  const [context, learnedPreferences] = await Promise.all([
+    buildSchedulerContext(referenceDate),
+    getLearnedPreferencesContext(referenceDate),
+  ]);
   const messages: Array<{ role: string; content: string; tool_calls?: ToolCall[] }> = [
     { role: "system", content: SCHEDULER_SYSTEM_PROMPT },
+    ...(learnedPreferences ? [{ role: "system", content: learnedPreferences }] : []),
     { role: "system", content: `Current scheduling data:\n${context}` },
     // Prior turns give the model conversational memory (e.g. "her" or "that slot" referring a few turns back).
     // Only user/assistant text is replayed -- tool calls from earlier turns aren't resent since the live

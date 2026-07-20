@@ -1,12 +1,29 @@
-import { Dispatch, SetStateAction } from "react";
+import { Dispatch, SetStateAction, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   ChevronLeft, ChevronRight, AlertTriangle, Calendar as CalendarIcon,
-  History, Users, UserRound, Clock, Bot, Smartphone, BarChart3, Camera, Printer, Copy
+  History, Users, UserRound, Clock, Bot, Smartphone, BarChart3, Camera, Printer, Copy, Sparkles, ClipboardList
 } from "lucide-react";
+import { trpc } from "@/lib/trpc";
+import { DailyAttendance } from "./DailyAttendance";
 import { 
   THERAPY_TYPES, THERAPY_META, TIME_SLOTS, type TherapyType,
   formatLongDate, startOfWeek, weekRangeLabel, addDays, subDays, startOfDay
@@ -71,6 +88,10 @@ export interface BoardHeaderProps {
   setMySchedTherapist: Dispatch<SetStateAction<number | null>>;
   tiles: SessionTileData[];
   handleCopyDay: () => void;
+  /** patientId -> today's auto-generated gap-fill digest entry (see server/scheduling.ts
+   *  computeMorningDigest). Optional so this component doesn't hard-require the digest query. */
+  digestByPatientId?: Map<number, any>;
+  onBookSuggestion?: (patientId: number, slot: any) => void;
 }
 
 export function BoardHeader({
@@ -78,10 +99,15 @@ export function BoardHeader({
   patientsUnderTarget, weekMinsByPatient, conflictCount, conflictPairs,
   therapists, patients, jumpToPatient, setPanelOpen, setStaffPanelOpen,
   setWeeklyMinutesPanelOpen, setAskSchedulerPanelOpen, setHistoryOpen, setDataAnalysisOpen, handleSnapshot,
-  handlePrintAllPatients, mySchedTherapist, setMySchedTherapist, tiles, handleCopyDay
+  handlePrintAllPatients, mySchedTherapist, setMySchedTherapist, tiles, handleCopyDay,
+  digestByPatientId, onBookSuggestion
 }: BoardHeaderProps) {
   const weekStart = startOfWeek(day);
   const weekLabel = weekRangeLabel(weekStart);
+  
+  const [isAttendanceOpen, setIsAttendanceOpen] = useState(false);
+  
+  const { data: forecast } = trpc.forecast.useQuery({ date: day });
 
   return (
     <header className="sticky top-0 z-30 flex flex-col shadow-[0_4px_20px_-4px_rgba(0,0,0,0.1)] transition-all border-b border-slate-200">
@@ -114,6 +140,10 @@ export function BoardHeader({
           <Button variant="ghost" size="sm" className="h-10 rounded-full px-4 font-medium text-blue-100 hover:bg-blue-500/20 hover:text-white transition-all" onClick={() => setStaffPanelOpen(true)}>
             <UserRound className="mr-2 h-4.5 w-4.5" />
             <span className="hidden xl:inline text-sm">Staff</span>
+          </Button>
+          <Button variant="ghost" size="sm" className="h-10 rounded-full px-4 font-medium text-blue-100 hover:bg-blue-500/20 hover:text-white transition-all" onClick={() => setIsAttendanceOpen(true)}>
+            <ClipboardList className="mr-2 h-4.5 w-4.5" />
+            <span className="hidden xl:inline text-sm">Attendance</span>
           </Button>
           <Button variant="ghost" size="sm" className="h-10 rounded-full px-4 font-medium text-blue-100 hover:bg-blue-500/20 hover:text-white transition-all" onClick={() => setWeeklyMinutesPanelOpen(true)}>
             <Clock className="mr-2 h-4.5 w-4.5" />
@@ -190,11 +220,53 @@ export function BoardHeader({
             <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-all" onClick={() => setDay(addDays(day, 1))}>
               <ChevronRight className="h-5 w-5" />
             </Button>
-            
-            <div className="ml-2 pl-3 border-l border-slate-200 py-0.5">
+            <div className="ml-2 pl-3 border-l border-slate-200 py-0.5 flex items-center">
               <Button variant="ghost" size="sm" className="h-8 rounded-full px-4 text-xs font-bold tracking-wider text-slate-500 hover:text-sky-700 hover:bg-sky-50 transition-colors" onClick={() => setDay(startOfDay(new Date()))}>
                 TODAY
               </Button>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 ml-1 rounded-full text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 transition-colors">
+                    <Sparkles className="h-4 w-4" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent side="bottom" align="center" className="w-80 p-4 border-indigo-200 shadow-xl shadow-indigo-900/5 z-50">
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 border-b border-indigo-100 pb-2">
+                      <Sparkles className="h-4 w-4 text-indigo-500" />
+                      <h4 className="font-semibold text-sm text-indigo-950">Daily Forecast</h4>
+                    </div>
+                    {forecast ? (
+                      <div className="text-sm text-slate-600 space-y-2">
+                        <p>Historical trends for a <strong>{forecast.dayOfWeek}</strong>:</p>
+                        <ul className="list-disc pl-5 space-y-1 text-slate-500 text-xs">
+                          <li>Expected call-off rate: <span className="font-semibold text-slate-700">{(forecast.expectedMissedRate * 100).toFixed(0)}%</span></li>
+                          <li>Avg new admissions: <span className="font-semibold text-slate-700">{forecast.expectedAdmissions.toFixed(1)}</span></li>
+                        </ul>
+                        <div className="mt-3 bg-indigo-50/50 p-2.5 rounded-lg border border-indigo-100">
+                          <p className="text-xs font-medium text-indigo-900 mb-2">Coverage Recommendation</p>
+                          <p className="text-xs text-indigo-700/80 mb-2">
+                            Stage ~{Math.round(forecast.suggestedBufferMinutes / 60 * 10) / 10} hours of float buffer to absorb {forecast.dayOfWeek} surges.
+                          </p>
+                          {forecast.topAvailableTherapists.length > 0 && (
+                            <div className="text-[10px] space-y-1">
+                              <span className="font-semibold text-indigo-900/70 uppercase tracking-wider">Top Available Float Staff:</span>
+                              {forecast.topAvailableTherapists.map((t: any) => (
+                                <div key={t.id} className="flex justify-between items-center bg-white border border-indigo-50 rounded px-2 py-1">
+                                  <span className="font-medium text-slate-700">{t.name}</span>
+                                  <span className="text-indigo-600">{Math.round(t.availableMinutes / 60 * 10) / 10}h open</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-500 animate-pulse">Calculating forecast...</p>
+                    )}
+                  </div>
+                </PopoverContent>
+              </Popover>
             </div>
           </div>
         </div>
@@ -212,16 +284,30 @@ export function BoardHeader({
           />
 
           <div className="flex items-center gap-0.5 rounded-full border border-slate-200 bg-slate-50 p-0.5">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full text-slate-500 hover:bg-white hover:text-slate-800 hover:shadow-sm transition-all" onClick={() => {
-                  if (confirm("Copy all sessions on this day to tomorrow?")) handleCopyDay();
-                }}>
-                  <Copy className="h-3.5 w-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Copy all sessions to tomorrow</TooltipContent>
-            </Tooltip>
+            <AlertDialog>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full text-slate-500 hover:bg-white hover:text-slate-800 hover:shadow-sm transition-all">
+                      <Copy className="h-3.5 w-3.5" />
+                    </Button>
+                  </AlertDialogTrigger>
+                </TooltipTrigger>
+                <TooltipContent>Copy all sessions to tomorrow</TooltipContent>
+              </Tooltip>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Copy Sessions</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Copy all sessions on this day to tomorrow?
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleCopyDay}>Copy</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full text-slate-500 hover:bg-white hover:text-slate-800 hover:shadow-sm transition-all" onClick={handleSnapshot}>
@@ -275,11 +361,15 @@ export function BoardHeader({
                         const target = p.weeklyMinuteTarget;
                         const current = weekMinsByPatient.get(p.id) ?? 0;
                         const progress = Math.min(100, Math.round((current / target) * 100));
+                        const digestEntry = digestByPatientId?.get(p.id);
+                        const topSlot = digestEntry?.proposedSlots?.[0];
                         return (
-                          <button
+                          <div
                             key={p.id}
                             onClick={() => jumpToPatient(p.id)}
-                            className="w-full text-left rounded-lg p-2 hover:bg-slate-50 transition-colors flex flex-col gap-1.5 group"
+                            role="button"
+                            tabIndex={0}
+                            className="w-full text-left rounded-lg p-2 hover:bg-slate-50 transition-colors flex flex-col gap-1.5 group cursor-pointer"
                           >
                             <div className="flex items-center justify-between">
                               <span className="font-medium text-sm text-slate-800 group-hover:text-indigo-600 transition-colors">{p.name}</span>
@@ -288,12 +378,31 @@ export function BoardHeader({
                               </span>
                             </div>
                             <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                              <div 
+                              <div
                                 className="h-full bg-amber-500 rounded-full transition-all"
                                 style={{ width: `${progress}%` }}
                               />
                             </div>
-                          </button>
+                            {/* Proposed slot from this morning's auto-generated gap-fill digest --
+                                surfaced proactively here, not just available if someone asks PAMi. */}
+                            {topSlot && onBookSuggestion && (
+                              <div className="flex items-center justify-between gap-2 rounded-md bg-indigo-50/60 px-2 py-1 border border-indigo-100">
+                                <span className="text-[10px] text-indigo-700 truncate">
+                                  {topSlot.therapyType} · {new Date(topSlot.startTime).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit" })} · {topSlot.therapistName ?? "unassigned"}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onBookSuggestion(p.id, topSlot);
+                                  }}
+                                  className="shrink-0 rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-bold text-white hover:bg-indigo-700 transition-colors"
+                                >
+                                  Book
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         );
                       })}
                     </div>
@@ -391,6 +500,13 @@ export function BoardHeader({
         <Smartphone className="h-3 w-3 shrink-0" />
         <span>Tap <strong className="font-semibold">My Schedule</strong> for a focused view. Swipe the grid to see all times.</span>
       </div>
+
+      <DailyAttendance
+        day={day}
+        therapists={therapists}
+        open={isAttendanceOpen}
+        onOpenChange={setIsAttendanceOpen}
+      />
     </header>
   );
 }

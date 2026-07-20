@@ -10,6 +10,7 @@ export interface WeeklyMinutesSummary {
   patientName: string;
   roomNumber: string;
   teamId: number | null;
+  estimatedDischargeDate: string | null;
   weekStart: Date;
   weekEnd: Date;
   target: number;

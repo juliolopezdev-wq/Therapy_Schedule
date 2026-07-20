@@ -12,29 +12,28 @@ interface GridCellProps {
 }
 
 export function GridCell({ patientId, slotIndex, onAdd, children, isAlternate, isLunch }: GridCellProps) {
+  // isLunch is a visual hint only (diagonal hatch) -- the cell stays fully droppable/clickable.
+  // The lunch confirm-before-booking prompt happens where the write actually happens
+  // (saveSession/handleDragEnd/handleResizeSession in TherapyBoard.tsx), not by disabling this cell.
   const { setNodeRef, isOver } = useDroppable({
     id: `cell-${patientId}-${slotIndex}`,
     data: { patientId, slotIndex },
-    disabled: isLunch,
   });
 
-  // The slot to the LEFT of an hour mark gets a stronger right border (closes the hour block)
-  const isHourEnd = slotIndex % 2 === 1;
   return (
     <div
       ref={setNodeRef}
       className={cn(
         "group relative h-full border-b border-slate-100 transition-colors duration-150",
         isLunch ? "bg-slate-200/50 bg-[repeating-linear-gradient(45deg,transparent,transparent_4px,rgba(0,0,0,0.02)_4px,rgba(0,0,0,0.02)_8px)]" : isAlternate ? "bg-slate-50/40" : "bg-transparent",
-        isOver && !isLunch && "bg-primary/10 ring-2 ring-inset ring-primary/70 z-20",
-        isLunch && "cursor-not-allowed",
+        isOver && "bg-primary/10 ring-2 ring-inset ring-primary/70 z-20",
       )}
       onClick={() => {
-        if (!children && !isLunch) onAdd?.(patientId, slotIndex);
+        if (!children) onAdd?.(patientId, slotIndex);
       }}
     >
       {children}
-      {!children && !isLunch ? (
+      {!children ? (
         <button
           type="button"
           onClick={(e) => {

@@ -37,8 +37,11 @@ import {
   getAdditionalMinutesForPatient,
   createAdditionalMinutes,
   deleteAdditionalMinutes,
+  callOffTherapist,
+  cancelCallOffTherapist,
+  getTherapistAbsences,
 } from "./db";
-import { getWeeklyMinutesSummary, getGapFillSuggestions } from "./scheduling";
+import { getWeeklyMinutesSummary, getGapFillSuggestions, getOrCreateTodaysDigest, getPredictiveForecast } from "./scheduling";
 import { askScheduler, analyzeData } from "./ollama";
 
 const therapyTypeEnum = z.enum(["PT", "OT", "SLP", "Eval", "Block"]);
@@ -58,6 +61,36 @@ export const appRouter = router({
   }),
 
   /* ------------------------------------------------------------------ */
+  /* Attendance                                                         */
+  /* ------------------------------------------------------------------ */
+  attendance: router({
+    getAbsences: publicProcedure
+      .input(z.object({ date: z.date() }))
+      .query(async ({ input }) => {
+        return getTherapistAbsences(input.date);
+      }),
+    callOff: publicProcedure
+      .input(z.object({ therapistId: z.number(), date: z.date(), reason: z.string().optional() }))
+      .mutation(async ({ input }) => {
+        return callOffTherapist(input.therapistId, input.date, input.reason);
+      }),
+    cancelCallOff: publicProcedure
+      .input(z.object({ therapistId: z.number(), date: z.date() }))
+      .mutation(async ({ input }) => {
+        return cancelCallOffTherapist(input.therapistId, input.date);
+      }),
+  }),
+
+  /* ------------------------------------------------------------------ */
+  /* Analytics / Planning                                               */
+  /* ------------------------------------------------------------------ */
+  forecast: publicProcedure
+    .input(z.object({ date: z.date() }))
+    .query(async ({ input }) => {
+      return getPredictiveForecast(input.date);
+    }),
+
+  /* ------------------------------------------------------------------ */
   /* Patients                                                            */
   /* ------------------------------------------------------------------ */
   patients: router({
@@ -73,6 +106,7 @@ export const appRouter = router({
           notes: z.string().optional(),
           isDischarged: z.boolean().optional(),
           admissionDate: z.string().optional(),
+          estimatedDischargeDate: z.string().optional(),
           weeklyMinuteTarget: z.number().optional(),
           teamId: z.number().nullable().optional(),
         }),
@@ -87,6 +121,7 @@ export const appRouter = router({
           notes: z.string().optional(),
           isDischarged: z.boolean().optional(),
           admissionDate: z.string().optional(),
+          estimatedDischargeDate: z.string().optional(),
           weeklyMinuteTarget: z.number().optional(),
           teamId: z.number().nullable().optional(),
           orderIndex: z.number().optional(),
@@ -128,13 +163,14 @@ export const appRouter = router({
           notes: z.string().optional(),
           status: sessionStatusEnum.optional(),
           missedReason: z.string().optional(),
+          ignoreConflicts: z.boolean().optional(),
         }),
       )
       .mutation(async ({ input }) =>
         createTherapySession({
           ...input,
           therapistId: input.therapistId ?? null,
-        }),
+        }, input.ignoreConflicts),
       ),
     update: publicProcedure
       .input(
@@ -151,11 +187,12 @@ export const appRouter = router({
           notes: z.string().optional(),
           status: sessionStatusEnum.optional(),
           missedReason: z.string().optional(),
+          ignoreConflicts: z.boolean().optional(),
         }),
       )
       .mutation(async ({ input }) => {
-        const { id, ...data } = input;
-        return updateTherapySession(id, data);
+        const { id, ignoreConflicts, ...data } = input;
+        return updateTherapySession(id, data, ignoreConflicts);
       }),
     delete: publicProcedure
       .input(z.object({ id: z.number() }))
@@ -351,6 +388,17 @@ export const appRouter = router({
     suggestions: publicProcedure
       .input(z.object({ patientId: z.number(), referenceDate: z.date().optional() }))
       .query(async ({ input }) => getGapFillSuggestions(input.patientId, input.referenceDate ?? new Date())),
+  }),
+
+  /* ------------------------------------------------------------------ */
+  /* Morning gap-fill digest -- generated automatically (see              */
+  /* _core/digestScheduler.ts); this query is also the lazy-fallback path */
+  /* that guarantees it exists even if the server was cold this morning.  */
+  /* ------------------------------------------------------------------ */
+  digest: router({
+    today: publicProcedure
+      .input(z.object({ referenceDate: z.date().optional() }).optional())
+      .query(async ({ input }) => getOrCreateTodaysDigest(input?.referenceDate ?? new Date())),
   }),
 
   /* ------------------------------------------------------------------ */

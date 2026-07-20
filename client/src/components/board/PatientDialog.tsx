@@ -35,6 +35,7 @@ export interface PatientFormValue {
   notes: string;
   isDischarged: boolean;
   admissionDate?: string;
+  estimatedDischargeDate?: string;
   weeklyMinuteTarget?: number;
   teamId?: number | null;
   sessionTime?: string;
@@ -58,6 +59,7 @@ const EMPTY: PatientFormValue = {
   notes: "",
   isDischarged: false,
   admissionDate: "",
+  estimatedDischargeDate: "",
   weeklyMinuteTarget: 900,
   teamId: null,
   sessionTime: "none",
@@ -134,7 +136,7 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div className="space-y-2">
               <Label>Admission Date</Label>
               <Input
@@ -144,7 +146,15 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
               />
             </div>
             <div className="space-y-2">
-              <Label>Weekly Target (min)</Label>
+              <Label>Est. Discharge</Label>
+              <Input
+                type="date"
+                value={form.estimatedDischargeDate ?? ""}
+                onChange={(e) => setForm({ ...form, estimatedDischargeDate: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Target (min)</Label>
               <Input
                 type="number"
                 min={0}

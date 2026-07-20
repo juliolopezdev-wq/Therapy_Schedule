@@ -14,6 +14,10 @@ import {
   boardHistory,
   aiActionLog,
   patientAdditionalMinutes,
+  morningDigest,
+  therapistAbsences,
+  scheduleOverrides,
+  digestEmailLog,
   InsertPatient,
   InsertTherapySession,
   InsertStatusFlag,
@@ -21,6 +25,8 @@ import {
   InsertTeam,
   InsertPatientAdditionalMinutes,
   InsertAiActionLog,
+  InsertMorningDigestEntry,
+  InsertScheduleOverride,
   TherapySession,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
@@ -305,10 +311,10 @@ async function assertNoSchedulingConflict(params: {
       .from(therapySessions)
       .where(and(eq(therapySessions.therapistId, therapistId), overlapCond, idCond));
     const realConflicts = therapistMatches.filter((existing) => {
-      const bothGroupOrConcurrent =
-        (deliveryMode === "concurrent" || deliveryMode === "group") &&
-        (existing.deliveryMode === "concurrent" || existing.deliveryMode === "group");
-      return !bothGroupOrConcurrent;
+      const isMatchingGroupOrConcurrent = 
+        deliveryMode === existing.deliveryMode && 
+        (deliveryMode === "group" || deliveryMode === "concurrent");
+      return !isMatchingGroupOrConcurrent;
     });
     if (realConflicts.length > 0) {
       const conflict = realConflicts[0];
@@ -319,28 +325,58 @@ async function assertNoSchedulingConflict(params: {
   }
 }
 
-export async function createTherapySession(data: InsertTherapySession) {
+/** Records one entry in scheduleOverrides -- see server/preferenceLearning.ts for how these get
+ *  mined into standing preferences fed back into PAMi's system prompt. */
+async function logScheduleOverride(entry: Omit<InsertScheduleOverride, "id" | "createdAt">) {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(scheduleOverrides).values(entry);
+}
+
+/** All override rows since `sinceDate` -- feeds server/preferenceLearning.ts's pattern mining. */
+export async function getRecentScheduleOverrides(sinceDate: Date) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(scheduleOverrides).where(gte(scheduleOverrides.createdAt, sinceDate));
+}
+
+export async function createTherapySession(
+  data: InsertTherapySession,
+  ignoreConflicts: boolean = false,
+  source: "human" | "ai" = "human",
+) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await assertNoSchedulingConflict({
-    patientId: data.patientId,
-    therapistId: data.therapistId,
-    startTime: new Date(data.startTime),
-    endTime: new Date(data.endTime),
-    deliveryMode: data.deliveryMode,
-  });
-  const result = await db.insert(therapySessions).values(data);
+
+  if (!ignoreConflicts) {
+    await assertNoSchedulingConflict({
+      patientId: data.patientId,
+      therapistId: data.therapistId,
+      startTime: new Date(data.startTime),
+      endTime: new Date(data.endTime),
+      deliveryMode: data.deliveryMode,
+    });
+  }
+  const result = await db.insert(therapySessions).values({ ...data, source });
   return { id: extractInsertId(result) };
 }
 
-export async function updateTherapySession(id: number, data: Partial<InsertTherapySession>) {
+export async function updateTherapySession(
+  id: number,
+  data: Partial<InsertTherapySession>,
+  ignoreConflicts: boolean = false,
+  source: "human" | "ai" = "human",
+) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
+  // Fetched unconditionally (not just for the conflict-check path below) so a human edit to a
+  // still-"ai" session can be logged as an override before it's overwritten.
+  const existing = await getSessionById(id);
+
   // Only re-check when the change could actually create a new overlap -- editing notes/status
   // shouldn't pay for a conflict scan.
-  if (data.startTime || data.endTime || data.therapistId !== undefined || data.patientId !== undefined) {
-    const existing = await getSessionById(id);
+  if (!ignoreConflicts && (data.startTime || data.endTime || data.therapistId !== undefined || data.patientId !== undefined)) {
     if (existing) {
       await assertNoSchedulingConflict({
         patientId: data.patientId ?? existing.patientId,
@@ -353,13 +389,41 @@ export async function updateTherapySession(id: number, data: Partial<InsertThera
     }
   }
 
-  await db.update(therapySessions).set(data).where(eq(therapySessions.id, id));
+  const movedOrReassigned = data.startTime !== undefined || data.therapistId !== undefined;
+  const nextData: Partial<InsertTherapySession> = { ...data };
+  if (existing && existing.source === "ai" && source === "human" && movedOrReassigned) {
+    await logScheduleOverride({
+      sessionId: id,
+      patientId: existing.patientId,
+      therapistId: existing.therapistId,
+      therapyType: existing.therapyType,
+      originalStartTime: new Date(existing.startTime),
+      overrideType: data.therapistId !== undefined && data.therapistId !== existing.therapistId ? "reassigned" : "moved",
+    });
+    // Ownership flips to the human who just overrode it, so later edits aren't re-logged.
+    nextData.source = "human";
+  }
+
+  await db.update(therapySessions).set(nextData).where(eq(therapySessions.id, id));
   return { success: true };
 }
 
-export async function deleteTherapySession(id: number) {
+export async function deleteTherapySession(id: number, source: "human" | "ai" = "human") {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+
+  const existing = await getSessionById(id);
+  if (existing && existing.source === "ai" && source === "human") {
+    await logScheduleOverride({
+      sessionId: id,
+      patientId: existing.patientId,
+      therapistId: existing.therapistId,
+      therapyType: existing.therapyType,
+      originalStartTime: new Date(existing.startTime),
+      overrideType: "cancelled",
+    });
+  }
+
   await db.delete(therapySessions).where(eq(therapySessions.id, id));
   return { success: true };
 }
@@ -393,7 +457,7 @@ export async function clearSchedule(timeframe: "daily" | "weekly", referenceDate
   return { success: true, timeframe, therapistId, deletedSessions: deleted };
 }
 
-export async function copyDayToNextDay(referenceDate: Date) {
+export async function copyDayToNextDay(referenceDate: Date, source: "human" | "ai" = "human") {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
@@ -421,7 +485,7 @@ export async function copyDayToNextDay(referenceDate: Date) {
         deliveryMode: s.deliveryMode,
         notes: s.notes,
         status: s.status,
-      });
+      }, false, source);
       sessionIds.push(created.id);
     } catch (err) {
       if (err instanceof SchedulingConflictError) {
@@ -434,7 +498,7 @@ export async function copyDayToNextDay(referenceDate: Date) {
   return { success: true, count: sessionIds.length, skippedConflicts, sessionIds };
 }
 
-export async function copyPatientSessionsToNextDay(patientId: number, referenceDate: Date) {
+export async function copyPatientSessionsToNextDay(patientId: number, referenceDate: Date, source: "human" | "ai" = "human") {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
@@ -466,7 +530,7 @@ export async function copyPatientSessionsToNextDay(patientId: number, referenceD
         deliveryMode: s.deliveryMode,
         notes: s.notes,
         status: s.status,
-      });
+      }, false, source);
       sessionIds.push(created.id);
     } catch (err) {
       if (err instanceof SchedulingConflictError) {
@@ -479,7 +543,7 @@ export async function copyPatientSessionsToNextDay(patientId: number, referenceD
   return { success: true, count: sessionIds.length, skippedConflicts, sessionIds };
 }
 
-export async function movePatientSessionsToNextDay(patientId: number, referenceDate: Date) {
+export async function movePatientSessionsToNextDay(patientId: number, referenceDate: Date, source: "human" | "ai" = "human") {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
@@ -504,7 +568,7 @@ export async function movePatientSessionsToNextDay(patientId: number, referenceD
       await updateTherapySession(s.id, {
         startTime: new Date(new Date(s.startTime).getTime() + 24 * 60 * 60 * 1000),
         endTime: new Date(new Date(s.endTime).getTime() + 24 * 60 * 60 * 1000),
-      });
+      }, false, source);
       sessionIds.push(s.id);
     } catch (err) {
       if (err instanceof SchedulingConflictError) {
@@ -754,6 +818,42 @@ export async function deleteAdditionalMinutes(id: number) {
   await db.delete(patientAdditionalMinutes).where(eq(patientAdditionalMinutes.id, id));
 }
 
+/* ---------------------------------------------------------------------------
+ * Morning gap-fill digest
+ * ------------------------------------------------------------------------ */
+
+export async function getMorningDigestForDate(dateKey: string) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(morningDigest).where(eq(morningDigest.date, dateKey));
+}
+
+/** Idempotent: clears any existing rows for this date first, so re-running the job for the
+ *  same morning (e.g. a manual refresh, or the scheduler firing twice) replaces rather than
+ *  duplicates. */
+export async function replaceMorningDigestForDate(dateKey: string, entries: Omit<InsertMorningDigestEntry, "id" | "createdAt" | "date">[]) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(morningDigest).where(eq(morningDigest.date, dateKey));
+  if (entries.length === 0) return;
+  await db.insert(morningDigest).values(entries.map((e) => ({ ...e, date: dateKey })));
+}
+
+/** Whether the at-risk email digest has already gone out for this date -- the idempotency check
+ *  server/atRiskDigestEmail.ts consults before sending (see digestEmailLog in the schema). */
+export async function hasDigestEmailBeenSentForDate(dateKey: string): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const rows = await db.select().from(digestEmailLog).where(eq(digestEmailLog.date, dateKey)).limit(1);
+  return rows.length > 0;
+}
+
+export async function recordDigestEmailSent(dateKey: string, recipientCount: number, atRiskCount: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(digestEmailLog).values({ date: dateKey, recipientCount, atRiskCount });
+}
+
 export async function getBoardHistory() {
   const db = await getDb();
   if (!db) return [];
@@ -849,4 +949,124 @@ export async function seedTeamsIfEmpty() {
   } catch (error) {
     console.error("[DEBUG] seedTeamsIfEmpty: Error", error);
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * Attendance / Call-Off Helpers
+ * ------------------------------------------------------------------------ */
+
+export async function getTherapistAbsences(date: Date) {
+  const db = await getDb();
+  if (!db) return [];
+  const { startOfDay, endOfDay } = dayBounds(date);
+  return db
+    .select()
+    .from(therapistAbsences)
+    .where(and(gte(therapistAbsences.date, startOfDay), lte(therapistAbsences.date, endOfDay)));
+}
+
+export async function callOffTherapist(therapistId: number, date: Date, reason: string = "Call-Off") {
+  const db = await getDb();
+  if (!db) throw new Error("DB uninitialized");
+
+  const { startOfDay, endOfDay } = dayBounds(date);
+
+  // 1. Mark absent
+  await db.insert(therapistAbsences).values({
+    therapistId,
+    date: startOfDay,
+    reason,
+  });
+
+  // 2. Fetch the target therapist to know their discipline
+  const [targetTherapist] = await db.select().from(therapists).where(eq(therapists.id, therapistId));
+  if (!targetTherapist) {
+     return { success: true, reAssignedCount: 0, unassignedCount: 0 };
+  }
+
+  // 3. Find candidates of the same discipline
+  const allCandidates = await db.select().from(therapists).where(eq(therapists.therapyType, targetTherapist.therapyType));
+  
+  // Exclude the target and any already absent therapists
+  const absentRecords = await db.select().from(therapistAbsences).where(
+      and(gte(therapistAbsences.date, startOfDay), lte(therapistAbsences.date, endOfDay))
+  );
+  const absentIds = new Set(absentRecords.map(r => r.therapistId));
+  
+  const candidates = allCandidates.filter(t => !absentIds.has(t.id));
+
+  // 4. Fetch their sessions
+  const affectedSessions = await db
+    .select()
+    .from(therapySessions)
+    .where(
+      and(
+        eq(therapySessions.therapistId, therapistId),
+        gte(therapySessions.startTime, startOfDay),
+        lte(therapySessions.startTime, endOfDay)
+      )
+    );
+
+  let reAssignedCount = 0;
+  let unassignedCount = 0;
+  const reassignedTo: Record<number, number> = {};
+
+  for (const session of affectedSessions) {
+    let reAssigned = false;
+    for (const candidate of candidates) {
+      try {
+        await assertNoSchedulingConflict({
+          patientId: session.patientId,
+          therapistId: candidate.id,
+          startTime: session.startTime,
+          endTime: session.endTime,
+          deliveryMode: session.deliveryMode as "individual" | "concurrent" | "group",
+          excludeSessionId: session.id,
+        });
+        
+        // Success! No conflict. Reassign to this candidate.
+        await db.update(therapySessions)
+          .set({ therapistId: candidate.id })
+          .where(eq(therapySessions.id, session.id));
+          
+        reAssignedCount++;
+        reassignedTo[candidate.id] = (reassignedTo[candidate.id] || 0) + 1;
+        reAssigned = true;
+        break; // Stop looking for a candidate for this session
+      } catch (err) {
+        if (err instanceof SchedulingConflictError) {
+           continue; // try next candidate
+        }
+        throw err;
+      }
+    }
+
+    if (!reAssigned) {
+      // Unassigned gap, stays as 'scheduled' so it can still be filled
+      await db.update(therapySessions)
+        .set({ therapistId: null, status: "scheduled" })
+        .where(eq(therapySessions.id, session.id));
+      unassignedCount++;
+    }
+  }
+
+  return { success: true, reAssignedCount, unassignedCount, reassignedTo };
+}
+
+export async function cancelCallOffTherapist(therapistId: number, date: Date) {
+  const db = await getDb();
+  if (!db) throw new Error("DB uninitialized");
+
+  const { startOfDay, endOfDay } = dayBounds(date);
+  await db
+    .delete(therapistAbsences)
+    .where(
+      and(
+        eq(therapistAbsences.therapistId, therapistId),
+        gte(therapistAbsences.date, startOfDay),
+        lte(therapistAbsences.date, endOfDay)
+      )
+    );
+
+  return { success: true };
 }

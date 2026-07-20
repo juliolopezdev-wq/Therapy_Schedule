@@ -40,6 +40,10 @@ export const therapists = sqliteTable("therapists", {
   workDays: text("workDays"),
   workStartTime: text("workStartTime"), // "HH:MM", 24-hour
   workEndTime: text("workEndTime"), // "HH:MM", 24-hour
+  // PRN/per-diem staff -- their availability isn't guaranteed the way regular staff's is, so
+  // PAMi's risk-tier logic (server/riskAssessment.ts) requires human confirmation before writing
+  // to their schedule, even for an action that would otherwise auto-execute.
+  isPRN: integer("isPRN", { mode: "boolean" }).default(false).notNull(),
   createdAt: integer("createdAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
   updatedAt: integer("updatedAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
 });
@@ -54,6 +58,7 @@ export const patients = sqliteTable("patients", {
   notes: text("notes"),
   isDischarged: integer("isDischarged", { mode: 'boolean' }).default(false).notNull(),
   admissionDate: text("admissionDate"),
+  estimatedDischargeDate: text("estimatedDischargeDate"),
   weeklyMinuteTarget: integer("weeklyMinuteTarget").default(900).notNull(),
   ptTarget: integer("ptTarget"),
   otTarget: integer("otTarget"),
@@ -96,6 +101,12 @@ export const therapySessions = sqliteTable("therapySessions", {
   status: text("status", { enum: ["scheduled", "completed", "missed_refusal", "missed_clinical_hold", "missed_staffing", "missed_other"] }).default("scheduled").notNull(),
   missedReason: text("missedReason"),
   notes: text("notes"),
+  // Who made this booking/edit exist in its current form -- "ai" for PAMi tool calls, "human" for
+  // everything else (including a human editing a session PAMi originally created). Feeds the
+  // override-learning loop in server/preferenceLearning.ts: a human edit/cancel of a still-"ai"
+  // session is logged as an override (see scheduleOverrides below), then this flips to "human" so
+  // later edits to the same session aren't re-logged as new overrides.
+  source: text("source", { enum: ["human", "ai"] }).default("human").notNull(),
   createdAt: integer("createdAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
   updatedAt: integer("updatedAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
 });
@@ -155,6 +166,61 @@ export const patientAdditionalMinutes = sqliteTable("patientAdditionalMinutes", 
 export type PatientAdditionalMinutes = typeof patientAdditionalMinutes.$inferSelect;
 export type InsertPatientAdditionalMinutes = typeof patientAdditionalMinutes.$inferInsert;
 
+// One row per behind-target patient, per morning the gap-fill digest job ran. Persisted (not
+// just recomputed on the fly) so the "ran automatically this morning" guarantee survives a
+// server restart/cold-start -- see server/_core/digestScheduler.ts for why that matters on a
+// host like Render that can spin an idle instance down overnight.
+export const morningDigest = sqliteTable("morningDigest", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  date: text("date").notNull(), // "YYYY-MM-DD", the morning this digest is for
+  patientId: integer("patientId").notNull(),
+  patientName: text("patientName").notNull(),
+  roomNumber: text("roomNumber").notNull(),
+  remainingMinutes: integer("remainingMinutes").notNull(),
+  target: integer("target").notNull(),
+  atRisk: integer("atRisk", { mode: "boolean" }).notNull(),
+  // Array of { startTime (ISO string), durationMinutes, therapistId, therapistName, reason }
+  proposedSlots: text("proposedSlots", { mode: "json" }).notNull(),
+  createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type MorningDigestEntry = typeof morningDigest.$inferSelect;
+export type InsertMorningDigestEntry = typeof morningDigest.$inferInsert;
+
+// One row per time a human directly edited or cancelled a session that PAMi (the AI) had created
+// or last touched -- the "self-correcting feedback loop" signal. server/preferenceLearning.ts
+// mines these for recurring (therapist, day-of-week, time-of-day) patterns and turns them into
+// plain-language standing preferences fed back into PAMi's system prompt, so staff don't have to
+// keep re-explaining the same rule (e.g. "don't put Karin on overnight Fridays").
+export const scheduleOverrides = sqliteTable("scheduleOverrides", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  sessionId: integer("sessionId").notNull(),
+  patientId: integer("patientId").notNull(),
+  therapistId: integer("therapistId"), // PAMi's original therapist choice, before the override
+  therapyType: text("therapyType").notNull(),
+  originalStartTime: integer("originalStartTime", { mode: "timestamp" }).notNull(),
+  overrideType: text("overrideType", { enum: ["moved", "reassigned", "cancelled"] }).notNull(),
+  createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type ScheduleOverride = typeof scheduleOverrides.$inferSelect;
+export type InsertScheduleOverride = typeof scheduleOverrides.$inferInsert;
+
+// One row per day the at-risk email digest has actually been sent. Existence of a row for
+// today's date key is the idempotency check -- server/atRiskDigestEmail.ts consults this before
+// sending so the every-15-minutes scheduler tick (server/_core/digestScheduler.ts) doesn't spam
+// staff with the same email on every check once it's gone out once that morning.
+export const digestEmailLog = sqliteTable("digestEmailLog", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  date: text("date").notNull(), // "YYYY-MM-DD"
+  recipientCount: integer("recipientCount").notNull(),
+  atRiskCount: integer("atRiskCount").notNull(),
+  sentAt: integer("sentAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type DigestEmailLog = typeof digestEmailLog.$inferSelect;
+export type InsertDigestEmailLog = typeof digestEmailLog.$inferInsert;
+
 // Relations
 export const userRelations = relations(users, ({ one }) => ({
   therapist: one(therapists),
@@ -188,3 +254,13 @@ export const sessionRelations = relations(therapySessions, ({ one }) => ({
     references: [therapists.id],
   }),
 }));
+export const therapistAbsences = sqliteTable("therapistAbsences", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  therapistId: integer("therapistId").notNull(),
+  date: integer("date", { mode: 'timestamp' }).notNull(),
+  reason: text("reason").notNull().default("Call-Off"),
+  createdAt: integer("createdAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type TherapistAbsence = typeof therapistAbsences.$inferSelect;
+export type InsertTherapistAbsence = typeof therapistAbsences.$inferInsert;

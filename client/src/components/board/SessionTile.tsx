@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import { AlertTriangle, Lock, CheckCircle2, XCircle } from "lucide-react";
+import { AlertTriangle, Lock, CheckCircle2, XCircle, Users } from "lucide-react";
 import { THERAPY_META, isMissedStatus, type TherapyType, type SessionStatus, type DeliveryMode } from "@/lib/board";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -45,9 +45,12 @@ export function SessionTile({
 
   const [resizeDeltaSlots, setResizeDeltaSlots] = useState(0);
 
-  const handlePointerDown = (e: React.PointerEvent) => {
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation();
     e.preventDefault();
+
+    const target = e.currentTarget;
+    target.setPointerCapture(e.pointerId);
 
     const startX = e.clientX;
     const initialSpan = session.slotSpan;
@@ -60,8 +63,9 @@ export function SessionTile({
     };
 
     const onUp = (upEvent: PointerEvent) => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+      target.releasePointerCapture(upEvent.pointerId);
+      target.removeEventListener("pointermove", onMove);
+      target.removeEventListener("pointerup", onUp);
 
       const dx = upEvent.clientX - startX;
       let finalDeltaSlots = Math.round(dx / slotWidth);
@@ -73,8 +77,8 @@ export function SessionTile({
       }
     };
 
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    target.addEventListener("pointermove", onMove);
+    target.addEventListener("pointerup", onUp);
   };
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
@@ -132,9 +136,9 @@ export function SessionTile({
       style={style}
       {...listeners}
       {...attributes}
-      onClick={(e) => {
+      onDoubleClick={(e) => {
         e.stopPropagation();
-        if (!isDragging) onClick?.(session);
+        onClick?.(session);
       }}
       className={cn(
         "group relative flex h-full items-center justify-between gap-1 overflow-hidden rounded px-1.5 text-left",
@@ -177,6 +181,9 @@ export function SessionTile({
         <div className="flex min-w-0 flex-1 flex-col leading-none">
           <div className="flex items-center gap-1">
             {session.therapyType === "Block" && <Lock className="h-2.5 w-2.5" style={{ color: textColor }} strokeWidth={3} />}
+            {(session.deliveryMode === "group" || session.deliveryMode === "concurrent") && (
+              <Users className="h-2.5 w-2.5" style={{ color: textColor }} strokeWidth={2.5} />
+            )}
             {isMissed && <XCircle className="h-2.5 w-2.5" style={{ color: textColor }} strokeWidth={2.5} />}
             <span className={cn("text-[10px] font-bold uppercase tracking-wide", isMissed && "line-through")} style={{ color: textColor }}>
               {session.therapyType === "Block" ? "Blocked" : meta.label}

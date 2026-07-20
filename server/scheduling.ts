@@ -2,12 +2,15 @@ import {
   getPatients,
   getPatientById,
   getTherapists,
+  getTherapySessions,
   getTherapySessionsForDateRange,
   createTherapySession,
   getTeams,
   getStatusFlagsForDate,
   getAdditionalMinutesForDateRange,
   getMostRecentSessionsForPatients,
+  getMorningDigestForDate,
+  replaceMorningDigestForDate,
   SchedulingConflictError,
 } from "./db";
 import {
@@ -34,6 +37,15 @@ export interface GapFillSuggestion {
   therapistId: number | null;
   therapistName: string | null;
   reason: string;
+}
+
+export interface PredictiveForecast {
+  targetDate: string;
+  dayOfWeek: string;
+  expectedMissedRate: number;
+  expectedAdmissions: number;
+  suggestedBufferMinutes: number;
+  topAvailableTherapists: { id: number; name: string; availableMinutes: number }[];
 }
 
 const BLOCK_OPTIONS = [60, 45, 30];
@@ -114,6 +126,7 @@ export async function getWeeklyMinutesSummary(referenceDate: Date = new Date()):
       patientName: patient.name,
       roomNumber: patient.roomNumber,
       teamId: patient.teamId ?? null,
+      estimatedDischargeDate: patient.estimatedDischargeDate ?? null,
       weekStart,
       weekEnd,
       target,
@@ -369,7 +382,7 @@ export async function autoScheduleAllGaps(
           endTime,
           durationMinutes: suggestion.durationMinutes,
           notes: "Auto-scheduled by AI Assistant",
-        });
+        }, false, "ai");
         sessionIds.push(created.id);
         byDiscipline[discipline]++;
       } catch (err) {
@@ -417,7 +430,7 @@ export async function autoSchedulePatientGaps(
         endTime,
         durationMinutes: suggestion.durationMinutes,
         notes: "Auto-scheduled by AI Assistant",
-      });
+      }, false, "ai");
       sessionIds.push(created.id);
       byDiscipline[discipline]++;
     } catch (err) {
@@ -882,4 +895,205 @@ export async function getCalendarView(
       };
     })
     .sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+}
+
+/* ------------------------------------------------------------------------ */
+/* Morning gap-fill digest -- runs automatically (see _core/digestScheduler) */
+/* instead of waiting for someone to open the board or ask PAMi.            */
+/* ------------------------------------------------------------------------ */
+
+export interface MorningDigestSlot {
+  startTime: string; // ISO -- stored as JSON, so a plain string, not a Date
+  durationMinutes: number;
+  therapistId: number | null;
+  therapistName: string | null;
+  therapyType: "PT" | "OT" | "SLP";
+  reason: string;
+}
+
+export interface MorningDigestPatientEntry {
+  patientId: number;
+  patientName: string;
+  roomNumber: string;
+  remainingMinutes: number;
+  target: number;
+  atRisk: boolean;
+  proposedSlots: MorningDigestSlot[];
+}
+
+/**
+ * Computes today's gap-fill digest fresh: every active, non-Medical-Hold patient still behind
+ * their weekly target, each with up to 3 proposed open slots (read-only -- this proposes, it
+ * never books). Does not touch the DB beyond reads; `getOrCreateTodaysDigest` is what persists it.
+ */
+export async function computeMorningDigest(referenceDate: Date = new Date()): Promise<MorningDigestPatientEntry[]> {
+  const summary = await getWeeklyMinutesSummary(referenceDate);
+  const todaysFlags = await getStatusFlagsForDate(referenceDate);
+  const medicalHoldIds = new Set(todaysFlags.filter((f) => f.flagType === "Medical Hold").map((f) => f.patientId));
+
+  const behindTarget = summary.filter((p) => p.remainingMinutes > 0 && !medicalHoldIds.has(p.patientId));
+
+  const entries = await Promise.all(
+    behindTarget.map(async (p): Promise<MorningDigestPatientEntry> => {
+      // Same discipline-by-actual-shortfall logic as auto-schedule -- a hardcoded "PT" here
+      // would silently reintroduce the bug that fix corrected.
+      const discipline = await pickAutoScheduleDiscipline(p.patientId, referenceDate);
+      const suggestions = await getGapFillSuggestions(p.patientId, referenceDate, discipline);
+      return {
+        patientId: p.patientId,
+        patientName: p.patientName,
+        roomNumber: p.roomNumber,
+        remainingMinutes: p.remainingMinutes,
+        target: p.target,
+        atRisk: p.atRisk,
+        proposedSlots: suggestions.slice(0, 3).map((s) => ({
+          startTime: s.startTime.toISOString(),
+          durationMinutes: s.durationMinutes,
+          therapistId: s.therapistId,
+          therapistName: s.therapistName,
+          therapyType: discipline,
+          reason: s.reason,
+        })),
+      };
+    }),
+  );
+
+  // Most urgent first, matching how PAMi's own context prioritizes when it has to be brief.
+  return entries.sort((a, b) => {
+    if (a.atRisk !== b.atRisk) return a.atRisk ? -1 : 1;
+    return b.remainingMinutes - a.remainingMinutes;
+  });
+}
+
+/**
+ * Returns today's digest, generating and persisting it on first request if it doesn't exist yet.
+ * This is the actual "runs automatically instead of waiting to be asked" guarantee: the
+ * in-process scheduler (server/_core/digestScheduler.ts) calls this every morning while the
+ * server is warm, but Render (and similar hosts) can spin an idle instance down overnight, so a
+ * scheduler alone isn't reliable -- whichever happens first, the periodic check or the first
+ * real request that morning (board load, PAMi turn), ends up generating and caching it.
+ */
+export async function getOrCreateTodaysDigest(referenceDate: Date = new Date()): Promise<MorningDigestPatientEntry[]> {
+  const dateKey = formatDateKey(referenceDate);
+  const existing = await getMorningDigestForDate(dateKey);
+  if (existing.length > 0) {
+    return existing
+      .map((row) => ({
+        patientId: row.patientId,
+        patientName: row.patientName,
+        roomNumber: row.roomNumber,
+        remainingMinutes: row.remainingMinutes,
+        target: row.target,
+        atRisk: row.atRisk,
+        proposedSlots: row.proposedSlots as MorningDigestSlot[],
+      }))
+      .sort((a, b) => (a.atRisk !== b.atRisk ? (a.atRisk ? -1 : 1) : b.remainingMinutes - a.remainingMinutes));
+  }
+
+  const entries = await computeMorningDigest(referenceDate);
+  await replaceMorningDigestForDate(
+    dateKey,
+    entries.map((e) => ({
+      patientId: e.patientId,
+      patientName: e.patientName,
+      roomNumber: e.roomNumber,
+      remainingMinutes: e.remainingMinutes,
+      target: e.target,
+      atRisk: e.atRisk,
+      proposedSlots: e.proposedSlots,
+    })),
+  );
+  return entries;
+}
+
+export async function getPredictiveForecast(targetDate: Date): Promise<PredictiveForecast> {
+  const dayOfWeekIndex = targetDate.getDay();
+  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const dayOfWeekName = days[dayOfWeekIndex];
+
+  const [allSessions, allPatients, therapists] = await Promise.all([
+    getTherapySessions(),
+    getPatients(),
+    getTherapists(),
+  ]);
+
+  let totalSessionsOnDay = 0;
+  let missedSessionsOnDay = 0;
+
+  for (const session of allSessions) {
+    if (session.therapyType === "Block") continue;
+    const sessionDay = new Date(session.startTime).getDay();
+    if (sessionDay === dayOfWeekIndex) {
+      totalSessionsOnDay++;
+      if (isMissedStatus(session.status)) {
+        missedSessionsOnDay++;
+      }
+    }
+  }
+
+  const expectedMissedRate = totalSessionsOnDay > 0 ? missedSessionsOnDay / totalSessionsOnDay : 0;
+
+  let admissionsOnDay = 0;
+  let totalWeeksOfData = 1;
+
+  if (allPatients.length > 0) {
+    let earliestAdmission = new Date();
+    for (const p of allPatients) {
+      if (p.admissionDate) {
+        const adDate = new Date(p.admissionDate);
+        if (adDate < earliestAdmission) earliestAdmission = adDate;
+        if (adDate.getDay() === dayOfWeekIndex) {
+          admissionsOnDay++;
+        }
+      }
+    }
+    const daysSinceEarliest = (new Date().getTime() - earliestAdmission.getTime()) / (1000 * 60 * 60 * 24);
+    totalWeeksOfData = Math.max(1, Math.ceil(daysSinceEarliest / 7));
+  }
+
+  const expectedAdmissions = admissionsOnDay / totalWeeksOfData;
+
+  let expectedStaffCallOffs = 0;
+  for (const session of allSessions) {
+    if (session.therapyType === "Block") continue;
+    if (new Date(session.startTime).getDay() === dayOfWeekIndex && session.status === "missed_staffing") {
+      expectedStaffCallOffs++;
+    }
+  }
+  const staffCallOffRate = totalSessionsOnDay > 0 ? expectedStaffCallOffs / totalSessionsOnDay : 0;
+  
+  const suggestedBufferMinutes = Math.round(expectedAdmissions * 60 + staffCallOffRate * 1200);
+
+  const targetDateStart = startOfDayLocal(targetDate);
+  const targetDateEnd = new Date(targetDateStart);
+  targetDateEnd.setHours(23, 59, 59, 999);
+
+  const targetDaySessions = allSessions.filter(
+    (s) => new Date(s.startTime) >= targetDateStart && new Date(s.startTime) <= targetDateEnd
+  );
+
+  const therapistAvailability = therapists.map((t) => {
+    let scheduledMinutes = 0;
+    for (const s of targetDaySessions) {
+      if (s.therapistId === t.id) {
+        scheduledMinutes += s.durationMinutes;
+      }
+    }
+    return {
+      id: t.id,
+      name: t.name,
+      availableMinutes: Math.max(0, 480 - scheduledMinutes),
+    };
+  });
+
+  therapistAvailability.sort((a, b) => b.availableMinutes - a.availableMinutes);
+
+  return {
+    targetDate: targetDate.toISOString(),
+    dayOfWeek: dayOfWeekName,
+    expectedMissedRate,
+    expectedAdmissions,
+    suggestedBufferMinutes,
+    topAvailableTherapists: therapistAvailability.slice(0, 3),
+  };
 }

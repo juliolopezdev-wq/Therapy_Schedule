@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Sheet,
   SheetContent,
@@ -18,7 +19,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Pencil, Plus, Trash2, Users } from "lucide-react";
+import { Pencil, Plus, Trash2, Users, UserPlus } from "lucide-react";
 
 interface Patient {
   id: number;
@@ -32,7 +33,7 @@ interface PatientPanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   patients: Patient[];
-  onAdd: () => void;
+  onAdd: (initialData?: Partial<Patient>) => void;
   onEdit: (patient: Patient) => void;
   onDelete: (id: number) => void;
   therapists: { id: number; name: string; teamId: number | null }[];
@@ -47,7 +48,12 @@ export function PatientPanel({
   onEdit,
   onDelete,
 }: PatientPanelProps) {
+  const [showDischarged, setShowDischarged] = useState(false);
+  
   const activePatients = patients.filter((p) => !p.isDischarged);
+  const dischargedPatients = patients.filter((p) => p.isDischarged);
+  
+  const displayedPatients = showDischarged ? dischargedPatients : activePatients;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -61,21 +67,38 @@ export function PatientPanel({
           </SheetDescription>
         </SheetHeader>
 
-        <div className="border-b border-slate-100 p-4">
-          <Button className="w-full" onClick={onAdd}>
+        <div className="border-b border-slate-100 p-4 space-y-3">
+          <Button className="w-full" onClick={() => onAdd()}>
             <Plus className="mr-1 h-4 w-4" /> Add Patient
           </Button>
+          
+          <div className="flex rounded-md bg-slate-100 p-1">
+            <button
+              className={`flex-1 rounded py-1.5 text-sm font-medium transition-all ${!showDischarged ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+              onClick={() => setShowDischarged(false)}
+            >
+              Active ({activePatients.length})
+            </button>
+            <button
+              className={`flex-1 rounded py-1.5 text-sm font-medium transition-all ${showDischarged ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+              onClick={() => setShowDischarged(true)}
+            >
+              Discharged ({dischargedPatients.length})
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
-          {activePatients.length === 0 ? (
+          {displayedPatients.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 py-12 text-center">
               <Users className="h-8 w-8 text-slate-300" />
-              <p className="text-sm text-slate-500">No active patients yet.</p>
+              <p className="text-sm text-slate-500">
+                {showDischarged ? "No discharged patients." : "No active patients yet."}
+              </p>
             </div>
           ) : (
             <ul className="space-y-2">
-              {activePatients.map((patient) => (
+              {displayedPatients.map((patient) => (
                 <li
                   key={patient.id}
                   className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3"
@@ -99,14 +122,25 @@ export function PatientPanel({
                     ) : null}
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-slate-500"
-                      onClick={() => onEdit(patient)}
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </Button>
+                    {showDischarged ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs font-semibold text-blue-600 border-blue-200 bg-blue-50 hover:bg-blue-100"
+                        onClick={() => onAdd({ name: patient.name, notes: patient.notes, isDischarged: false })}
+                      >
+                        <UserPlus className="mr-1 h-3 w-3" /> Re-admit
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-slate-500"
+                        onClick={() => onEdit(patient)}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                    )}
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
                         <Button
