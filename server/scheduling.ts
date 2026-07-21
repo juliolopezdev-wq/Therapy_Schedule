@@ -11,6 +11,7 @@ import {
   getMostRecentSessionsForPatients,
   getMorningDigestForDate,
   replaceMorningDigestForDate,
+  hasEverHadTherapyType,
   SchedulingConflictError,
 } from "./db";
 import {
@@ -113,7 +114,14 @@ export async function getWeeklyMinutesSummary(referenceDate: Date = new Date()):
     const daysElapsed = Math.max(0, 7 - daysRemaining);
     const proRatedTarget = (target / 7) * daysElapsed;
 
-    const remainingMinutes = Math.max(0, target - completedMinutes);
+    // Credits pending (still-scheduled, not-yet-completed) minutes same as getGapFillSuggestions'
+    // own "covered" calc does -- a patient already fully booked for the week has nothing left to
+    // schedule even before any of those sessions get marked completed. Counting only completed
+    // minutes here (as this used to) meant every patient looked like they needed their *entire*
+    // target re-booked from scratch until sessions were marked done, which both overstated "still
+    // needed to deliver" everywhere this number is shown/emailed/spoken by PAMi, and could have
+    // driven gap-fill to keep proposing sessions on top of an already-full schedule.
+    const remainingMinutes = Math.max(0, target - completedMinutes - pendingMinutes);
     const projectedTotalMinutes = completedMinutes + pendingMinutes;
     // At risk if projected end-of-week total (assuming zero further attrition) still falls short of target,
     // or if delivered-to-date is already behind the pro-rated target for elapsed days.
@@ -317,16 +325,30 @@ export async function getGapFillSuggestions(
   return suggestions;
 }
 
+type DisciplineTotals = { PT: number; OT: number; SLP: number };
+
 /**
  * Which discipline to book for a gap-fill session, based on the patient's actual shortfall
  * against their optional per-discipline targets (ptTarget/otTarget/slpTarget) -- previously
  * auto-schedule hardcoded "PT" regardless of what the patient actually needed. Falls back to
  * PT (the prior, unconditional behavior) when a patient has none of the three targets set,
  * since there's no per-discipline data to reason from in that case.
+ *
+ * Speech is a special case: it isn't part of every rehab plan the way PT/OT are, so it's only
+ * ever offered as a candidate when this patient has an actual history of receiving it (see
+ * hasEverHadTherapyType) -- a target field alone isn't enough, since that can be set
+ * speculatively without therapy having actually happened. A patient with no SLP history never
+ * gets speech auto-scheduled, no matter what slpTarget says.
+ *
+ * `bookedThisRun` lets a caller filling multiple gaps for the same patient in one pass balance
+ * across disciplines instead of dumping every session into whichever one had the largest
+ * shortfall at the very start -- pass the running per-discipline minutes already queued so far
+ * this run, and each call re-ranks against the *remaining* shortfall.
  */
 async function pickAutoScheduleDiscipline(
   patientId: number,
   referenceDate: Date,
+  bookedThisRun: DisciplineTotals = { PT: 0, OT: 0, SLP: 0 },
 ): Promise<"PT" | "OT" | "SLP"> {
   const patient = await getPatientById(patientId);
   const ptTarget = (patient as any)?.ptTarget as number | null | undefined;
@@ -336,23 +358,89 @@ async function pickAutoScheduleDiscipline(
 
   const weekStart = patientWeekStart(patient.admissionDate, referenceDate);
   const weekEnd = patientWeekEnd(weekStart);
-  const weekSessions = await getTherapySessionsForDateRange(weekStart, weekEnd);
+  const [weekSessions, hasSpeechHistory] = await Promise.all([
+    getTherapySessionsForDateRange(weekStart, weekEnd),
+    hasEverHadTherapyType(patientId, "SLP"),
+  ]);
 
   const deliveredOrPending = (type: "PT" | "OT" | "SLP") =>
     weekSessions
       .filter((s) => s.patientId === patientId && s.therapyType === type && !isMissedStatus(s.status))
       .reduce((sum, s) => sum + s.durationMinutes, 0);
 
-  const shortfalls: { type: "PT" | "OT" | "SLP"; remaining: number }[] = [
-    { type: "PT", remaining: Math.max(0, (ptTarget ?? 0) - deliveredOrPending("PT")) },
-    { type: "OT", remaining: Math.max(0, (otTarget ?? 0) - deliveredOrPending("OT")) },
-    { type: "SLP", remaining: Math.max(0, (slpTarget ?? 0) - deliveredOrPending("SLP")) },
+  const candidates: { type: "PT" | "OT" | "SLP"; remaining: number }[] = [
+    { type: "PT", remaining: Math.max(0, (ptTarget ?? 0) - deliveredOrPending("PT") - bookedThisRun.PT) },
+    { type: "OT", remaining: Math.max(0, (otTarget ?? 0) - deliveredOrPending("OT") - bookedThisRun.OT) },
   ];
-  shortfalls.sort((a, b) => b.remaining - a.remaining);
-  return shortfalls[0].remaining > 0 ? shortfalls[0].type : "PT";
+  if (hasSpeechHistory) {
+    candidates.push({ type: "SLP", remaining: Math.max(0, (slpTarget ?? 0) - deliveredOrPending("SLP") - bookedThisRun.SLP) });
+  }
+  candidates.sort((a, b) => b.remaining - a.remaining);
+  return candidates[0].remaining > 0 ? candidates[0].type : "PT";
 }
 
 type DisciplineCounts = { PT: number; OT: number; SLP: number };
+
+/**
+ * Books gap-fill sessions for one patient, one slot at a time -- re-picking the discipline (see
+ * pickAutoScheduleDiscipline) before every single booking rather than once up front, so a
+ * patient who needs both PT and OT this week actually gets a balanced mix instead of every open
+ * slot landing in whichever discipline happened to have the largest shortfall at the start.
+ * Stops once every eligible discipline has no open suggestions left (or the iteration cap trips,
+ * as a defensive backstop -- a patient's weekly target bounds this well under it in practice).
+ */
+async function autoScheduleGapsForPatient(
+  patientId: number,
+  referenceDate: Date,
+): Promise<{ sessionIds: number[]; skippedConflicts: number; byDiscipline: DisciplineCounts }> {
+  const sessionIds: number[] = [];
+  const byDiscipline: DisciplineCounts = { PT: 0, OT: 0, SLP: 0 };
+  const bookedMinutes: DisciplineTotals = { PT: 0, OT: 0, SLP: 0 };
+  let skippedConflicts = 0;
+  const exhausted = new Set<"PT" | "OT" | "SLP">();
+
+  for (let i = 0; i < 40 && exhausted.size < 3; i++) {
+    const discipline = await pickAutoScheduleDiscipline(patientId, referenceDate, bookedMinutes);
+    if (exhausted.has(discipline)) {
+      // Every remaining candidate has already come up empty this run -- nothing left to try.
+      if (exhausted.size >= (discipline === "SLP" ? 1 : 2)) break;
+      continue;
+    }
+
+    const suggestions = await getGapFillSuggestions(patientId, referenceDate, discipline);
+    const next = suggestions[0];
+    if (!next || !next.therapistId) {
+      exhausted.add(discipline);
+      continue;
+    }
+
+    const startTime = next.startTime;
+    const endTime = new Date(startTime.getTime() + next.durationMinutes * 60000);
+    try {
+      const created = await createTherapySession({
+        patientId,
+        therapistId: next.therapistId,
+        therapyType: discipline,
+        startTime,
+        endTime,
+        durationMinutes: next.durationMinutes,
+        notes: "Auto-scheduled by AI Assistant",
+      }, false, "ai");
+      sessionIds.push(created.id);
+      byDiscipline[discipline]++;
+      bookedMinutes[discipline] += next.durationMinutes;
+    } catch (err) {
+      if (err instanceof SchedulingConflictError) {
+        skippedConflicts++;
+        exhausted.add(discipline); // avoid retrying the same busy slot in a tight loop
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  return { sessionIds, skippedConflicts, byDiscipline };
+}
 
 export async function autoScheduleAllGaps(
   referenceDate: Date = new Date(),
@@ -365,34 +453,12 @@ export async function autoScheduleAllGaps(
   for (const patient of summary) {
     if (patient.remainingMinutes <= 0) continue;
 
-    const discipline = await pickAutoScheduleDiscipline(patient.patientId, referenceDate);
-    const suggestions = await getGapFillSuggestions(patient.patientId, referenceDate, discipline);
-    for (const suggestion of suggestions) {
-      if (!suggestion.therapistId) continue;
-
-      const startTime = suggestion.startTime;
-      const endTime = new Date(startTime.getTime() + suggestion.durationMinutes * 60000);
-
-      try {
-        const created = await createTherapySession({
-          patientId: patient.patientId,
-          therapistId: suggestion.therapistId,
-          therapyType: discipline,
-          startTime,
-          endTime,
-          durationMinutes: suggestion.durationMinutes,
-          notes: "Auto-scheduled by AI Assistant",
-        }, false, "ai");
-        sessionIds.push(created.id);
-        byDiscipline[discipline]++;
-      } catch (err) {
-        if (err instanceof SchedulingConflictError) {
-          skippedConflicts++;
-          continue;
-        }
-        throw err;
-      }
-    }
+    const result = await autoScheduleGapsForPatient(patient.patientId, referenceDate);
+    sessionIds.push(...result.sessionIds);
+    byDiscipline.PT += result.byDiscipline.PT;
+    byDiscipline.OT += result.byDiscipline.OT;
+    byDiscipline.SLP += result.byDiscipline.SLP;
+    skippedConflicts += result.skippedConflicts;
   }
 
   return { count: sessionIds.length, sessionIds, skippedConflicts, byDiscipline };
@@ -409,37 +475,29 @@ export async function autoSchedulePatientGaps(
     return { count: 0, sessionIds: [], skippedConflicts: 0, byDiscipline: emptyDiscipline };
   }
 
-  const discipline = await pickAutoScheduleDiscipline(patientId, referenceDate);
+  const result = await autoScheduleGapsForPatient(patientId, referenceDate);
+  return { count: result.sessionIds.length, sessionIds: result.sessionIds, skippedConflicts: result.skippedConflicts, byDiscipline: result.byDiscipline };
+}
+
+export async function autoScheduleTeamGaps(
+  teamId: number,
+  referenceDate: Date = new Date(),
+): Promise<{ count: number; sessionIds: number[]; skippedConflicts: number; byDiscipline: DisciplineCounts }> {
+  const summary = await getWeeklyMinutesSummary(referenceDate);
+  const teamPatients = summary.filter(p => p.teamId === teamId);
   const sessionIds: number[] = [];
   const byDiscipline: DisciplineCounts = { PT: 0, OT: 0, SLP: 0 };
   let skippedConflicts = 0;
-  const suggestions = await getGapFillSuggestions(patient.patientId, referenceDate, discipline);
 
-  for (const suggestion of suggestions) {
-    if (!suggestion.therapistId) continue;
+  for (const patient of teamPatients) {
+    if (patient.remainingMinutes <= 0) continue;
 
-    const startTime = suggestion.startTime;
-    const endTime = new Date(startTime.getTime() + suggestion.durationMinutes * 60000);
-
-    try {
-      const created = await createTherapySession({
-        patientId: patient.patientId,
-        therapistId: suggestion.therapistId,
-        therapyType: discipline,
-        startTime,
-        endTime,
-        durationMinutes: suggestion.durationMinutes,
-        notes: "Auto-scheduled by AI Assistant",
-      }, false, "ai");
-      sessionIds.push(created.id);
-      byDiscipline[discipline]++;
-    } catch (err) {
-      if (err instanceof SchedulingConflictError) {
-        skippedConflicts++;
-        continue;
-      }
-      throw err;
-    }
+    const result = await autoScheduleGapsForPatient(patient.patientId, referenceDate);
+    sessionIds.push(...result.sessionIds);
+    byDiscipline.PT += result.byDiscipline.PT;
+    byDiscipline.OT += result.byDiscipline.OT;
+    byDiscipline.SLP += result.byDiscipline.SLP;
+    skippedConflicts += result.skippedConflicts;
   }
 
   return { count: sessionIds.length, sessionIds, skippedConflicts, byDiscipline };
@@ -936,9 +994,31 @@ export async function computeMorningDigest(referenceDate: Date = new Date()): Pr
   const entries = await Promise.all(
     behindTarget.map(async (p): Promise<MorningDigestPatientEntry> => {
       // Same discipline-by-actual-shortfall logic as auto-schedule -- a hardcoded "PT" here
-      // would silently reintroduce the bug that fix corrected.
-      const discipline = await pickAutoScheduleDiscipline(p.patientId, referenceDate);
-      const suggestions = await getGapFillSuggestions(p.patientId, referenceDate, discipline);
+      // would silently reintroduce the bug that fix corrected. Re-picked per proposed slot (not
+      // once for all 3) so the preview actually shows a balanced PT/OT/SLP mix when the patient
+      // needs more than one discipline, instead of 3 slots of whichever had the biggest shortfall
+      // at the start.
+      const bookedMinutes: DisciplineTotals = { PT: 0, OT: 0, SLP: 0 };
+      const proposedSlots: MorningDigestSlot[] = [];
+      for (let i = 0; i < 3; i++) {
+        const discipline = await pickAutoScheduleDiscipline(p.patientId, referenceDate, bookedMinutes);
+        const suggestions = await getGapFillSuggestions(p.patientId, referenceDate, discipline);
+        // Skip slots already proposed (getGapFillSuggestions doesn't know about the picks made
+        // earlier in this same loop, since nothing's actually booked yet to exclude them).
+        const next = suggestions.find(
+          (s) => !proposedSlots.some((existing) => existing.startTime === s.startTime.toISOString() && existing.therapistId === s.therapistId),
+        );
+        if (!next) break;
+        proposedSlots.push({
+          startTime: next.startTime.toISOString(),
+          durationMinutes: next.durationMinutes,
+          therapistId: next.therapistId,
+          therapistName: next.therapistName,
+          therapyType: discipline,
+          reason: next.reason,
+        });
+        bookedMinutes[discipline] += next.durationMinutes;
+      }
       return {
         patientId: p.patientId,
         patientName: p.patientName,
@@ -946,14 +1026,7 @@ export async function computeMorningDigest(referenceDate: Date = new Date()): Pr
         remainingMinutes: p.remainingMinutes,
         target: p.target,
         atRisk: p.atRisk,
-        proposedSlots: suggestions.slice(0, 3).map((s) => ({
-          startTime: s.startTime.toISOString(),
-          durationMinutes: s.durationMinutes,
-          therapistId: s.therapistId,
-          therapistName: s.therapistName,
-          therapyType: discipline,
-          reason: s.reason,
-        })),
+        proposedSlots,
       };
     }),
   );

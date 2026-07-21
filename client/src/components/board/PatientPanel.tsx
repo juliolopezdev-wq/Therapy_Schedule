@@ -57,8 +57,8 @@ export function PatientPanel({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-md">
-        <SheetHeader className="border-b border-slate-200 p-5">
+      <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-md glass-panel border-r-0 rounded-l-2xl">
+        <SheetHeader className="glass-header p-5">
           <SheetTitle className="flex items-center gap-2">
             <Users className="h-5 w-5 text-slate-500" /> Patient Management
           </SheetTitle>
@@ -67,20 +67,20 @@ export function PatientPanel({
           </SheetDescription>
         </SheetHeader>
 
-        <div className="border-b border-slate-100 p-4 space-y-3">
+        <div className="border-b border-white/40 p-4 space-y-3">
           <Button className="w-full" onClick={() => onAdd()}>
             <Plus className="mr-1 h-4 w-4" /> Add Patient
           </Button>
           
-          <div className="flex rounded-md bg-slate-100 p-1">
+          <div className="flex rounded-md glass-surface p-1 shadow-inner border border-white/20">
             <button
-              className={`flex-1 rounded py-1.5 text-sm font-medium transition-all ${!showDischarged ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+              className={`flex-1 rounded py-1.5 text-sm font-medium transition-all ${!showDischarged ? "bg-white text-primary shadow-sm" : "text-slate-500 hover:text-slate-700 hover:bg-white/60"}`}
               onClick={() => setShowDischarged(false)}
             >
               Active ({activePatients.length})
             </button>
             <button
-              className={`flex-1 rounded py-1.5 text-sm font-medium transition-all ${showDischarged ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}
+              className={`flex-1 rounded py-1.5 text-sm font-medium transition-all ${showDischarged ? "bg-white text-primary shadow-sm" : "text-slate-500 hover:text-slate-700 hover:bg-white/60"}`}
               onClick={() => setShowDischarged(true)}
             >
               Discharged ({dischargedPatients.length})
@@ -101,18 +101,18 @@ export function PatientPanel({
               {displayedPatients.map((patient) => (
                 <li
                   key={patient.id}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3"
+                  className="flex items-center justify-between gap-3 rounded-lg border border-white/40 glass-surface p-3"
                 >
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">
+                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-micro font-bold text-slate-600">
                         {patient.roomNumber}
                       </span>
                       <span className="truncate text-sm font-semibold text-slate-800">
                         {patient.name}
                       </span>
                       {patient.isDischarged ? (
-                        <Badge variant="outline" className="border-red-200 bg-red-50 text-[10px] text-red-700">
+                        <Badge variant="outline" className="border-red-200 bg-red-50 text-micro text-red-700">
                           DC
                         </Badge>
                       ) : null}
@@ -151,7 +151,7 @@ export function PatientPanel({
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </AlertDialogTrigger>
-                      <AlertDialogContent>
+                      <AlertDialogContent className="glass-panel p-6">
                         <AlertDialogHeader>
                           <AlertDialogTitle>Remove {patient.name}?</AlertDialogTitle>
                           <AlertDialogDescription>

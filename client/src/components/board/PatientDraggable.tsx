@@ -11,7 +11,7 @@ export function PatientDraggable({ patient, children, className }: { patient: an
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    zIndex: isDragging ? 50 : "auto",
+    zIndex: isDragging ? 50 : undefined,
   };
 
   return (
@@ -21,6 +21,7 @@ export function PatientDraggable({ patient, children, className }: { patient: an
       {...listeners}
       {...attributes}
       className={cn(
+        "cursor-grab touch-none select-none active:cursor-grabbing",
         className,
         isDragging && "opacity-50 ring-2 ring-primary relative z-50",
       )}

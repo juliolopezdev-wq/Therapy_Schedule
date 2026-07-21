@@ -2,12 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   useSensor,
   useSensors,
   type DragStartEvent,
   type DragEndEvent,
-  closestCenter,
+  pointerWithin,
+  rectIntersection,
+  type CollisionDetection,
 } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import {
@@ -93,6 +96,11 @@ import { AskSchedulerPanel } from "@/components/board/AskSchedulerPanel";
 import { cn } from "@/lib/utils";
 import { PatientDraggable } from "@/components/board/PatientDraggable";
 import { TeamDroppable } from "@/components/board/TeamDroppable";
+import { TimeHeaderRow } from "@/components/board/grid/TimeHeaderRow";
+import { TeamHeaderRow } from "@/components/board/grid/TeamHeaderRow";
+import { PatientRow } from "@/components/board/grid/PatientRow";
+import { useBoardUI } from "@/hooks/useBoardUI";
+import { useBoardDnd } from "@/hooks/useBoardDnd";
 
 const SLOT_WIDTH = 72; // px per 30-min slot
 
@@ -121,7 +129,6 @@ const EMPTY_PATIENT: PatientFormValue = {
   sessionDuration: 30,
   sessionTherapist: null,
 };
-
 type ViewFilter = "all" | TherapyType;
 
 export interface ConflictPair {
@@ -138,31 +145,37 @@ export default function TherapyBoard() {
   const [teamFilter, setTeamFilter] = useState<number | "all">(1); // Default to Team One on load
   const [mySchedTherapist, setMySchedTherapist] = useState<number | null>(null);
 
-  const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
-  const [sessionDraft, setSessionDraft] = useState<SessionFormValue | null>(null);
-  const [patientDialogOpen, setPatientDialogOpen] = useState(false);
-  const [patientDraft, setPatientDraft] = useState<PatientFormValue | null>(null);
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [staffPanelOpen, setStaffPanelOpen] = useState(false);
-  const [weeklyMinutesPanelOpen, setWeeklyMinutesPanelOpen] = useState(false);
-  const [askSchedulerPanelOpen, setAskSchedulerPanelOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [dataAnalysisOpen, setDataAnalysisOpen] = useState(false);
   const [activeDrag, setActiveDrag] = useState<SessionTileData | null>(null);
   const [activeDragPatient, setActiveDragPatient] = useState<any | null>(null);
-  const [targetAlertData, setTargetAlertData] = useState<{
-    patientName: string;
-    target: number;
-    totalMinutes: number;
-    weekSessions: WeekSessionRow[];
-  } | null>(null);
-
-  const [overrideWarning, setOverrideWarning] = useState<{
-    message: string;
-    onConfirm: () => void;
-  } | null>(null);
-
-  const [collapsedSections, setCollapsedSections] = useState<Set<number>>(new Set());
+  
+  const {
+    sessionDialogOpen,
+    setSessionDialogOpen,
+    sessionDraft,
+    setSessionDraft,
+    patientDialogOpen,
+    setPatientDialogOpen,
+    patientDraft,
+    setPatientDraft,
+    panelOpen,
+    setPanelOpen,
+    staffPanelOpen,
+    setStaffPanelOpen,
+    weeklyMinutesPanelOpen,
+    setWeeklyMinutesPanelOpen,
+    askSchedulerPanelOpen,
+    setAskSchedulerPanelOpen,
+    historyOpen,
+    setHistoryOpen,
+    dataAnalysisOpen,
+    setDataAnalysisOpen,
+    targetAlertData,
+    setTargetAlertData,
+    overrideWarning,
+    setOverrideWarning,
+    collapsedSections,
+    setCollapsedSections,
+  } = useBoardUI();
 
   const jumpToPatient = (patientId: number) => {
     const patient = patientsQuery.data?.find((p) => p.id === patientId);
@@ -228,18 +241,37 @@ export default function TherapyBoard() {
   // Mutations
   const invalidateBoard = () => {
     utils.sessions.list.invalidate();
-    utils.sessions.listForWeek.invalidate();
+    // The week view is fetched via listForDateRange (see weekSessionsQuery/upcomingSessionsQuery
+    // above), not listForWeek -- invalidating listForWeek here was a no-op for this page, so the
+    // weekly-minutes badge only ever refreshed on an unrelated trigger (e.g. a full reload).
+    utils.sessions.listForDateRange.invalidate();
     utils.patients.list.invalidate();
     utils.statusFlags.listForDate.invalidate();
   };
 
-  const createSession = trpc.sessions.create.useMutation({ 
-    onSuccess: () => { invalidateBoard(); toast.success("Session added"); }, 
-    onError: (err) => toast.error(err.message) 
+  const createSession = trpc.sessions.create.useMutation({
+    onSuccess: () => { invalidateBoard(); toast.success("Session added"); },
+    onError: (err) => toast.error(err.message)
   });
-  const updateSession = trpc.sessions.update.useMutation({ 
-    onSuccess: () => { invalidateBoard(); toast.success("Session updated"); }, 
-    onError: (err) => toast.error(err.message) 
+  const updateSession = trpc.sessions.update.useMutation({
+    // Optimistic update: a drag-move/resize should feel instant, not wait on a remote-DB round
+    // trip (server write) followed by a separate refetch (client read) before the tile visibly
+    // moves -- that two-hop wait is what showed up as multi-second drag lag. Patch the cached
+    // session list immediately; onError rolls back to the pre-drag snapshot if the write fails.
+    onMutate: async (vars) => {
+      await utils.sessions.list.cancel({ date: day });
+      const previous = utils.sessions.list.getData({ date: day });
+      utils.sessions.list.setData({ date: day }, (old) =>
+        old?.map((s) => (s.id === vars.id ? { ...s, ...vars } : s)),
+      );
+      return { previous };
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx?.previous) utils.sessions.list.setData({ date: day }, ctx.previous);
+      toast.error(err.message);
+    },
+    onSuccess: () => { toast.success("Session updated"); },
+    onSettled: () => invalidateBoard(),
   });
   const deleteSession = trpc.sessions.delete.useMutation({ 
     onSuccess: () => { invalidateBoard(); toast.success("Session deleted"); }, 
@@ -257,9 +289,33 @@ export default function TherapyBoard() {
     onSuccess: () => { invalidateBoard(); toast.success("Patient removed"); }, 
     onError: (err) => toast.error(err.message) 
   });
-  const toggleFlag = trpc.statusFlags.toggle.useMutation({ 
-    onSuccess: () => { invalidateBoard(); }, 
-    onError: (err) => toast.error(err.message) 
+  const toggleFlag = trpc.statusFlags.toggle.useMutation({
+    onSuccess: (data, variables) => {
+      invalidateBoard();
+      // Taking a patient off DC status (readmission) but their old room is now occupied by
+      // whoever's using it now -- the server left them on DC status rather than silently
+      // duplicating the room. Open the edit dialog straight to this patient so staff can pick a
+      // real open room right away instead of hunting for why the toggle didn't seem to take.
+      if (data.roomConflict) {
+        const patient = patients.find((p) => p.id === variables.patientId);
+        toast.error(`Room ${data.roomConflict.roomNumber} is occupied by ${data.roomConflict.occupiedByName} -- assign a new room to complete this readmission.`);
+        if (patient) {
+          setPatientDraft({
+            id: patient.id,
+            roomNumber: "",
+            name: patient.name,
+            notes: patient.notes ?? "",
+            isDischarged: false,
+            admissionDate: (patient as any).admissionDate ?? "",
+            estimatedDischargeDate: (patient as any).estimatedDischargeDate ?? "",
+            weeklyMinuteTarget: (patient as any).weeklyMinuteTarget ?? 900,
+            teamId: (patient as any).teamId ?? null,
+          });
+          setPatientDialogOpen(true);
+        }
+      }
+    },
+    onError: (err) => toast.error(err.message)
   });
   const saveSnapshot = trpc.history.save.useMutation({ 
     onSuccess: () => toast.success("Board snapshot saved"),
@@ -361,7 +417,12 @@ export default function TherapyBoard() {
     return { conflictIds: ids, conflictPairs: pairs };
   }, [tiles]);
 
-  // Weekly minutes per patient (Mon–Sun of the viewed week)
+  // Weekly minutes per patient (their own admission-anchored week, not a shared Mon-Sun). Must
+  // count the same way dailyMinutesByPatient and the server's getWeeklyMinutesSummary do -- skip
+  // missed sessions (isMissedStatus) and Block time (not real therapy), and use
+  // actualDurationMinutes over durationMinutes once a session is completed. Previously this summed
+  // raw durationMinutes for every row in range regardless of status/type, so a missed or Block
+  // session inflated the "X/900" progress bar with minutes that were never actually delivered.
   const weekMinsByPatient = useMemo(() => {
     const map = new Map<number, number>();
     patients.forEach((p) => {
@@ -369,10 +430,14 @@ export default function TherapyBoard() {
       const bounds = getPatientWeekBounds((p as any).admissionDate, day);
       const patientSessions = weekSessions.filter((s) => {
         if (s.patientId !== p.id) return false;
+        if (isMissedStatus(s.status) || s.therapyType === "Block") return false;
         const sessionStart = new Date(s.startTime);
         return sessionStart >= bounds.start && sessionStart <= bounds.end;
       });
-      const sum = patientSessions.reduce((acc, curr) => acc + curr.durationMinutes, 0);
+      const sum = patientSessions.reduce(
+        (acc, curr) => acc + (curr.status === "completed" ? (curr.actualDurationMinutes ?? curr.durationMinutes) : curr.durationMinutes),
+        0,
+      );
       map.set(p.id, sum);
     });
     return map;
@@ -403,6 +468,10 @@ export default function TherapyBoard() {
         const patientWeekSessions: WeekSessionRow[] = weekSessions
           .filter((s) => {
             if (s.patientId !== p.id) return false;
+            // Match weekMinsByPatient's own filter -- a missed or Block session was never
+            // counted toward the total, so it can't be a valid "trim this to get under target"
+            // recommendation below (TargetReachedDialog's buildRecommendations).
+            if (isMissedStatus(s.status) || s.therapyType === "Block") return false;
             const sessionStart = new Date(s.startTime);
             return sessionStart >= bounds.start && sessionStart <= bounds.end;
           })
@@ -584,128 +653,26 @@ export default function TherapyBoard() {
     return set;
   }, [visibleTiles]);
 
-  // Total daily minutes per patient (completed or scheduled, not missed or block)
+  // Total daily minutes per patient (completed or scheduled, not missed or block). Sourced from
+  // `tiles`, not `visibleTiles` -- this is the patient's true daily total and must not shrink
+  // when the discipline filter (PT/OT/SLP/Eval/Block toggle) is narrowed to one type.
   const dailyMinutesByPatient = useMemo(() => {
     const map = new Map<number, number>();
-    visibleTiles.forEach(t => {
+    tiles.forEach(t => {
       if (isMissedStatus(t.status) || t.therapyType === "Block") return;
       // If completed, use actualDurationMinutes if provided
       const mins = t.status === "completed" ? (t.actualDurationMinutes ?? t.durationMinutes) : t.durationMinutes;
       map.set(t.patientId, (map.get(t.patientId) || 0) + mins);
     });
     return map;
-  }, [visibleTiles]);
+  }, [tiles]);
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
   );
 
-  function handleDragStart(event: DragStartEvent) {
-    const data = event.active.data.current as any;
-    if (data?.session) {
-      setActiveDrag(data.session);
-    } else if (data?.patient) {
-      setActiveDragPatient(data.patient);
-    }
-  }
 
-  function handleDragEnd(event: DragEndEvent) {
-    setActiveDrag(null);
-    setActiveDragPatient(null);
-    const { active, over } = event;
-    if (!over) return;
-    
-    const data = active.data.current as any;
-    
-    // Handle patient drag
-    if (data?.patient) {
-      const targetData = over.data.current as any;
-      if (targetData?.teamId !== undefined) {
-        let newOrderIndex = data.patient.orderIndex ?? 0;
-
-        if (targetData.isPatientDrop) {
-          const targetPatientId = Number(over.id.toString().replace("patient-", ""));
-          const targetSection = patientsBySection.find(s => 
-            s.id === targetData.teamId || (s.id === 0 && targetData.teamId === null)
-          );
-          
-          if (targetSection) {
-            const overIndex = targetSection.patients.findIndex(p => p.id === targetPatientId);
-            const activeIndex = data.patient.teamId === targetData.teamId 
-              ? targetSection.patients.findIndex(p => p.id === data.patient.id)
-              : -1;
-
-            if (overIndex !== -1) {
-              if (activeIndex === overIndex) return; // Dropped in the exact same spot
-
-              const isMovingDown = activeIndex !== -1 && activeIndex < overIndex;
-              const prevPatient = targetSection.patients[isMovingDown ? overIndex : overIndex - 1];
-              const nextPatient = targetSection.patients[isMovingDown ? overIndex + 1 : overIndex];
-
-              const prevOrder = prevPatient ? ((prevPatient as any).orderIndex ?? 0) : (nextPatient ? ((nextPatient as any).orderIndex ?? 0) - 100 : 0);
-              const nextOrder = nextPatient ? ((nextPatient as any).orderIndex ?? 0) : (prevPatient ? ((prevPatient as any).orderIndex ?? 0) + 100 : 100);
-
-              newOrderIndex = (prevOrder + nextOrder) / 2;
-            }
-          }
-        } else if (data.patient.teamId === targetData.teamId) {
-           // Dropped onto the same team header, don't move
-           return;
-        }
-        
-        updatePatient.mutate({
-          id: data.patient.id,
-          roomNumber: data.patient.roomNumber,
-          name: data.patient.name,
-          notes: data.patient.notes ?? "",
-          isDischarged: data.patient.isDischarged,
-          admissionDate: data.patient.admissionDate ?? undefined,
-          weeklyMinuteTarget: data.patient.weeklyMinuteTarget ?? 900,
-          teamId: targetData.teamId === 0 ? null : targetData.teamId,
-          orderIndex: newOrderIndex,
-        });
-        toast.success(`Patient moved to ${targetData.teamName || (targetData.teamId ? "another team" : "Unassigned")}`);
-      }
-      return;
-    }
-
-    // Handle session drag
-    const session = data?.session;
-    let target = over.data.current as any;
-    if (!session || !target) return;
-
-    // If dropped onto a patient row header, keep the same time slot but change the patient
-    if (target.isPatientDrop) {
-      target = { patientId: target.patient.id, slotIndex: session.slotIndex };
-    }
-
-    if (target.patientId === undefined || target.slotIndex === undefined) return;
-    if (session.patientId === target.patientId && session.slotIndex === target.slotIndex) return;
-
-    const newStart = slotIndexToDate(day, target.slotIndex);
-    const newEnd = new Date(newStart.getTime() + session.durationMinutes * 60000);
-
-    const slotsNeeded = session.durationMinutes / 30;
-    if (target.slotIndex + slotsNeeded > TIME_SLOTS.length) {
-      toast.error("Session exceeds clinical hours (5 PM limit)");
-      return;
-    }
-
-    const doMove = () => {
-      updateSession.mutate({
-        id: session.id,
-        patientId: target.patientId,
-        startTime: newStart,
-        endTime: newEnd,
-        ignoreConflicts: true,
-      }, {
-        onSuccess: () => toast.success("Session moved")
-      });
-    };
-
-    const warnings = [checkLunchOverlap(newStart, newEnd), checkTherapistAvailability(session.therapistId, newStart, newEnd), checkDoubleBooking(session.therapistId, session.deliveryMode, newStart, newEnd, session.id)];
-    processWarnings(warnings, doMove);
-  }
 
   // Session dialog handlers
   function openNewSession(patientId: number, slotIndex: number) {
@@ -760,6 +727,7 @@ export default function TherapyBoard() {
         patientId: session.patientId,
         startTime: start,
         endTime: end,
+        durationMinutes: newDurationMinutes,
         ignoreConflicts: true,
       }, {
         onSuccess: () => toast.success("Session duration updated")
@@ -962,6 +930,18 @@ export default function TherapyBoard() {
     return result;
   }, [patients, teams, teamFilter, flagsByPatient]);
 
+  const { customCollisionDetection, handleDragStart, handleDragEnd } = useBoardDnd({
+    day,
+    patientsBySection,
+    setActiveDrag,
+    setActiveDragPatient,
+    updatePatient,
+    updateSession,
+    checkLunchOverlap,
+    checkTherapistAvailability,
+    checkDoubleBooking,
+    processWarnings
+  });
 
 
   function toggleSection(id: number) {
@@ -979,7 +959,7 @@ export default function TherapyBoard() {
     patientsQuery.isLoading || sessionsQuery.isLoading || therapistsQuery.isLoading;
 
   return (
-    <div className="min-h-screen bg-[#f1f4f7]">
+    <div className="min-h-screen bg-transparent">
       <BoardHeader
         day={day}
         setDay={setDay}
@@ -1034,91 +1014,14 @@ export default function TherapyBoard() {
         ) : (
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCenter}
+          collisionDetection={customCollisionDetection}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
-          <div className="overflow-auto rounded-xl border border-slate-200/60 bg-white shadow-sm touch-pan-x overscroll-x-contain scroll-smooth" style={{ WebkitOverflowScrolling: "touch" }}>
+          <div className="overflow-x-auto overflow-y-hidden w-fit max-w-full mx-auto rounded-xl glass-panel touch-pan-x overscroll-x-contain scroll-smooth" style={{ WebkitOverflowScrolling: "touch" }}>
             <div className="min-w-max pb-16">
               {/* Time header */}
-              <div className="flex border-b border-slate-200/80 bg-white/80 backdrop-blur-md shadow-[0_4px_15px_-3px_rgba(0,0,0,0.06)] sticky top-0 z-20 transition-colors">
-                <div className="sticky left-0 z-30 flex w-72 shrink-0 items-center border-r border-slate-200/60 bg-slate-100/90 backdrop-blur px-4 py-2 shadow-[2px_0_10px_-3px_rgba(0,0,0,0.02)]">
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                    Patient / Room
-                  </span>
-                </div>
-                <div
-                  className="sticky z-30 flex w-11 shrink-0 flex-col items-center justify-center gap-0.5 border-r border-slate-200/60 bg-slate-100/90 backdrop-blur py-2 shadow-[6px_0_15px_-4px_rgba(0,0,0,0.08)]"
-                  style={{ left: 288 }}
-                >
-                  <CalendarClock className="h-3 w-3 text-slate-400" strokeWidth={2.5} />
-                  <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">
-                    EOW
-                  </span>
-                </div>
-                {TIME_SLOTS.map((slot) => {
-                  const isHour = slot.minute === 0;
-
-                  if (slot.hour === 12 && slot.minute === 30) {
-                    return null;
-                  }
-
-                  if (slot.hour === 12 && slot.minute === 0) {
-                    return (
-                      <div
-                        key={slot.index}
-                        className="shrink-0 py-2.5 text-center border-r border-slate-200 bg-slate-200/40 bg-[repeating-linear-gradient(45deg,transparent,transparent_4px,rgba(0,0,0,0.03)_4px,rgba(0,0,0,0.03)_8px)]"
-                        style={{ flex: `0 0 ${SLOT_WIDTH * 2}px`, width: SLOT_WIDTH * 2, minWidth: SLOT_WIDTH * 2 }}
-                      >
-                        <span className="text-[10px] font-bold text-slate-600 tracking-widest">
-                          LUNCH
-                        </span>
-                      </div>
-                    );
-                  }
-
-                  const isLastSlot = slot.index === TIME_SLOTS.length - 1;
-
-                  return (
-                    <div
-                      key={slot.index}
-                      className={cn(
-                        "shrink-0 py-1.5 text-center border-r transition-colors flex flex-col items-center justify-center gap-0.5",
-                        !isHour ? "border-slate-200" : "border-slate-100/50",
-                      )}
-                      style={{ flex: `0 0 ${SLOT_WIDTH}px`, width: SLOT_WIDTH, minWidth: SLOT_WIDTH }}
-                    >
-                      <span
-                        className={cn(
-                          "text-[10px] tabular-nums tracking-tight leading-none",
-                          isHour ? "font-bold text-slate-700" : "font-medium text-slate-400",
-                        )}
-                      >
-                        {isHour ? slot.shortLabel.replace(":00", "") : slot.label}
-                      </span>
-                      {/* The grid's closing boundary -- there's no slot that *starts* at 6 PM
-                          (the last real slot starts at 5:30 and runs to 6), so without this the
-                          header never shows the hour the board actually closes at. */}
-                      {isLastSlot && (
-                        <span className="flex items-center gap-0.5 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-1.5 py-[1px] text-[8px] font-extrabold uppercase leading-none tracking-wide text-white shadow-sm shadow-amber-500/40">
-                          <Sunset className="h-2.5 w-2.5" strokeWidth={2.5} />
-                          6 PM
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-                
-                {/* Daily Total Column */}
-                <div
-                  className="sticky right-0 z-30 flex w-14 shrink-0 flex-col items-center justify-center border-l border-slate-200/60 bg-slate-100/90 backdrop-blur py-2 shadow-[-6px_0_15px_-4px_rgba(0,0,0,0.08)]"
-                >
-                  <BicepsFlexed className="h-3.5 w-3.5 text-rose-500 mb-0.5 drop-shadow-sm" strokeWidth={2.5} />
-                  <span className="text-[9px] font-extrabold uppercase tracking-widest text-slate-500">
-                    Total
-                  </span>
-                </div>
-              </div>
+              <TimeHeaderRow />
 
               {/* Team sections */}
               {patients.length === 0 ? (
@@ -1141,53 +1044,16 @@ export default function TherapyBoard() {
 
                   return (
                     <TeamDroppable key={section.id} section={section}>
-                      {/* Section header */}
-                      <div 
-                        className="flex items-center border-b border-slate-200/50 relative overflow-hidden"
-                        style={{ 
-                          borderTop: `2px solid ${section.color}80`,
-                          background: `linear-gradient(to right, ${section.color}15, transparent 1000px)`
+                      <TeamHeaderRow
+                        section={section}
+                        isCollapsed={isCollapsed}
+                        sectionSessionCount={sectionSessionCount}
+                        onToggle={toggleSection}
+                        onAddPatient={(teamId) => {
+                          setPatientDraft({ ...EMPTY_PATIENT, teamId });
+                          setPatientDialogOpen(true);
                         }}
-                      >
-                        {/* Colored accent + label (sticky) */}
-                        <div
-                          className="sticky left-0 z-20 flex w-72 shrink-0 items-center gap-2 border-r border-slate-200/60 px-3 py-2 shadow-[6px_0_15px_-4px_rgba(0,0,0,0.08)] backdrop-blur-md"
-                          style={{ backgroundColor: `${section.color}05` }}
-                        >
-                          <button
-                            onClick={() => toggleSection(section.id)}
-                            className="flex flex-1 items-center gap-2 text-left"
-                          >
-                            <span
-                              className="h-3 w-1 shrink-0 rounded-full"
-                              style={{ backgroundColor: section.color }}
-                            />
-                            <span className="text-xs font-bold text-slate-800">{section.name}</span>
-                            <span className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold text-white shadow-sm"
-                              style={{ backgroundColor: section.color }}>
-                              {section.patients.length}
-                            </span>
-                            {sectionSessionCount > 0 && (
-                              <span className="text-[10px] text-slate-500 font-medium">{sectionSessionCount} session{sectionSessionCount !== 1 ? "s" : ""} today</span>
-                            )}
-                            <ChevronRight
-                              className={cn("ml-auto h-4 w-4 text-slate-500 transition-transform", !isCollapsed && "rotate-90")}
-                            />
-                          </button>
-                          <button
-                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-white/60 transition-colors"
-                            title={`Add patient to ${section.name}`}
-                            onClick={() => {
-                              setPatientDraft({ ...EMPTY_PATIENT, teamId: section.id });
-                              setPatientDialogOpen(true);
-                            }}
-                          >
-                            <Plus className="h-4 w-4 text-slate-600" />
-                          </button>
-                        </div>
-                        {/* Extend header across time grid */}
-                        <div className="flex-1" style={{ minWidth: TIME_SLOTS.length * SLOT_WIDTH }} />
-                      </div>
+                      />
 
                       {/* Patient rows (collapsible) */}
                       {!isCollapsed && (
@@ -1217,7 +1083,7 @@ export default function TherapyBoard() {
                                       if (s.patientId !== patient.id || s.therapyType !== "Eval") return false;
                                       const sDate = new Date(s.startTime);
                                       const diffToDC = Math.floor((dcDate.getTime() - startOfDay(sDate).getTime()) / (1000 * 60 * 60 * 24));
-                                      return diffToDC === 0 || diffToDC === 1;
+                                      return diffToDC === 0 || diffToDC === -1;
                                   });
                                   if (!evalExists) {
                                       missingExitEvalAlert = true;
@@ -1226,214 +1092,33 @@ export default function TherapyBoard() {
                             }
 
                             return (
-                              <div key={patient.id} id={`patient-row-${patient.id}`} className={cn("group/row flex h-14 border-b border-slate-100 transition-colors last:border-b-0 hover:bg-slate-50/60", isDC && "bg-slate-200 opacity-60 grayscale")}>
-                                {/* Patient label */}
-                                <PatientDraggable patient={patient}
-                                  className={cn(
-                                    "sticky left-0 z-10 flex h-full w-72 shrink-0 items-center justify-between gap-1.5 border-r border-slate-200 px-2 py-1 transition-colors cursor-grab active:cursor-grabbing shadow-[2px_0_10px_-3px_rgba(0,0,0,0.02)]",
-                                    isDC ? "bg-slate-200" : (rowIdx % 2 === 0 ? "bg-white" : "bg-slate-50"),
-                                    "group-hover/row:bg-slate-100",
-                                  )}
-                                >
-                                  <button
-                                    className="flex min-w-0 flex-col gap-0.5 text-left w-full justify-center"
-                                    onClick={() => {
-                                      setPatientDraft({
-                                        id: patient.id,
-                                        roomNumber: patient.roomNumber,
-                                        name: patient.name,
-                                        notes: patient.notes ?? "",
-                                        isDischarged: patient.isDischarged,
-                                        admissionDate: (patient as any).admissionDate ?? "",
-                                        estimatedDischargeDate: (patient as any).estimatedDischargeDate ?? "",
-                                        weeklyMinuteTarget: (patient as any).weeklyMinuteTarget ?? 900,
-                                        teamId: (patient as any).teamId ?? null,
-                                      });
-                                      setPatientDialogOpen(true);
-                                    }}
-                                  >
-                                    <div className="flex items-center gap-1.5 w-full overflow-hidden">
-                                      <span className={cn("truncate text-[11px] font-bold text-slate-800", isDC && "text-slate-400 line-through")}>
-                                        {patient.name}
-                                      </span>
-                                      {missedTherapyAlert && (
-                                        <Tooltip>
-                                          <TooltipTrigger asChild>
-                                            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500 animate-pulse" strokeWidth={2.5} />
-                                          </TooltipTrigger>
-                                          <TooltipContent side="top" className="text-xs font-semibold text-amber-700 bg-amber-50 border-amber-200">
-                                            No therapy in 2+ days
-                                          </TooltipContent>
-                                        </Tooltip>
-                                      )}
-                                      {missingExitEvalAlert && (
-                                        <Tooltip>
-                                          <TooltipTrigger asChild>
-                                            <AlertTriangle className="h-4 w-4 shrink-0 text-red-600 animate-pulse" strokeWidth={3} />
-                                          </TooltipTrigger>
-                                          <TooltipContent side="top" className="text-xs font-semibold text-red-700 bg-red-50 border-red-200">
-                                            Missing Exit Eval (DC approaching)
-                                          </TooltipContent>
-                                        </Tooltip>
-                                      )}
-                                      <span className="shrink-0 inline-flex min-w-[2rem] justify-center rounded border border-slate-200 bg-slate-100 px-1 text-[9px] font-bold tabular-nums text-slate-600">
-                                        {patient.roomNumber}
-                                      </span>
-                                      {pFlags.length > 0 && (
-                                        <div className="flex items-center gap-0.5 ml-auto shrink-0">
-                                          {pFlags.map((f) => <FlagBadge key={f.id} flag={f.flagType} iconOnly />)}
-                                        </div>
-                                      )}
-                                    </div>
-                                    {patient.notes && (
-                                      <div className="flex items-center w-full">
-                                        <span className="truncate text-[9px] italic text-slate-400 w-full">{patient.notes}</span>
-                                      </div>
-                                    )}
-                                    {!isDC && (() => {
-                                      const weekMins = weekMinsByPatient.get(patient.id) ?? 0;
-                                      const target = (patient as any).weeklyMinuteTarget ?? 900;
-                                      const pct = Math.min(100, Math.round((weekMins / target) * 100));
-                                      const isOnTrack = weekMins >= target;
-                                      const isClose = !isOnTrack && pct >= 67;
-                                      return (
-                                        <div className="flex items-center gap-1.5 w-full mt-0.5">
-                                          <div className="h-1.5 flex-1 rounded-full bg-slate-100 overflow-hidden">
-                                            <div
-                                              className={cn("h-full rounded-full transition-all", isOnTrack ? "bg-emerald-500" : isClose ? "bg-amber-400" : "bg-red-400")}
-                                              style={{ width: `${pct}%` }}
-                                            />
-                                          </div>
-                                          <span className={cn("shrink-0 text-[9px] font-semibold tabular-nums", isOnTrack ? "text-emerald-600" : isClose ? "text-amber-600" : "text-red-600")}>
-                                            {weekMins}<span className="font-normal text-slate-400">/{target}</span>
-                                          </span>
-                                        </div>
-                                      );
-                                    })()}
-                                  </button>
-                                  <div className="flex items-center shrink-0 ml-0.5 gap-0.5">
-                                    <FlagToggle
-                                      activeFlags={pFlags.map((f) => f.flagType)}
-                                      onToggle={(flag, active) =>
-                                        toggleFlag.mutate({ patientId: patient.id, flagType: flag, date: day, active })
-                                      }
-                                    />
-                                    <AlertDialog>
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <AlertDialogTrigger asChild>
-                                            <Button
-                                              variant="ghost"
-                                              size="icon"
-                                              className="h-7 w-7 text-slate-400 hover:text-slate-600 hover:bg-slate-200/50"
-                                              disabled={copyPatientSessions.isPending}
-                                            >
-                                              <Copy className="h-3.5 w-3.5" />
-                                            </Button>
-                                          </AlertDialogTrigger>
-                                        </TooltipTrigger>
-                                        <TooltipContent>Copy to Tomorrow</TooltipContent>
-                                      </Tooltip>
-                                      <AlertDialogContent>
-                                        <AlertDialogHeader>
-                                          <AlertDialogTitle>Copy Sessions</AlertDialogTitle>
-                                          <AlertDialogDescription>
-                                            Copy all of {patient.name}&apos;s sessions from today to tomorrow?
-                                          </AlertDialogDescription>
-                                        </AlertDialogHeader>
-                                        <AlertDialogFooter>
-                                          <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                          <AlertDialogAction onClick={() => {
-                                            copyPatientSessions.mutate({ patientId: patient.id, date: day });
-                                          }}>Copy</AlertDialogAction>
-                                        </AlertDialogFooter>
-                                      </AlertDialogContent>
-                                    </AlertDialog>
-                                    <PatientDayQuickView
-                                      patient={patient}
-                                      day={day}
-                                      sessions={tiles}
-                                      therapists={therapists}
-                                    />
-                                  </div>
-                                </PatientDraggable>
-
-                                {/* EOW (End Of Week) column -- which day this patient's personalized week resets on */}
-                                {(() => {
-                                  const eowDayIndex = getPatientWeekBounds((patient as any).admissionDate, day).end.getDay();
-                                  return (
-                                    <div
-                                      className={cn(
-                                        "sticky z-10 flex h-full w-11 shrink-0 items-center justify-center border-r border-slate-200 transition-colors shadow-[6px_0_15px_-4px_rgba(0,0,0,0.08)]",
-                                        isDC ? "bg-slate-200" : (rowIdx % 2 === 0 ? "bg-white" : "bg-slate-50"),
-                                        "group-hover/row:bg-slate-100",
-                                      )}
-                                      style={{ left: 288 }}
-                                    >
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <span className="flex h-7 min-w-[1.75rem] items-center justify-center rounded-[10px] border border-white bg-gradient-to-br from-indigo-100 via-blue-50 to-indigo-200/80 px-1 text-[11px] font-black tracking-tight text-indigo-800 shadow-[0_2px_8px_-2px_rgba(79,70,229,0.3),inset_0_1px_1px_rgba(255,255,255,1)] transition-all hover:scale-105 hover:shadow-indigo-500/20">
-                                            {EOW_DAY_LETTERS[eowDayIndex]}
-                                          </span>
-                                        </TooltipTrigger>
-                                        <TooltipContent side="top" className="text-xs">
-                                          Week ends {EOW_DAY_NAMES[eowDayIndex]}
-                                        </TooltipContent>
-                                      </Tooltip>
-                                    </div>
-                                  );
-                                })()}
-
-                                {/* Time cells -- lunch (12:00-1:00) renders as two normal, fully
-                                    bookable half-hour cells like any other slot, just flagged
-                                    isLunch for the visual hatch; the confirm-before-booking
-                                    happens in saveSession/handleDragEnd/handleResizeSession via
-                                    checkLunchOverlap, not by disabling the cell here. */}
-                                {TIME_SLOTS.map((slot) => {
-                                  const isLunchSlot = slot.hour === 12;
-                                  const tile = tilesByPatientSlot.get(`${patient.id}-${slot.index}`);
-                                  const isOccupied = occupiedCells.has(`${patient.id}-${slot.index}`);
-
-                                  const isHourEnd = slot.index % 2 === 1;
-                                  const borderClass = isHourEnd ? "border-r border-slate-200" : "border-r border-slate-100";
-
-                                  if (isOccupied) {
-                                    return <div key={slot.index} style={{ flex: `0 0 ${SLOT_WIDTH}px`, width: SLOT_WIDTH, minWidth: SLOT_WIDTH }} className={cn("shrink-0", borderClass, isMedicalHold && "bg-slate-200/50 bg-[repeating-linear-gradient(45deg,rgba(0,0,0,0.03),rgba(0,0,0,0.03)_4px,transparent_4px,transparent_8px)] grayscale pointer-events-none opacity-80")} />;
-                                  }
-                                  return (
-                                    <div key={slot.index} style={{ flex: `0 0 ${SLOT_WIDTH}px`, width: SLOT_WIDTH, minWidth: SLOT_WIDTH }} className={cn("shrink-0 transition-colors duration-300", borderClass, isMedicalHold && "bg-slate-200/50 bg-[repeating-linear-gradient(45deg,rgba(0,0,0,0.03),rgba(0,0,0,0.03)_4px,transparent_4px,transparent_8px)] grayscale opacity-80")}>
-                                      <GridCell patientId={patient.id} slotIndex={slot.index} onAdd={openNewSession} isAlternate={rowIdx % 2 !== 0} isLunch={isLunchSlot}>
-                                        {tile ? (
-                                          <div
-                                            className="absolute inset-y-1 left-1 z-10"
-                                            style={{ width: tile.slotSpan * SLOT_WIDTH - 6 }}
-                                          >
-                                            <SessionTile session={tile} therapistName={therapistName(tile.therapistId)} therapistColor={therapistColor(tile.therapistId)} onClick={openEditSession} slotWidth={SLOT_WIDTH} onResize={handleResizeSession} />
-                                          </div>
-                                        ) : null}
-                                      </GridCell>
-                                    </div>
-                                  );
-                                })}
-
-                                {/* Daily Total Cell */}
-                                <div
-                                  className={cn(
-                                    "sticky right-0 z-20 flex w-14 shrink-0 items-center justify-center border-l border-slate-200/80 transition-colors shadow-[-6px_0_15px_-4px_rgba(0,0,0,0.08)]",
-                                    isDC ? "bg-slate-200" : (rowIdx % 2 === 0 ? "bg-white" : "bg-slate-50"),
-                                    "group-hover/row:bg-slate-100"
-                                  )}
-                                >
-                                  <span className={cn(
-                                    "flex min-w-[2rem] items-center justify-center rounded border px-1 py-0.5 text-[11px] font-black tabular-nums tracking-tight shadow-[0_1px_2px_rgba(0,0,0,0.04)]",
-                                    dailyMinutesByPatient.get(patient.id) 
-                                      ? "border-emerald-200 bg-emerald-50 text-emerald-700" 
-                                      : "border-slate-200 bg-slate-50 text-slate-400"
-                                  )}>
-                                    {dailyMinutesByPatient.get(patient.id) || 0}
-                                  </span>
-                                </div>
-                              </div>
+                              <PatientRow
+                                key={patient.id}
+                                patient={patient}
+                                rowIdx={rowIdx}
+                                day={day}
+                                tiles={tiles}
+                                therapists={therapists}
+                                pFlags={pFlags}
+                                weekMinsByPatient={weekMinsByPatient}
+                                tilesByPatientSlot={tilesByPatientSlot}
+                                occupiedCells={occupiedCells}
+                                dailyMinutesByPatient={dailyMinutesByPatient}
+                                missedTherapyAlert={missedTherapyAlert}
+                                missingExitEvalAlert={missingExitEvalAlert}
+                                isDC={isDC}
+                                isMedicalHold={isMedicalHold}
+                                setPatientDraft={setPatientDraft}
+                                setPatientDialogOpen={setPatientDialogOpen}
+                                toggleFlag={(patientId, flag, active) => toggleFlag.mutate({ patientId, flagType: flag, date: day, active })}
+                                copyPatientSessions={(patientId) => copyPatientSessions.mutate({ patientId, date: day })}
+                                isCopying={copyPatientSessions.isPending}
+                                openNewSession={openNewSession}
+                                openEditSession={openEditSession}
+                                handleResizeSession={handleResizeSession}
+                                therapistName={therapistName}
+                                therapistColor={therapistColor}
+                              />
                             );
                           })}
                         </SortableContext>
@@ -1477,45 +1162,47 @@ export default function TherapyBoard() {
             their own color in the Staff panel), not by therapy type, so the type key below is
             intentionally plain/uncolored rather than implying a color mapping that no longer
             matches what's actually on the grid. */}
-        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 rounded border border-slate-200 bg-white px-4 py-2.5">
-          <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Legend</span>
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-lg border border-white/40 glass-surface px-4 py-3 shadow-sm">
+          <span className="text-micro font-semibold uppercase tracking-widest text-slate-500 w-full md:w-auto">Legend</span>
 
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             {THERAPY_TYPES.map((t) => {
               const meta = THERAPY_META[t];
               return (
                 <div key={t} className="flex items-center gap-1.5">
-                  <span className="flex h-4 w-7 items-center justify-center rounded border border-slate-200 bg-slate-50 text-[10px] font-bold text-slate-500">
+                  <span className="flex h-5 w-8 items-center justify-center rounded border border-white/50 bg-white/60 shadow-sm text-micro font-bold text-slate-600">
                     {meta.label}
                   </span>
-                  <span className="text-xs text-slate-600">{meta.full}</span>
+                  <span className="text-xs font-medium text-slate-700">{meta.full}</span>
                 </div>
               );
             })}
           </div>
 
-          <div className="h-4 w-px bg-slate-200" />
+          <div className="hidden md:block h-5 w-px bg-slate-300/50" />
 
           <div className="flex items-center gap-1.5">
-            <UserCircle2 className="h-4 w-4 text-slate-400" />
-            <span className="text-xs text-slate-600">Tile color = assigned therapist</span>
+            <UserCircle2 className="h-4 w-4 text-slate-500" />
+            <span className="text-xs font-medium text-slate-700">Tile color = assigned therapist</span>
           </div>
 
-          <div className="h-4 w-px bg-slate-200" />
+          <div className="hidden md:block h-5 w-px bg-slate-300/50" />
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-4">
             <div className="flex items-center gap-1.5">
-              <CheckCircle2 className="h-3.5 w-3.5 text-green-600" strokeWidth={2.5} />
-              <span className="text-xs text-slate-600">Completed</span>
+              <CheckCircle2 className="h-4 w-4 text-emerald-600" strokeWidth={2.5} />
+              <span className="text-xs font-medium text-slate-700">Completed</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <XCircle className="h-3.5 w-3.5 text-red-600" strokeWidth={2.5} />
-              <span className="text-xs text-slate-600">Missed</span>
+              <XCircle className="h-4 w-4 text-red-500" strokeWidth={2.5} />
+              <span className="text-xs font-medium text-slate-700">Missed</span>
             </div>
           </div>
 
-          <div className="ml-auto flex items-center gap-2 text-xs text-slate-400">
-            <span className="tabular-nums font-semibold text-slate-600">{patients.length}</span> patient{patients.length !== 1 ? "s" : ""}
+          <div className="w-full md:w-auto md:ml-auto flex items-center justify-between gap-2 text-xs font-medium text-slate-500 pt-3 md:pt-0 border-t border-slate-300/30 md:border-0 mt-1 md:mt-0">
+            <div>
+              <span className="tabular-nums font-bold text-slate-700">{patients.length}</span> patient{patients.length !== 1 ? "s" : ""}
+            </div>
           </div>
         </div>
       </main>

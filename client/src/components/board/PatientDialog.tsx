@@ -108,7 +108,7 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md glass-panel p-6">
         <DialogHeader>
           <DialogTitle>{isEditing ? "Edit Patient" : "Add Patient"}</DialogTitle>
           <DialogDescription>
@@ -212,8 +212,8 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
           </div>
 
           {isEditing && (
-            <div className="rounded-lg border border-slate-200/60 bg-slate-50/50 p-5 space-y-4 mt-6 shadow-sm">
-              <div className="border-b border-slate-200/60 pb-3">
+            <div className="rounded-lg glass-surface p-5 space-y-4 mt-6">
+              <div className="border-b border-white/20 pb-3">
                 <Label className="text-base font-semibold text-slate-800">Daily Minute Adjustments</Label>
                 <p className="text-xs text-slate-500 mt-1">Add or subtract extra target minutes for specific dates.</p>
               </div>
@@ -221,7 +221,7 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
               {additionalMinutes.length > 0 ? (
                 <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
                   {additionalMinutes.map((adj) => (
-                    <div key={adj.id} className="flex items-center justify-between bg-white border border-slate-200 p-2.5 rounded-md shadow-sm text-sm transition-all hover:border-slate-300">
+                    <div key={adj.id} className="flex items-center justify-between glass-surface p-2.5 rounded-md text-sm">
                       <div className="flex items-center gap-3">
                         <span className="font-medium text-slate-700 min-w-[70px]">
                           {new Date(adj.date).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}
@@ -244,7 +244,7 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
                   ))}
                 </div>
               ) : (
-                <div className="py-4 text-center border-2 border-dashed border-slate-200 rounded-md bg-white/50">
+                <div className="py-4 text-center border-2 border-dashed border-white/40 rounded-md glass-surface">
                   <p className="text-sm text-slate-500 italic">No adjustments currently.</p>
                 </div>
               )}

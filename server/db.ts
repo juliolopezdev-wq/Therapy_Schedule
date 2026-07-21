@@ -153,9 +153,37 @@ export async function getPatientById(id: number) {
   return result[0];
 }
 
+/** Thrown by createPatient/updatePatient when a room number would be shared by two active
+ *  (non-discharged) patients at once. A discharged patient's old room is fair game -- the room
+ *  isn't really "in use" once they're gone -- so this only ever compares against other active
+ *  patients. */
+export class RoomConflictError extends Error {
+  constructor(public roomNumber: string, public occupiedByName: string) {
+    super(`Room ${roomNumber} is already occupied by ${occupiedByName}.`);
+    this.name = "RoomConflictError";
+  }
+}
+
+/** The active (non-discharged) patient currently holding this room, if any, other than
+ *  `excludePatientId` (so an update can check a room against everyone else without tripping
+ *  over the patient's own unchanged room number). */
+export async function getActivePatientByRoomNumber(roomNumber: string, excludePatientId?: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db
+    .select()
+    .from(patients)
+    .where(and(eq(patients.roomNumber, roomNumber), eq(patients.isDischarged, false)));
+  return rows.find((p) => p.id !== excludePatientId);
+}
+
 export async function createPatient(data: InsertPatient) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  if (!data.isDischarged) {
+    const conflict = await getActivePatientByRoomNumber(data.roomNumber);
+    if (conflict) throw new RoomConflictError(data.roomNumber, conflict.name);
+  }
   const result = await db.insert(patients).values(data);
   return { id: extractInsertId(result) };
 }
@@ -163,6 +191,22 @@ export async function createPatient(data: InsertPatient) {
 export async function updatePatient(id: number, data: Partial<InsertPatient>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+
+  // Only need to check when the patient will actually be active afterward -- a discharged
+  // patient (or one being discharged in this same update) can't collide with anyone, and a room
+  // that isn't changing was already valid the last time it was checked.
+  if (data.roomNumber !== undefined || data.isDischarged !== undefined) {
+    const existing = await getPatientById(id);
+    if (existing) {
+      const resolvedRoom = data.roomNumber ?? existing.roomNumber;
+      const resolvedDischarged = data.isDischarged ?? existing.isDischarged;
+      if (!resolvedDischarged) {
+        const conflict = await getActivePatientByRoomNumber(resolvedRoom, id);
+        if (conflict) throw new RoomConflictError(resolvedRoom, conflict.name);
+      }
+    }
+  }
+
   await db.update(patients).set(data).where(eq(patients.id, id));
   return { success: true };
 }
@@ -187,6 +231,21 @@ function dayBounds(date: Date) {
   const endOfDay = new Date(date);
   endOfDay.setHours(23, 59, 59, 999);
   return { startOfDay, endOfDay };
+}
+
+/** Whether this patient has ever had a real (non-Block) session of the given discipline --
+ *  the signal auto-scheduling uses to decide whether speech therapy belongs in their plan at
+ *  all (unlike PT/OT, SLP isn't given to every rehab patient). A single existence check, not a
+ *  full row fetch. */
+export async function hasEverHadTherapyType(patientId: number, therapyType: "PT" | "OT" | "SLP"): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+  const rows = await db
+    .select({ id: therapySessions.id })
+    .from(therapySessions)
+    .where(and(eq(therapySessions.patientId, patientId), eq(therapySessions.therapyType, therapyType)))
+    .limit(1);
+  return rows.length > 0;
 }
 
 export async function getTherapySessions(date?: Date) {
@@ -993,9 +1052,42 @@ export async function callOffTherapist(therapistId: number, date: Date, reason: 
   );
   const absentIds = new Set(absentRecords.map(r => r.therapistId));
   
-  const candidates = allCandidates.filter(t => !absentIds.has(t.id));
+  const dayOfWeek = date.getDay();
+  let candidates = allCandidates.filter(t => !absentIds.has(t.id));
 
-  // 4. Fetch their sessions
+  // Filter candidates by workDays if defined
+  candidates = candidates.filter(t => {
+    if (t.workDays) {
+      const days = t.workDays.split(',').map(Number);
+      if (!days.includes(dayOfWeek)) return false;
+    }
+    return true;
+  });
+
+  // Calculate current workload for each candidate
+  const workloads = new Map<number, number>();
+  for (const c of candidates) workloads.set(c.id, 0);
+
+  if (candidates.length > 0) {
+    const candidateSessions = await db
+      .select()
+      .from(therapySessions)
+      .where(
+        and(
+          inArray(therapySessions.therapistId, candidates.map(c => c.id)),
+          gte(therapySessions.startTime, startOfDay),
+          lte(therapySessions.startTime, endOfDay)
+        )
+      );
+
+    for (const s of candidateSessions) {
+      if (s.therapistId) {
+        workloads.set(s.therapistId, (workloads.get(s.therapistId) || 0) + s.durationMinutes);
+      }
+    }
+  }
+
+  // 4. Fetch affected sessions
   const affectedSessions = await db
     .select()
     .from(therapySessions)
@@ -1010,10 +1102,34 @@ export async function callOffTherapist(therapistId: number, date: Date, reason: 
   let reAssignedCount = 0;
   let unassignedCount = 0;
   const reassignedTo: Record<number, number> = {};
+  const suggestions: string[] = [];
 
   for (const session of affectedSessions) {
     let reAssigned = false;
-    for (const candidate of candidates) {
+    const sessionStart = session.startTime.getHours() * 60 + session.startTime.getMinutes();
+    const sessionEnd = session.endTime.getHours() * 60 + session.endTime.getMinutes();
+
+    // Sort candidates by workload (lowest first) dynamically
+    const sortedCandidates = [...candidates].sort((a, b) => (workloads.get(a.id) || 0) - (workloads.get(b.id) || 0));
+
+    let bestFallback: typeof candidates[0] | null = null;
+
+    for (const candidate of sortedCandidates) {
+      // Check shift times
+      if (candidate.workStartTime) {
+        const [h, m] = candidate.workStartTime.split(':').map(Number);
+        if (sessionStart < h * 60 + m) continue;
+      }
+      if (candidate.workEndTime) {
+        const [h, m] = candidate.workEndTime.split(':').map(Number);
+        if (sessionEnd > h * 60 + m) continue;
+      }
+
+      // Track the first valid candidate (shift matches) as best fallback even if conflict
+      if (!bestFallback) {
+        bestFallback = candidate;
+      }
+
       try {
         await assertNoSchedulingConflict({
           patientId: session.patientId,
@@ -1031,6 +1147,7 @@ export async function callOffTherapist(therapistId: number, date: Date, reason: 
           
         reAssignedCount++;
         reassignedTo[candidate.id] = (reassignedTo[candidate.id] || 0) + 1;
+        workloads.set(candidate.id, (workloads.get(candidate.id) || 0) + session.durationMinutes);
         reAssigned = true;
         break; // Stop looking for a candidate for this session
       } catch (err) {
@@ -1047,10 +1164,18 @@ export async function callOffTherapist(therapistId: number, date: Date, reason: 
         .set({ therapistId: null, status: "scheduled" })
         .where(eq(therapySessions.id, session.id));
       unassignedCount++;
+
+      // Generate AI suggestion for unassigned session
+      const timeString = session.startTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      if (bestFallback) {
+        suggestions.push(`${timeString}: Best option is ${bestFallback.name} (lowest load today). Consider swapping their existing session to fit this in.`);
+      } else {
+        suggestions.push(`${timeString}: No working therapist of matching discipline available.`);
+      }
     }
   }
 
-  return { success: true, reAssignedCount, unassignedCount, reassignedTo };
+  return { success: true, reAssignedCount, unassignedCount, reassignedTo, suggestions };
 }
 
 export async function cancelCallOffTherapist(therapistId: number, date: Date) {

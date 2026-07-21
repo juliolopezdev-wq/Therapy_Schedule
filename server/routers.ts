@@ -40,6 +40,7 @@ import {
   callOffTherapist,
   cancelCallOffTherapist,
   getTherapistAbsences,
+  RoomConflictError,
 } from "./db";
 import { getWeeklyMinutesSummary, getGapFillSuggestions, getOrCreateTodaysDigest, getPredictiveForecast } from "./scheduling";
 import { askScheduler, analyzeData } from "./ollama";
@@ -311,6 +312,7 @@ export const appRouter = router({
       )
       .mutation(async ({ input }) => {
         const flag = await setStatusFlag(input.patientId, input.flagType, input.date, input.active);
+        let roomConflict: { roomNumber: string; occupiedByName: string } | null = null;
 
         // Only fire the DC side effects when the flag actually flips -- not on a redundant
         // toggle of a flag that (thanks to carry-forward) was already active/inactive.
@@ -329,11 +331,25 @@ export const appRouter = router({
               });
             }
           } else {
-            await updatePatient(input.patientId, { isDischarged: false });
+            // Readmission: taking a patient off DC status. Their old room may have already been
+            // handed to whoever's in it now (via the "Available" placeholder above, or a
+            // straightforward re-assignment) -- reactivating them into a room someone else
+            // already occupies would silently create the exact duplicate-room state this guards
+            // against. Leave them on DC status and report the conflict back instead; the client
+            // opens the edit-patient dialog so staff can pick a real open room right away.
+            try {
+              await updatePatient(input.patientId, { isDischarged: false });
+            } catch (err) {
+              if (err instanceof RoomConflictError) {
+                roomConflict = { roomNumber: err.roomNumber, occupiedByName: err.occupiedByName };
+              } else {
+                throw err;
+              }
+            }
           }
         }
 
-        return flag;
+        return { ...flag, roomConflict };
       }),
   }),
 

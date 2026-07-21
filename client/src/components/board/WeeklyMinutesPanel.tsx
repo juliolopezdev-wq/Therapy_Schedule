@@ -70,7 +70,7 @@ function SuggestionRow({
   const end = new Date(start.getTime() + suggestion.durationMinutes * 60_000);
 
   return (
-    <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs">
+    <div className="flex items-center gap-2 rounded-md border border-white/40 glass-surface px-2.5 py-2 text-xs">
       <Clock className="h-3.5 w-3.5 shrink-0 text-slate-400" />
       <div className="min-w-0 flex-1">
         <p className="font-semibold text-slate-700">
@@ -79,13 +79,13 @@ function SuggestionRow({
         <p className="truncate text-slate-400">{suggestion.reason}</p>
       </div>
       {added ? (
-        <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700">
+        <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-micro text-emerald-700">
           Added
         </Badge>
       ) : (
         <>
           <Select value={therapyType} onValueChange={(v) => setTherapyType(v as TherapyType)}>
-            <SelectTrigger className="h-7 w-[72px] text-[11px]">
+            <SelectTrigger className="h-7 w-[72px] text-micro">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -98,7 +98,7 @@ function SuggestionRow({
           </Select>
           <Button
             size="sm"
-            className="h-7 px-2 text-[11px]"
+            className="h-7 px-2 text-micro"
             disabled={createSession.isPending}
             onClick={() =>
               createSession.mutate({
@@ -145,15 +145,15 @@ function PatientRow({
   );
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-3">
+    <div className="rounded-lg border border-white/40 glass-surface p-3">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">
+          <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-micro font-bold text-slate-600">
             {patient.roomNumber}
           </span>
           <span className="truncate text-sm font-semibold text-slate-800">{patient.patientName}</span>
           {patient.atRisk ? (
-            <Badge variant="outline" className="border-amber-200 bg-amber-50 text-[10px] text-amber-700">
+            <Badge variant="outline" className="border-amber-200 bg-amber-50 text-micro text-amber-700">
               <AlertTriangle className="mr-1 h-3 w-3" /> At risk
             </Badge>
           ) : null}
@@ -167,7 +167,7 @@ function PatientRow({
           >
             {fmtHours(patient.completedMinutes)} / {fmtHours(patient.target)}
           </span>
-          <span className="text-[10px] text-slate-400 font-medium">
+          <span className="text-micro text-slate-400 font-medium">
             Sch: {fmtHours(patient.scheduledMinutes)}
           </span>
         </div>
@@ -175,7 +175,7 @@ function PatientRow({
 
       <Progress value={pct} className={cn("mt-2 h-1.5", onTarget && "bg-emerald-100")} />
 
-      <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-400">
+      <div className="mt-1.5 flex items-center justify-between text-micro text-slate-400">
         <span>
           {onTarget
             ? "On target for the week"
@@ -188,7 +188,7 @@ function PatientRow({
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
-          className="mt-2 flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-slate-200 py-1.5 text-[11px] font-medium text-slate-500 hover:bg-slate-50"
+          className="mt-2 flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-slate-200 py-1.5 text-micro font-medium text-slate-500 hover:bg-white/60"
         >
           <Sparkles className="h-3 w-3" />
           {expanded ? "Hide suggestions" : "Suggest open slots"}
@@ -199,9 +199,9 @@ function PatientRow({
       {expanded && (
         <div className="mt-2 space-y-1.5">
           {suggestionsQuery.isLoading ? (
-            <p className="py-2 text-center text-[11px] text-slate-400">Looking for open slots…</p>
+            <p className="py-2 text-center text-micro text-slate-400">Looking for open slots…</p>
           ) : (suggestionsQuery.data ?? []).length === 0 ? (
-            <p className="py-2 text-center text-[11px] text-slate-400">
+            <p className="py-2 text-center text-micro text-slate-400">
               No open slots found this week — every team member is booked.
             </p>
           ) : (
@@ -222,8 +222,8 @@ export function WeeklyMinutesPanel({ open, onOpenChange }: WeeklyMinutesPanelPro
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-md">
-        <SheetHeader className="border-b border-slate-200 p-5">
+      <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-md glass-panel border-r-0 rounded-l-2xl">
+        <SheetHeader className="glass-header p-5">
           <SheetTitle className="flex items-center gap-2">
             <Clock className="h-5 w-5 text-slate-500" /> Weekly Minutes
           </SheetTitle>

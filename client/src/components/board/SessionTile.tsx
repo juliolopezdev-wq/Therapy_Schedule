@@ -45,29 +45,23 @@ export function SessionTile({
 
   const [resizeDeltaSlots, setResizeDeltaSlots] = useState(0);
 
-  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.stopPropagation();
-    e.preventDefault();
-
-    const target = e.currentTarget;
-    target.setPointerCapture(e.pointerId);
-
-    const startX = e.clientX;
+  const handleResizeStart = (startX: number) => {
     const initialSpan = session.slotSpan;
 
-    const onMove = (moveEvent: PointerEvent) => {
-      const dx = moveEvent.clientX - startX;
+    const onMove = (clientX: number) => {
+      const dx = clientX - startX;
       let deltaSlots = Math.round(dx / slotWidth);
       if (initialSpan + deltaSlots < 1) deltaSlots = 1 - initialSpan;
       setResizeDeltaSlots(deltaSlots);
     };
 
-    const onUp = (upEvent: PointerEvent) => {
-      target.releasePointerCapture(upEvent.pointerId);
-      target.removeEventListener("pointermove", onMove);
-      target.removeEventListener("pointerup", onUp);
+    const onUp = (clientX: number) => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onTouchEnd);
 
-      const dx = upEvent.clientX - startX;
+      const dx = clientX - startX;
       let finalDeltaSlots = Math.round(dx / slotWidth);
       if (initialSpan + finalDeltaSlots < 1) finalDeltaSlots = 1 - initialSpan;
 
@@ -77,8 +71,15 @@ export function SessionTile({
       }
     };
 
-    target.addEventListener("pointermove", onMove);
-    target.addEventListener("pointerup", onUp);
+    const onMouseMove = (e: MouseEvent) => onMove(e.clientX);
+    const onMouseUp = (e: MouseEvent) => onUp(e.clientX);
+    const onTouchMove = (e: TouchEvent) => onMove(e.touches[0].clientX);
+    const onTouchEnd = (e: TouchEvent) => onUp(e.changedTouches[0].clientX);
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("touchmove", onTouchMove, { passive: false });
+    window.addEventListener("touchend", onTouchEnd);
   };
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
@@ -143,8 +144,12 @@ export function SessionTile({
       className={cn(
         "group relative flex h-full items-center justify-between gap-1 overflow-hidden rounded px-1.5 text-left",
         session.therapyType === "Block" ? "border-2 border-dashed border-slate-400/50 bg-[repeating-linear-gradient(-45deg,rgba(0,0,0,0.05),rgba(0,0,0,0.05)_6px,transparent_6px,transparent_12px)]" : "border border-black/[0.05]",
-        "cursor-grab touch-none select-none transition-all duration-150",
-        "hover:shadow-sm hover:border-black/[0.10]",
+        "cursor-grab touch-none select-none",
+        // Only ease hover/status color changes -- never the drag transform or the live resize
+        // width. Both update on every pointer-move tick during an active drag/resize, so easing
+        // them makes the tile visibly lag a beat behind the cursor instead of tracking it 1:1.
+        isDragging || resizeDeltaSlots !== 0 ? "transition-colors duration-150" : "transition-all duration-300",
+        "hover:shadow-md hover:border-black/[0.15] hover:-translate-y-[1px] hover:scale-[1.02]",
         "active:cursor-grabbing",
         session.hasConflict && "ring-2 ring-red-500 animate-pulse-soft",
         isOverlay && "cursor-grabbing ring-2 ring-primary/80 shadow-lg",
@@ -221,8 +226,15 @@ export function SessionTile({
       {/* Right resize handle */}
       {!isOverlay && onResize && (
         <div
-          className="absolute inset-y-0 right-0 w-3 cursor-ew-resize hover:bg-black/10 z-10"
-          onPointerDown={handlePointerDown}
+          className="absolute inset-y-0 right-0 w-3 cursor-ew-resize hover:bg-black/10 z-10 touch-none"
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            handleResizeStart(e.clientX);
+          }}
+          onTouchStart={(e) => {
+            e.stopPropagation();
+            handleResizeStart(e.touches[0].clientX);
+          }}
           onClick={(e) => e.stopPropagation()}
         />
       )}

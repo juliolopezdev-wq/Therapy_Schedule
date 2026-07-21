@@ -132,7 +132,7 @@ export function DataAnalysisModal({ open, onOpenChange, patients, onEditPatient 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] sm:max-w-4xl h-[90vh] sm:h-[85vh] flex flex-col p-0 bg-white/90 backdrop-blur-2xl border-white/40 shadow-2xl rounded-2xl overflow-hidden">
+      <DialogContent className="w-[95vw] sm:max-w-4xl h-[90vh] sm:h-[85vh] flex flex-col p-0 glass-panel rounded-2xl overflow-hidden">
         <DialogHeader className="px-6 py-5 bg-gradient-to-r from-indigo-50 via-white to-purple-50 border-b border-indigo-100/50 shrink-0">
           <DialogTitle className="text-xl font-bold text-slate-800">
             Patient Session Analytics
@@ -146,16 +146,16 @@ export function DataAnalysisModal({ open, onOpenChange, patients, onEditPatient 
           {/* Controls */}
           <div className="flex flex-col md:flex-row items-stretch md:items-center gap-4 bg-white/60 backdrop-blur-md rounded-2xl border border-white p-3 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)]">
             <div className="flex justify-between items-center w-full md:w-auto gap-2">
-              <div className="flex bg-slate-100/80 p-1 rounded-xl shadow-inner border border-slate-200/60">
+              <div className="flex glass-surface p-1 rounded-xl shadow-inner">
               <button 
                 onClick={() => setRangeType("day")} 
-                className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all duration-300 ${rangeType === "day" ? "bg-white text-indigo-700 shadow-sm ring-1 ring-black/5" : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"}`}
+                className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all duration-300 ${rangeType === "day" ? "bg-white text-primary shadow-sm" : "text-slate-500 hover:text-slate-700 hover:bg-white/60"}`}
               >
                 Day
               </button>
               <button 
                 onClick={() => setRangeType("week")} 
-                className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all duration-300 ${rangeType === "week" ? "bg-white text-indigo-700 shadow-sm ring-1 ring-black/5" : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"}`}
+                className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all duration-300 ${rangeType === "week" ? "bg-white text-primary shadow-sm" : "text-slate-500 hover:text-slate-700 hover:bg-white/60"}`}
               >
                 Week
               </button>
@@ -221,7 +221,7 @@ export function DataAnalysisModal({ open, onOpenChange, patients, onEditPatient 
 
           {/* Data Table */}
           <div className="flex flex-col flex-1 min-h-[250px]">
-            <div className="grid grid-cols-[2fr_1fr_1fr_auto] sm:grid-cols-[3fr_1fr_1fr_auto] gap-4 px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider sticky top-0 bg-white/80 backdrop-blur-md z-10 rounded-t-2xl border-b border-slate-100">
+            <div className="grid grid-cols-[2fr_1fr_1fr_auto] sm:grid-cols-[3fr_1fr_1fr_auto] gap-4 px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider sticky top-0 glass-header z-10 rounded-t-2xl">
               <div>Patient</div>
               <div className="text-right">Sessions</div>
               <div className="text-right">Total Min</div>
@@ -242,11 +242,11 @@ export function DataAnalysisModal({ open, onOpenChange, patients, onEditPatient 
                   </div>
                 ) : (
                   dischargedPatientsData.map(p => (
-                    <div key={p.id} className="group grid grid-cols-[2fr_1fr_1fr_auto] sm:grid-cols-[3fr_1fr_1fr_auto] gap-4 px-4 py-4 items-center bg-white border border-slate-100 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] rounded-2xl hover:shadow-[0_8px_20px_-8px_rgba(79,70,229,0.15)] hover:border-indigo-100 hover:-translate-y-0.5 transition-all duration-300">
+                    <div key={p.id} className="group grid grid-cols-[2fr_1fr_1fr_auto] sm:grid-cols-[3fr_1fr_1fr_auto] gap-4 px-4 py-4 items-center glass-surface shadow-sm rounded-2xl hover:shadow-[0_8px_20px_-8px_rgba(79,70,229,0.15)] hover:border-indigo-100 hover:-translate-y-0.5 transition-all duration-300">
                       <div className="flex flex-col min-w-0 gap-1">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-extrabold text-slate-800 text-sm sm:text-base truncate tracking-tight">{p.name}</span>
-                          {p.isDischarged && <span className="rounded-md bg-rose-50 px-1.5 py-0.5 text-[9px] font-extrabold text-rose-600 uppercase shrink-0 border border-rose-100">DC</span>}
+                          {p.isDischarged && <span className="rounded-md bg-rose-50 px-1.5 py-0.5 text-micro font-extrabold text-rose-600 uppercase shrink-0 border border-rose-100">DC</span>}
                         </div>
                         <div className="flex items-center gap-1.5">
                           <span className="flex items-center justify-center h-4 w-4 rounded bg-slate-100 text-[9px] font-bold text-slate-500">RM</span>

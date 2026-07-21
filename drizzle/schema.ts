@@ -139,6 +139,7 @@ export const aiActionLog = sqliteTable("aiActionLog", {
       "cancel_session",
       "auto_schedule_all_gaps",
       "auto_schedule_patient_gaps",
+      "auto_schedule_team_gaps",
       "transfer_patient_sessions_to_next_day",
       "copy_patient_sessions_to_next_day",
       "copy_day_to_next_day",

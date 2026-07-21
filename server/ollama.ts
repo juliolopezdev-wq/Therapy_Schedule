@@ -4,6 +4,7 @@ import {
   getGapFillSuggestions,
   autoScheduleAllGaps,
   autoSchedulePatientGaps,
+  autoScheduleTeamGaps,
   getJointCommissionAnalytics,
   getTeamRoster,
   getDeliveryModeMix,
@@ -76,7 +77,8 @@ USING YOUR TOOLS
 - Use transfer_patient_sessions_to_next_day if asked to *move* a specific patient's sessions to tomorrow.
 - Use copy_patient_sessions_to_next_day if asked to *copy* or *duplicate* a specific patient's sessions to tomorrow.
 - Use copy_session if asked to copy, duplicate, or "paste" a specific session to a new time or therapist.
-- Use auto_schedule_patient_gaps if asked to add available therapists to a specific patient to complete their weekly minutes. Both auto-schedule tools now pick PT/OT/SLP per patient based on their actual shortfall against ptTarget/otTarget/slpTarget (falling back to PT only when a patient has none of those three set) -- the result's byDiscipline breakdown tells you what was actually booked, so report it (e.g. "booked 3 PT, 2 OT") instead of just a total count.
+- Use auto_schedule_patient_gaps if asked to add available therapists to a specific patient to complete their weekly minutes.
+- Use auto_schedule_team_gaps if asked to schedule or fill gaps for a specific team, rather than the entire unit. All three auto-schedule tools pick PT/OT/SLP per patient based on their actual shortfall against ptTarget/otTarget/slpTarget, re-picking before every single session booked (not once for the whole run) so a patient needing both PT and OT actually gets a balanced mix instead of every open slot landing in one discipline -- the result's byDiscipline breakdown tells you what was actually booked, so report it (e.g. "booked 3 PT, 2 OT") instead of just a total count. Speech (SLP) is never offered unless the patient has an actual history of receiving it -- if asked why a patient behind on minutes didn't get speech auto-scheduled, that's almost always the reason: no SLP on record for them, not an oversight. Patients with no ptTarget/otTarget/slpTarget set at all fall back to PT only.
 - Every write tool you use is remembered, so if the user says "undo that", "undo the last change", or "revert", call undo_last_action -- it reverses your most recent change(s) in order (booking, move, copy, cancel, auto-schedule, transfer, or clear), most recent first. If they say "undo the last 3" or similar, pass that count. If nothing is left to undo, or an undo fails partway (e.g. someone already changed that session manually), say exactly what did and didn't get reversed -- don't claim a full undo if it wasn't.
 - If a write tool fails, or the slot/therapist turns out not to be free, say so plainly and offer the closest real alternative from the data. Don't claim it worked if it didn't.
 - After a successful write, state plainly what changed (patient, therapist, day, time, duration, or how many sessions were auto-scheduled) so staff can verify it on the board, and pass along any cap warning the tool returned.
@@ -298,6 +300,21 @@ const TOOLS = [
           patientId: { type: "integer", description: "The patient's numeric ID" },
         },
         required: ["patientId"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "auto_schedule_team_gaps",
+      description:
+        "Book recommended gap-fill sessions for every patient assigned to a specific team to help them reach their weekly targets. Use when the user asks to schedule or fill gaps for a specific individual team.",
+      parameters: {
+        type: "object",
+        properties: {
+          teamId: { type: "integer", description: "The team's numeric ID (e.g., 1 for Team 1)" },
+        },
+        required: ["teamId"],
       },
     },
   },
@@ -678,7 +695,8 @@ async function reverseAiAction(entry: {
     }
 
     case "auto_schedule_all_gaps":
-    case "auto_schedule_patient_gaps": {
+    case "auto_schedule_patient_gaps":
+    case "auto_schedule_team_gaps": {
       const ids: number[] = data.sessionIds ?? [];
       for (const id of ids) {
         await deleteTherapySession(id, "ai").catch(() => {});
@@ -941,6 +959,19 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
           });
         }
         return JSON.stringify({ ok: true, action: "auto_scheduled_patient", count: result.count, skippedConflicts: result.skippedConflicts, byDiscipline: result.byDiscipline });
+      }
+
+      case "auto_schedule_team_gaps": {
+        const teamId = Number(args.teamId);
+        const result = await autoScheduleTeamGaps(teamId, referenceDate);
+        if (result.count > 0) {
+          await logAiAction({
+            actionType: "auto_schedule_team_gaps",
+            description: `Auto-scheduled ${result.count} session(s) for team ${teamId}`,
+            undoData: { sessionIds: result.sessionIds },
+          });
+        }
+        return JSON.stringify({ ok: true, action: "auto_scheduled_team", count: result.count, skippedConflicts: result.skippedConflicts, byDiscipline: result.byDiscipline });
       }
 
       case "transfer_patient_sessions_to_next_day": {

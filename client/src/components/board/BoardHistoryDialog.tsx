@@ -181,7 +181,7 @@ export function BoardHistoryDialog({ open, onOpenChange }: BoardHistoryDialogPro
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-lg glass-panel p-6">
         {viewing ? (
           <>
             <DialogHeader>
@@ -241,9 +241,9 @@ export function BoardHistoryDialog({ open, onOpenChange }: BoardHistoryDialogPro
               </AlertDialog>
             </div>
 
-            <ScrollArea className="h-96 rounded-lg border border-slate-200">
+            <ScrollArea className="h-96 rounded-lg glass-surface border-white/20">
               <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-slate-50 text-slate-500">
+                <thead className="sticky top-0 glass-header text-slate-600">
                   <tr>
                     <th className="px-2 py-1.5 text-left font-semibold uppercase tracking-wide">Patient</th>
                     <th className="px-2 py-1.5 text-left font-semibold uppercase tracking-wide">Time</th>
@@ -329,7 +329,7 @@ export function BoardHistoryDialog({ open, onOpenChange }: BoardHistoryDialogPro
                     return (
                       <li
                         key={snap.id}
-                        className="rounded-lg border border-slate-200 bg-white p-3"
+                        className="rounded-lg border border-white/40 glass-surface p-3"
                       >
                         <div className="flex items-center justify-between">
                           <span className="text-sm font-semibold text-slate-800">{dateLabel}</span>
@@ -343,7 +343,7 @@ export function BoardHistoryDialog({ open, onOpenChange }: BoardHistoryDialogPro
                             <Button
                               variant="outline"
                               size="icon"
-                              className="h-7 w-7 shrink-0 text-slate-500 hover:bg-slate-50"
+                              className="h-7 w-7 shrink-0 text-slate-500 hover:bg-white/60"
                               title="View this snapshot"
                               onClick={() => setViewingId(snap.id)}
                             >
@@ -352,7 +352,7 @@ export function BoardHistoryDialog({ open, onOpenChange }: BoardHistoryDialogPro
                             <Button
                               variant="outline"
                               size="icon"
-                              className="h-7 w-7 shrink-0 text-slate-500 hover:bg-slate-50"
+                              className="h-7 w-7 shrink-0 text-slate-500 hover:bg-white/60"
                               title="Print this snapshot"
                               onClick={() => printSnapshot(dateLabel, buildSnapshotRows((snap.snapshot ?? {}) as SnapshotData))}
                             >
@@ -399,7 +399,7 @@ export function BoardHistoryDialog({ open, onOpenChange }: BoardHistoryDialogPro
                             return (
                               <span
                                 key={t}
-                                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold"
+                                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-micro font-bold"
                                 style={{ backgroundColor: meta.bg, color: meta.fg }}
                               >
                                 {meta.label} {counts[t]}

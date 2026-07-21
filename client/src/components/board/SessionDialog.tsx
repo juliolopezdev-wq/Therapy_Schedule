@@ -51,7 +51,7 @@ interface SessionDialogProps {
   onOpenChange: (open: boolean) => void;
   initial: SessionFormValue | null;
   patients: { id: number; name: string; roomNumber: string }[];
-  therapists: { id: number; name: string }[];
+  therapists: { id: number; name: string; therapyType?: string }[];
   onSave: (value: SessionFormValue) => void;
   onDelete?: (id: number) => void;
 }
@@ -93,7 +93,7 @@ export function SessionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md glass-panel p-6">
         <DialogHeader>
           <DialogTitle>{isEditing ? "Edit Session" : "New Session"}</DialogTitle>
           <DialogDescription>
@@ -114,11 +114,9 @@ export function SessionDialog({
                     key={t}
                     type="button"
                     onClick={() => setForm({ ...form, therapyType: t })}
-                    className="rounded-md px-2 py-2 text-xs font-bold transition-all"
+                    className={`rounded-md px-2 py-2 text-xs font-bold transition-all ${!active ? 'glass-surface text-slate-600' : ''}`}
                     style={{
-                      backgroundColor: active ? meta.bg : "#f1f5f9",
-                      color: active ? meta.fg : "#64748b",
-                      outline: active ? "2px solid rgba(0,0,0,0.15)" : "none",
+                      ...(active ? { backgroundColor: meta.bg, color: meta.fg, outline: "2px solid rgba(0,0,0,0.15)" } : {})
                     }}
                   >
                     {meta.label}
@@ -222,9 +220,19 @@ export function SessionDialog({
             <Label>Therapist</Label>
             <Select
               value={form.therapistId ? String(form.therapistId) : "none"}
-              onValueChange={(v) =>
-                setForm({ ...form, therapistId: v === "none" ? null : Number(v) })
-              }
+              onValueChange={(v) => {
+                if (v === "none") {
+                  setForm({ ...form, therapistId: null });
+                } else {
+                  const id = Number(v);
+                  const selectedTherapist = therapists.find(t => t.id === id);
+                  setForm({ 
+                    ...form, 
+                    therapistId: id,
+                    ...(selectedTherapist?.therapyType && { therapyType: selectedTherapist.therapyType as TherapyType })
+                  });
+                }
+              }}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Unassigned" />
@@ -252,11 +260,9 @@ export function SessionDialog({
                     key={s}
                     type="button"
                     onClick={() => setForm({ ...form, status: s, missedReason: undefined })}
-                    className="rounded-md px-2 py-2 text-xs font-bold transition-all"
+                    className={`rounded-md px-2 py-2 text-xs font-bold transition-all ${!active ? 'glass-surface text-slate-600' : ''}`}
                     style={{
-                      backgroundColor: active ? meta.bg : "#f1f5f9",
-                      color: active ? meta.fg : "#64748b",
-                      outline: active ? "2px solid rgba(0,0,0,0.15)" : "none",
+                      ...(active ? { backgroundColor: meta.bg, color: meta.fg, outline: "2px solid rgba(0,0,0,0.15)" } : {})
                     }}
                   >
                     {meta.label}
@@ -266,11 +272,9 @@ export function SessionDialog({
               <button
                 type="button"
                 onClick={() => setForm({ ...form, status: isMissedStatus(form.status) ? form.status : "missed_other" })}
-                className="rounded-md px-2 py-2 text-xs font-bold transition-all"
+                className={`rounded-md px-2 py-2 text-xs font-bold transition-all ${!isMissedStatus(form.status) ? 'glass-surface text-slate-600' : ''}`}
                 style={{
-                  backgroundColor: isMissedStatus(form.status) ? "#fee2e2" : "#f1f5f9",
-                  color: isMissedStatus(form.status) ? "#991b1b" : "#64748b",
-                  outline: isMissedStatus(form.status) ? "2px solid rgba(0,0,0,0.15)" : "none",
+                  ...(isMissedStatus(form.status) ? { backgroundColor: "#fee2e2", color: "#991b1b", outline: "2px solid rgba(0,0,0,0.15)" } : {})
                 }}
               >
                 Missed

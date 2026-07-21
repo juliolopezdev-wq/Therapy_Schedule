@@ -175,8 +175,8 @@ export function TherapistPanel({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-md">
-        <SheetHeader className="border-b border-slate-200 p-5">
+      <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-md glass-panel border-r-0 rounded-l-2xl">
+        <SheetHeader className="glass-header p-5">
           <SheetTitle className="flex items-center gap-2">
             <UserRound className="h-5 w-5 text-slate-500" /> Staff Management
           </SheetTitle>
@@ -186,7 +186,7 @@ export function TherapistPanel({
         </SheetHeader>
 
         {/* Add therapist form */}
-        <div className="border-b border-slate-100 p-4 space-y-3">
+        <div className="border-b border-white/40 p-4 space-y-3">
           <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">
             {editingId ? "Edit Staff" : "Add Staff"}
           </p>
@@ -316,10 +316,10 @@ export function TherapistPanel({
                         className="h-2 w-2 rounded-full shrink-0"
                         style={{ backgroundColor: team.color }}
                       />
-                      <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                      <span className="text-micro font-semibold uppercase tracking-widest text-slate-500">
                         {team.name}
                       </span>
-                      <span className="text-[10px] text-slate-400">({members.length})</span>
+                      <span className="text-micro text-slate-400">({members.length})</span>
                     </div>
                     <ul className="space-y-2">
                       {members.map((t) => (
@@ -333,10 +333,10 @@ export function TherapistPanel({
                 <div>
                   <div className="mb-2 flex items-center gap-2">
                     <span className="h-2 w-2 rounded-full bg-slate-300 shrink-0" />
-                    <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                    <span className="text-micro font-semibold uppercase tracking-widest text-slate-500">
                       Unassigned
                     </span>
-                    <span className="text-[10px] text-slate-400">({unassigned.length})</span>
+                    <span className="text-micro text-slate-400">({unassigned.length})</span>
                   </div>
                   <ul className="space-y-2">
                     {unassigned.map((t) => (
@@ -364,7 +364,7 @@ function TherapistRow({
 }) {
   const scheduleSummary = describeSchedule(therapist);
   return (
-    <li className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3">
+    <li className="flex items-center justify-between gap-3 rounded-lg border border-white/40 glass-surface p-3">
       <div className="flex items-center gap-2 min-w-0">
         <div 
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white shadow-sm"
@@ -382,12 +382,12 @@ function TherapistRow({
             <span className="truncate text-sm font-medium text-slate-800">
               {therapist.name}
             </span>
-            <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-400">
+            <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-micro font-bold text-slate-400">
               {therapist.therapyType}
             </span>
           </div>
           {scheduleSummary && (
-            <span className="flex items-center gap-1 text-[10px] text-slate-400">
+            <span className="flex items-center gap-1 text-micro text-slate-400">
               <Clock className="h-2.5 w-2.5" /> {scheduleSummary}
             </span>
           )}
@@ -412,7 +412,7 @@ function TherapistRow({
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
           </AlertDialogTrigger>
-        <AlertDialogContent>
+        <AlertDialogContent className="glass-panel p-6">
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {therapist.name}?</AlertDialogTitle>
             <AlertDialogDescription>

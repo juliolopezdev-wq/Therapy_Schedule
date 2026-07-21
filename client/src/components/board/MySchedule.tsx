@@ -212,7 +212,7 @@ export function MySchedule({
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-md glass-panel p-6">
           <DialogHeader>
             <DialogTitle className="flex items-center justify-between gap-2 pr-6">
               <span>My Schedule</span>
@@ -265,7 +265,7 @@ export function MySchedule({
                   return (
                     <li
                       key={s.id}
-                      className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3"
+                      className="flex items-center gap-3 rounded-lg border border-white/40 glass-surface p-3"
                     >
                       <span
                         className="flex h-9 w-11 shrink-0 items-center justify-center rounded text-xs font-bold"

@@ -59,8 +59,13 @@ export function DailyAttendance({
         description += `\nReassignments: ${reassignmentDetails}`;
       }
 
+      if (data.suggestions && data.suggestions.length > 0) {
+        description += `\n\nAI Suggestions:\n- ${data.suggestions.join('\n- ')}`;
+      }
+
       toast.success("Call-Off Processed", {
         description,
+        duration: 8000,
       });
     },
   });
@@ -85,9 +90,9 @@ export function DailyAttendance({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-[400px] sm:w-[540px] flex flex-col p-0">
-        <div className="flex flex-col h-full bg-slate-50">
-          <SheetHeader className="px-6 py-5 bg-white border-b border-slate-200">
+      <SheetContent side="right" className="w-[400px] sm:w-[540px] flex flex-col p-0 glass-panel border-r-0 rounded-l-2xl">
+        <div className="flex flex-col h-full bg-transparent">
+          <SheetHeader className="px-6 py-5 glass-header">
             <div className="flex items-center gap-2">
               <UserMinus className="h-5 w-5 text-indigo-500" />
               <SheetTitle>Daily Attendance</SheetTitle>
@@ -98,19 +103,19 @@ export function DailyAttendance({
           </SheetHeader>
 
           <div className="flex-1 overflow-y-auto p-6 space-y-4">
-            <div className="flex items-start gap-3 bg-amber-50 text-amber-800 p-3 rounded-lg border border-amber-200/60 mb-4">
-              <AlertCircle className="h-5 w-5 shrink-0 mt-0.5 text-amber-500" />
+            <div className="flex items-start gap-3 bg-amber-50/80 text-amber-900 p-4 rounded-lg border border-amber-300/60 mb-4 shadow-sm">
+              <AlertCircle className="h-5 w-5 shrink-0 mt-0.5 text-amber-600" />
               <p className="text-sm">
                 Marking a therapist as <strong>Call-Off</strong> will automatically attempt to reassign all their scheduled sessions today to another available therapist of the same discipline. Any sessions that cannot be covered will become <em>unassigned gaps</em>.
               </p>
             </div>
 
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="grid grid-cols-1 divide-y divide-slate-100">
+            <div className="glass-surface rounded-xl overflow-hidden">
+              <div className="grid grid-cols-1">
                 {therapists.map((t) => {
                   const absent = isAbsent(t.id);
                   return (
-                    <div key={t.id} className="flex items-center justify-between p-4 hover:bg-slate-50 transition-colors">
+                    <div key={t.id} className="flex items-center justify-between p-4 hover:bg-white/60 transition-colors border-b border-white/20 last:border-b-0">
                       <div className="flex items-center gap-3">
                         <span
                           className="h-2.5 w-2.5 rounded-full"
@@ -141,7 +146,7 @@ export function DailyAttendance({
         </div>
       </SheetContent>
       <AlertDialog open={!!confirmCallOff} onOpenChange={(open) => !open && setConfirmCallOff(null)}>
-        <AlertDialogContent>
+        <AlertDialogContent className="glass-panel p-6">
           <AlertDialogHeader>
             <AlertDialogTitle>Mark {confirmCallOff?.name} as Absent?</AlertDialogTitle>
             <AlertDialogDescription>
