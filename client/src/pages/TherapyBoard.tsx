@@ -35,6 +35,7 @@ import {
   UserCircle2,
 } from "lucide-react";
 import { SickCallModal } from "@/components/board/SickCallModal";
+import { StaffStatsModal } from "@/components/board/StaffStatsModal";
 import { ComplianceSentinelModal } from "@/components/board/ComplianceSentinelModal";
 import { PredictiveStaffingPanel } from "@/components/board/PredictiveStaffingPanel";
 import { toast } from "sonner";
@@ -204,6 +205,7 @@ export default function TherapyBoard() {
   const [sickCallModalOpen, setSickCallModalOpen] = useState(false);
   const [complianceSentinelOpen, setComplianceSentinelOpen] = useState(false);
   const [predictiveStaffingOpen, setPredictiveStaffingOpen] = useState(false);
+  const [statsTherapistId, setStatsTherapistId] = useState<number | null>(null);
 
   const jumpToPatient = (patientId: number) => {
     const patient = patientsQuery.data?.find((p) => p.id === patientId);
@@ -1120,6 +1122,7 @@ export default function TherapyBoard() {
         onOpenSickCall={() => setSickCallModalOpen(true)}
         onOpenComplianceSentinel={() => setComplianceSentinelOpen(true)}
         onOpenPredictiveStaffing={() => setPredictiveStaffingOpen(true)}
+        onViewStats={setStatsTherapistId}
       />
 
       {/* Mobile hint */}
@@ -1450,6 +1453,7 @@ export default function TherapyBoard() {
           deleteTherapist.mutate({ id });
           toast.success("Staff member removed");
         }}
+        onViewStats={setStatsTherapistId}
       />
 
       <SickCallModal
@@ -1460,6 +1464,16 @@ export default function TherapyBoard() {
         onSuccess={() => {
           sessionsQuery.refetch();
         }}
+        onViewStats={setStatsTherapistId}
+      />
+
+      <StaffStatsModal
+        open={statsTherapistId !== null}
+        onOpenChange={(open) => {
+          if (!open) setStatsTherapistId(null);
+        }}
+        therapistId={statsTherapistId}
+        date={day}
       />
 
       <ComplianceSentinelModal

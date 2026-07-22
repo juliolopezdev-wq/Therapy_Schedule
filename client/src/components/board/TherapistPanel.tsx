@@ -28,7 +28,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Plus, Trash2, UserRound, Pencil, Clock } from "lucide-react";
+import { Plus, Trash2, UserRound, Pencil, Clock, BarChart3 } from "lucide-react";
 
 interface Therapist {
   id: number;
@@ -99,6 +99,7 @@ interface TherapistPanelProps {
   onAdd: (name: string, teamId: number | null, therapyType: "PT" | "OT" | "SLP", schedule: WorkSchedule) => void;
   onEdit: (id: number, name: string, teamId: number | null, therapyType: "PT" | "OT" | "SLP", schedule: WorkSchedule) => void;
   onDelete: (id: number) => void;
+  onViewStats?: (id: number) => void;
 }
 
 const EMPTY_FORM = {
@@ -118,6 +119,7 @@ export function TherapistPanel({
   onAdd,
   onEdit,
   onDelete,
+  onViewStats,
 }: TherapistPanelProps) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -285,7 +287,7 @@ export function TherapistPanel({
           <div className="flex items-center gap-2">
             <Button
               size="sm"
-              className="flex-1 h-8"
+              className="flex-1 h-8 bg-sky-600 hover:bg-sky-700 text-white font-bold"
               disabled={!form.name.trim()}
               onClick={handleSave}
             >
@@ -323,7 +325,7 @@ export function TherapistPanel({
                     </div>
                     <ul className="space-y-2">
                       {members.map((t) => (
-                        <TherapistRow key={t.id} therapist={t} onDelete={onDelete} onEditClick={handleEditClick} />
+                        <TherapistRow key={t.id} therapist={t} onDelete={onDelete} onEditClick={handleEditClick} onViewStats={onViewStats} />
                       ))}
                     </ul>
                   </div>
@@ -340,7 +342,7 @@ export function TherapistPanel({
                   </div>
                   <ul className="space-y-2">
                     {unassigned.map((t) => (
-                      <TherapistRow key={t.id} therapist={t} onDelete={onDelete} onEditClick={handleEditClick} />
+                      <TherapistRow key={t.id} therapist={t} onDelete={onDelete} onEditClick={handleEditClick} onViewStats={onViewStats} />
                     ))}
                   </ul>
                 </div>
@@ -357,10 +359,12 @@ function TherapistRow({
   therapist,
   onDelete,
   onEditClick,
+  onViewStats,
 }: {
   therapist: Therapist;
   onDelete: (id: number) => void;
   onEditClick: (t: Therapist) => void;
+  onViewStats?: (id: number) => void;
 }) {
   const scheduleSummary = describeSchedule(therapist);
   return (
@@ -394,6 +398,17 @@ function TherapistRow({
         </div>
       </div>
       <div className="flex items-center gap-1">
+        {onViewStats && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 shrink-0 text-slate-400 hover:text-sky-600"
+            title="View Staff Statistics"
+            onClick={() => onViewStats(therapist.id)}
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon"

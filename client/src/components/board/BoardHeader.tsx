@@ -74,6 +74,7 @@ export interface BoardHeaderProps {
   onOpenSickCall?: () => void;
   onOpenComplianceSentinel?: () => void;
   onOpenPredictiveStaffing?: () => void;
+  onViewStats?: (therapistId: number) => void;
 }
 
 export function BoardHeader({
@@ -83,7 +84,7 @@ export function BoardHeader({
   setWeeklyMinutesPanelOpen, setAskSchedulerPanelOpen, setHistoryOpen, setDataAnalysisOpen, handleSnapshot,
   handlePrintAllPatients, mySchedTherapist, setMySchedTherapist, tiles, handleCopyDay,
   digestByPatientId, onBookSuggestion,
-  onOpenSickCall, onOpenComplianceSentinel, onOpenPredictiveStaffing,
+  onOpenSickCall, onOpenComplianceSentinel, onOpenPredictiveStaffing, onViewStats,
 }: BoardHeaderProps) {
   const [isAttendanceOpen, setIsAttendanceOpen] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
@@ -120,7 +121,6 @@ export function BoardHeader({
     () => [
       { label: "Patients", icon: COMMAND_BAR_ICONS.Users, onClick: () => setPanelOpen(true) },
       { label: "Staff", icon: COMMAND_BAR_ICONS.UserRound, onClick: () => setStaffPanelOpen(true) },
-      { label: "Attendance", icon: COMMAND_BAR_ICONS.ClipboardList, onClick: () => setIsAttendanceOpen(true) },
       { label: "Mins", icon: COMMAND_BAR_ICONS.Clock, onClick: () => setWeeklyMinutesPanelOpen(true) },
       { label: "Data", icon: COMMAND_BAR_ICONS.BarChart3, onClick: () => setDataAnalysisOpen(true) },
     ],
@@ -213,6 +213,10 @@ export function BoardHeader({
                 <DropdownMenuItem onClick={handlePrintAllPatients} className="cursor-pointer font-medium hover:bg-white/50">
                   <Printer className="mr-2 h-4 w-4 text-primary" />
                   <span>Print Schedules</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setIsAttendanceOpen(true)} className="cursor-pointer font-medium hover:bg-white/50">
+                  <COMMAND_BAR_ICONS.ClipboardList className="mr-2 h-4 w-4 text-primary" />
+                  <span>Staff Attendance</span>
                 </DropdownMenuItem>
                 <div className="my-1 h-px bg-slate-200/80" />
                 <DropdownMenuItem onClick={onOpenSickCall} className="cursor-pointer font-bold text-rose-600 hover:bg-rose-50">
@@ -360,6 +364,7 @@ export function BoardHeader({
         therapists={therapists}
         open={isAttendanceOpen}
         onOpenChange={setIsAttendanceOpen}
+        onViewStats={onViewStats}
       />
     </header>
   );

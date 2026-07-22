@@ -6,14 +6,14 @@ const SLOT_WIDTH = 72;
 
 export function TimeHeaderRow() {
   return (
-    <div className="flex border-b border-slate-200/80 bg-white/95 backdrop-blur-md shadow-[0_4px_15px_-3px_rgba(0,0,0,0.06)] sticky top-0 z-35 transition-colors">
-      <div className="sticky left-0 z-40 flex w-72 shrink-0 items-center border-r border-slate-200/60 bg-slate-100 px-4 py-2 shadow-[2px_0_10px_-3px_rgba(0,0,0,0.02)]">
+    <div className="flex h-11 border-b border-slate-200/80 bg-white/95 backdrop-blur-md shadow-[0_4px_15px_-3px_rgba(0,0,0,0.06)] sticky top-0 z-35 transition-colors">
+      <div className="sticky left-0 z-40 flex h-full w-72 shrink-0 items-center border-r border-slate-200/60 bg-slate-100 px-4 py-2 shadow-[2px_0_10px_-3px_rgba(0,0,0,0.02)]">
         <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
           Patient / Room
         </span>
       </div>
       <div
-        className="sticky z-40 flex w-11 shrink-0 flex-col items-center justify-center gap-0.5 border-r border-slate-200/60 bg-slate-100 py-2 shadow-[6px_0_15px_-4px_rgba(0,0,0,0.08)]"
+        className="sticky z-40 flex h-full w-11 shrink-0 flex-col items-center justify-center gap-0.5 border-r border-slate-200/60 bg-slate-100 py-2 shadow-[6px_0_15px_-4px_rgba(0,0,0,0.08)]"
         style={{ left: 288 }}
       >
         <CalendarClock className="h-3 w-3 text-slate-400" strokeWidth={2.5} />

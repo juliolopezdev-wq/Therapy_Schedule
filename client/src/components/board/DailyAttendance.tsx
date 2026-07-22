@@ -10,7 +10,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
-import { AlertCircle, UserMinus } from "lucide-react";
+import { AlertCircle, UserMinus, BarChart3 } from "lucide-react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -28,11 +28,13 @@ export function DailyAttendance({
   therapists,
   open,
   onOpenChange,
+  onViewStats,
 }: {
   day: Date;
   therapists: any[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onViewStats?: (therapistId: number) => void;
 }) {
   const trpcContext = trpc.useContext();
   const [confirmCallOff, setConfirmCallOff] = useState<{ therapistId: number; name: string } | null>(null);
@@ -127,7 +129,18 @@ export function DailyAttendance({
                         </div>
                       </div>
                       
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2.5">
+                        {onViewStats && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg"
+                            title={`View ${t.name}'s Statistics`}
+                            onClick={() => onViewStats(t.id)}
+                          >
+                            <BarChart3 className="h-4 w-4" />
+                          </Button>
+                        )}
                         <span className={`text-xs font-bold uppercase tracking-wider ${absent ? "text-rose-500" : "text-emerald-500"}`}>
                           {absent ? "Absent" : "Present"}
                         </span>

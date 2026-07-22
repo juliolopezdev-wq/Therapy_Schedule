@@ -1165,32 +1165,33 @@ export async function callOffTherapist(therapistId: number, date: Date, reason: 
         bestFallback = candidate;
       }
 
-      try {
-        await assertNoSchedulingConflict({
-          patientId: session.patientId,
-          therapistId: candidate.id,
-          startTime: session.startTime,
-          endTime: session.endTime,
-          deliveryMode: session.deliveryMode as "individual" | "concurrent" | "group",
-          excludeSessionId: session.id,
-        });
-        
-        // Success! No conflict. Reassign to this candidate.
-        await db.update(therapySessions)
-          .set({ therapistId: candidate.id })
-          .where(eq(therapySessions.id, session.id));
-          
-        reAssignedCount++;
-        reassignedTo[candidate.id] = (reassignedTo[candidate.id] || 0) + 1;
-        workloads.set(candidate.id, (workloads.get(candidate.id) || 0) + session.durationMinutes);
-        reAssigned = true;
-        break; // Stop looking for a candidate for this session
-      } catch (err) {
-        if (err instanceof SchedulingConflictError) {
-           continue; // try next candidate
-        }
-        throw err;
+      // Check therapist availability for candidate at session time window
+      const therapistOverlap = await db
+        .select()
+        .from(therapySessions)
+        .where(
+          and(
+            eq(therapySessions.therapistId, candidate.id),
+            ne(therapySessions.id, session.id),
+            lt(therapySessions.startTime, session.endTime),
+            gt(therapySessions.endTime, session.startTime)
+          )
+        );
+
+      if (therapistOverlap.length > 0) {
+        continue; // candidate is busy at this time
       }
+
+      // Success! Candidate is free. Reassign to this candidate.
+      await db.update(therapySessions)
+        .set({ therapistId: candidate.id })
+        .where(eq(therapySessions.id, session.id));
+        
+      reAssignedCount++;
+      reassignedTo[candidate.id] = (reassignedTo[candidate.id] || 0) + 1;
+      workloads.set(candidate.id, (workloads.get(candidate.id) || 0) + session.durationMinutes);
+      reAssigned = true;
+      break; // Stop looking for a candidate for this session
     }
 
     if (!reAssigned) {
@@ -1229,4 +1230,172 @@ export async function cancelCallOffTherapist(therapistId: number, date: Date) {
     );
 
   return { success: true };
+}
+
+export async function recordTherapistAbsence(therapistId: number, date: Date, reason: string = "Call-Off") {
+  const db = await getDb();
+  if (!db) return;
+  const { startOfDay, endOfDay } = dayBounds(date);
+  const existing = await db
+    .select()
+    .from(therapistAbsences)
+    .where(
+      and(
+        eq(therapistAbsences.therapistId, therapistId),
+        gte(therapistAbsences.date, startOfDay),
+        lte(therapistAbsences.date, endOfDay)
+      )
+    );
+  if (existing.length === 0) {
+    await db.insert(therapistAbsences).values({
+      therapistId,
+      date: startOfDay,
+      reason,
+    });
+  }
+}
+
+export async function getTherapistStats(therapistId: number, targetDate: Date) {
+  const db = await getDb();
+  if (!db) throw new Error("Database uninitialized");
+
+  const [therapist] = await db.select().from(therapists).where(eq(therapists.id, therapistId));
+  if (!therapist) throw new Error("Therapist not found");
+
+  let teamName: string | null = null;
+  if (therapist.teamId) {
+    const [team] = await db.select().from(teams).where(eq(teams.id, therapist.teamId));
+    if (team) teamName = team.name;
+  }
+
+  const { startOfDay, endOfDay } = dayBounds(targetDate);
+
+  // Today's sessions & absences
+  const todaySessions = await db
+    .select()
+    .from(therapySessions)
+    .where(
+      and(
+        eq(therapySessions.therapistId, therapistId),
+        gte(therapySessions.startTime, startOfDay),
+        lte(therapySessions.startTime, endOfDay)
+      )
+    );
+
+  const todayAbsences = await db
+    .select()
+    .from(therapistAbsences)
+    .where(
+      and(
+        eq(therapistAbsences.therapistId, therapistId),
+        gte(therapistAbsences.date, startOfDay),
+        lte(therapistAbsences.date, endOfDay)
+      )
+    );
+
+  const isAbsentToday = todayAbsences.length > 0;
+  const todayTotalMinutes = todaySessions.reduce((acc, s) => acc + (s.durationMinutes || 0), 0);
+  const todayCompletedSessions = todaySessions.filter((s) => s.status === "completed");
+  const todayCompletedMinutes = todayCompletedSessions.reduce((acc, s) => acc + (s.actualDurationMinutes || s.durationMinutes || 0), 0);
+
+  // Patient names for today's sessions
+  const allPatients = await getPatients();
+  const patientMap = new Map(allPatients.map((p) => [p.id, p]));
+
+  const todaySessionDetails = todaySessions.map((s) => {
+    const patient = patientMap.get(s.patientId);
+    const sStart = new Date(s.startTime);
+    const timeLabel = sStart.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    return {
+      id: s.id,
+      patientId: s.patientId,
+      patientName: patient?.name ?? `Patient ${s.patientId}`,
+      roomNumber: patient?.roomNumber ?? "N/A",
+      timeLabel,
+      startTime: s.startTime,
+      durationMinutes: s.durationMinutes,
+      therapyType: s.therapyType,
+      status: s.status,
+    };
+  });
+
+  const uniquePatientIdsToday = new Set(todaySessions.map((s) => s.patientId));
+
+  // Week sessions (Sun - Sat)
+  const weekStart = new Date(startOfDay);
+  weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+  weekStart.setHours(0, 0, 0, 0);
+
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 6);
+  weekEnd.setHours(23, 59, 59, 999);
+
+  const weekSessions = await db
+    .select()
+    .from(therapySessions)
+    .where(
+      and(
+        eq(therapySessions.therapistId, therapistId),
+        gte(therapySessions.startTime, weekStart),
+        lte(therapySessions.startTime, weekEnd)
+      )
+    );
+
+  const weekTotalMinutes = weekSessions.reduce((acc, s) => acc + (s.durationMinutes || 0), 0);
+  const weekCompletedSessions = weekSessions.filter((s) => s.status === "completed");
+  const weekCompletedMinutes = weekCompletedSessions.reduce((acc, s) => acc + (s.actualDurationMinutes || s.durationMinutes || 0), 0);
+  const weekTargetMinutes = 1500;
+  const productivityPct = Math.min(100, Math.round((weekTotalMinutes / weekTargetMinutes) * 100));
+
+  // Absence history
+  const allAbsences = await db
+    .select()
+    .from(therapistAbsences)
+    .where(eq(therapistAbsences.therapistId, therapistId))
+    .orderBy(desc(therapistAbsences.date));
+
+  const totalAbsencesCount = allAbsences.length;
+  const recentAbsences = allAbsences.slice(0, 5).map((a) => ({
+    id: a.id,
+    date: new Date(a.date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }),
+    reason: a.reason,
+  }));
+
+  const attendanceRatePct = totalAbsencesCount === 0 ? 100 : Math.max(70, Math.round(100 - (totalAbsencesCount * 5)));
+
+  return {
+    therapist: {
+      id: therapist.id,
+      name: therapist.name,
+      therapyType: therapist.therapyType,
+      color: therapist.color,
+      teamId: therapist.teamId,
+      teamName,
+      workDays: therapist.workDays,
+      workStartTime: therapist.workStartTime,
+      workEndTime: therapist.workEndTime,
+      isPRN: therapist.isPRN,
+    },
+    today: {
+      isAbsent: isAbsentToday,
+      totalMinutes: todayTotalMinutes,
+      sessionCount: todaySessions.length,
+      completedMinutes: todayCompletedMinutes,
+      completedCount: todayCompletedSessions.length,
+      uniquePatientsCount: uniquePatientIdsToday.size,
+      sessions: todaySessionDetails,
+    },
+    week: {
+      totalMinutes: weekTotalMinutes,
+      sessionCount: weekSessions.length,
+      completedMinutes: weekCompletedMinutes,
+      targetMinutes: weekTargetMinutes,
+      productivityPct,
+    },
+    attendance: {
+      absenceCount: totalAbsencesCount,
+      attendanceRatePct,
+      recentAbsences,
+    },
+  };
 }

@@ -100,7 +100,7 @@ function PatientRowImpl({
       {/* Patient label */}
       <PatientDraggable patient={patient}
         className={cn(
-          "sticky left-0 z-30 flex h-full w-72 shrink-0 items-center justify-between gap-1.5 border-r border-slate-200 px-3 py-1.5 transition-all duration-300 cursor-grab active:cursor-grabbing shadow-[2px_0_10px_-3px_rgba(0,0,0,0.02)]",
+          "sticky left-0 z-20 flex h-full w-72 shrink-0 items-center justify-between gap-1.5 border-r border-slate-200 px-3 py-1.5 transition-all duration-300 cursor-grab active:cursor-grabbing shadow-[2px_0_10px_-3px_rgba(0,0,0,0.02)]",
           isDC ? "bg-slate-200" : (rowIdx % 2 === 0 ? "bg-white" : "bg-slate-50/50"),
           "group-hover/row:bg-white group-hover/row:shadow-md",
         )}
@@ -232,7 +232,7 @@ function PatientRowImpl({
         return (
           <div
             className={cn(
-              "sticky z-30 flex h-full w-11 shrink-0 items-center justify-center border-r border-slate-200 transition-colors shadow-[6px_0_15px_-4px_rgba(0,0,0,0.08)]",
+              "sticky z-20 flex h-full w-11 shrink-0 items-center justify-center border-r border-slate-200 transition-colors shadow-[6px_0_15px_-4px_rgba(0,0,0,0.08)]",
               isDC ? "bg-slate-200" : (rowIdx % 2 === 0 ? "bg-white" : "bg-slate-50"),
               "group-hover/row:bg-slate-100",
             )}

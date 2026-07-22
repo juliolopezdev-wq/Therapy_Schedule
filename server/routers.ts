@@ -41,6 +41,7 @@ import {
   cancelCallOffTherapist,
   getTherapistAbsences,
   getLastSessionNoteForPatient,
+  getTherapistStats,
   RoomConflictError,
 } from "./db";
 import { getWeeklyMinutesSummary, getGapFillSuggestions, getOrCreateTodaysDigest, getPredictiveForecast, rebalanceTherapistAbsence, getComplianceSentinelReport } from "./scheduling";
@@ -277,6 +278,9 @@ export const appRouter = router({
     delete: publicProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => deleteTherapist(input.id)),
+    getStats: publicProcedure
+      .input(z.object({ therapistId: z.number(), date: z.date().optional() }))
+      .query(async ({ input }) => getTherapistStats(input.therapistId, input.date ?? new Date())),
   }),
 
   /* ------------------------------------------------------------------ */
