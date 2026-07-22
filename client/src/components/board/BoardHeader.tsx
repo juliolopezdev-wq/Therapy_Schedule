@@ -71,6 +71,9 @@ export interface BoardHeaderProps {
    *  computeMorningDigest). Optional so this component doesn't hard-require the digest query. */
   digestByPatientId?: Map<number, any>;
   onBookSuggestion?: (patientId: number, slot: any) => void;
+  onOpenSickCall?: () => void;
+  onOpenComplianceSentinel?: () => void;
+  onOpenPredictiveStaffing?: () => void;
 }
 
 export function BoardHeader({
@@ -79,7 +82,8 @@ export function BoardHeader({
   therapists, patients, jumpToPatient, setPanelOpen, setStaffPanelOpen,
   setWeeklyMinutesPanelOpen, setAskSchedulerPanelOpen, setHistoryOpen, setDataAnalysisOpen, handleSnapshot,
   handlePrintAllPatients, mySchedTherapist, setMySchedTherapist, tiles, handleCopyDay,
-  digestByPatientId, onBookSuggestion
+  digestByPatientId, onBookSuggestion,
+  onOpenSickCall, onOpenComplianceSentinel, onOpenPredictiveStaffing,
 }: BoardHeaderProps) {
   const [isAttendanceOpen, setIsAttendanceOpen] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
@@ -209,6 +213,16 @@ export function BoardHeader({
                 <DropdownMenuItem onClick={handlePrintAllPatients} className="cursor-pointer font-medium hover:bg-white/50">
                   <Printer className="mr-2 h-4 w-4 text-primary" />
                   <span>Print Schedules</span>
+                </DropdownMenuItem>
+                <div className="my-1 h-px bg-slate-200/80" />
+                <DropdownMenuItem onClick={onOpenSickCall} className="cursor-pointer font-bold text-rose-600 hover:bg-rose-50">
+                  <span>🚨 Sick-Call Triage</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={onOpenComplianceSentinel} className="cursor-pointer font-bold text-amber-600 hover:bg-amber-50">
+                  <span>🛡️ Compliance Sentinel</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={onOpenPredictiveStaffing} className="cursor-pointer font-bold text-sky-600 hover:bg-sky-50">
+                  <span>📈 Capacity Planner</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

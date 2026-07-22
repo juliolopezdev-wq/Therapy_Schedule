@@ -1170,3 +1170,141 @@ export async function getPredictiveForecast(targetDate: Date): Promise<Predictiv
     topAvailableTherapists: therapistAvailability.slice(0, 3),
   };
 }
+
+/* ========================================================================== */
+/* SICK-CALL EMERGENCY RE-BALANCER AGENT                                      */
+/* ========================================================================== */
+
+export async function rebalanceTherapistAbsence(therapistId: number, targetDate: Date) {
+  const therapist = (await getTherapists()).find((t) => t.id === therapistId);
+  if (!therapist) throw new Error("Therapist not found");
+
+  const start = startOfDayLocal(targetDate);
+  const end = new Date(start);
+  end.setHours(23, 59, 59, 999);
+
+  const daySessions = await getTherapySessionsForDateRange(start, end);
+  const therapistSessions = daySessions.filter((s) => s.therapistId === therapistId && s.status === "scheduled");
+
+  if (therapistSessions.length === 0) {
+    return { reassignedCount: 0, unassignedCount: 0, reassignments: [] };
+  }
+
+  const allTherapists = await getTherapists();
+  const availableStaff = allTherapists.filter((t) => t.id !== therapistId);
+
+  const reassignments: { sessionId: number; patientName: string; oldTherapist: string; newTherapist: string | null; time: string }[] = [];
+  let reassignedCount = 0;
+  let unassignedCount = 0;
+
+  for (const session of therapistSessions) {
+    const patient = await getPatientById(session.patientId);
+    const patientName = patient?.name ?? `Patient ${session.patientId}`;
+    const sStart = new Date(session.startTime);
+    const timeLabel = sStart.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+
+    // Find on-team available therapist first
+    const candidate = availableStaff.find((st) => {
+      if (st.therapyType !== session.therapyType) return false;
+      const overlaps = daySessions.some(
+        (other) =>
+          other.therapistId === st.id &&
+          other.id !== session.id &&
+          other.status === "scheduled" &&
+          new Date(other.startTime) < new Date(new Date(session.startTime).getTime() + session.durationMinutes * 60000) &&
+          new Date(new Date(other.startTime).getTime() + other.durationMinutes * 60000) > new Date(session.startTime)
+      );
+      return !overlaps;
+    });
+
+    if (candidate) {
+      await createTherapySession({
+        ...session,
+        therapistId: candidate.id,
+      } as any);
+      reassignments.push({
+        sessionId: session.id,
+        patientName,
+        oldTherapist: therapist.name,
+        newTherapist: candidate.name,
+        time: timeLabel,
+      });
+      reassignedCount++;
+    } else {
+      reassignments.push({
+        sessionId: session.id,
+        patientName,
+        oldTherapist: therapist.name,
+        newTherapist: null,
+        time: timeLabel,
+      });
+      unassignedCount++;
+    }
+  }
+
+  return { reassignedCount, unassignedCount, reassignments };
+}
+
+/* ========================================================================== */
+/* REAL-TIME COMPLIANCE & RISK SENTINEL AGENT                                 */
+/* ========================================================================== */
+
+export async function getComplianceSentinelReport(referenceDate: Date = new Date()) {
+  const summary = await getWeeklyMinutesSummary(referenceDate);
+  const allPatients = await getPatients();
+  const activePatients = allPatients.filter((p) => !p.isDischarged);
+
+  const riskItems: {
+    patientId: number;
+    patientName: string;
+    roomNumber: string;
+    riskType: "cms_15hr_shortfall" | "exit_eval_missing" | "daily_3hr_shortfall";
+    severity: "critical" | "warning";
+    message: string;
+    actionNeeded: string;
+  }[] = [];
+
+  for (const pSummary of summary) {
+    if (pSummary.atRisk && pSummary.remainingMinutes > 60) {
+      riskItems.push({
+        patientId: pSummary.patientId,
+        patientName: pSummary.patientName,
+        roomNumber: pSummary.roomNumber,
+        riskType: "cms_15hr_shortfall",
+        severity: pSummary.remainingMinutes > 180 ? "critical" : "warning",
+        message: `${pSummary.remainingMinutes}m short of target with ${pSummary.daysRemaining}d left in week.`,
+        actionNeeded: `Auto-schedule ${Math.min(180, pSummary.remainingMinutes)}m gap fill.`,
+      });
+    }
+  }
+
+  // Check exit eval compliance within 48h of estimated discharge
+  for (const patient of activePatients) {
+    if (patient.estimatedDischargeDate) {
+      const dcDate = new Date(patient.estimatedDischargeDate);
+      const diffDays = Math.ceil((dcDate.getTime() - referenceDate.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays >= 0 && diffDays <= 2) {
+        const hasEval = await hasEverHadTherapyType(patient.id, "Eval");
+        if (!hasEval) {
+          riskItems.push({
+            patientId: patient.id,
+            patientName: patient.name,
+            roomNumber: patient.roomNumber,
+            riskType: "exit_eval_missing",
+            severity: "critical",
+            message: `Discharge estimated in ${diffDays}d but no Exit Evaluation on record.`,
+            actionNeeded: "Schedule Exit Eval session before discharge.",
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    complianceScore: Math.max(0, Math.round(100 - riskItems.length * 12)),
+    totalRisks: riskItems.length,
+    criticalCount: riskItems.filter((r) => r.severity === "critical").length,
+    riskItems,
+  };
+}
+

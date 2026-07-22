@@ -43,7 +43,7 @@ import {
   getLastSessionNoteForPatient,
   RoomConflictError,
 } from "./db";
-import { getWeeklyMinutesSummary, getGapFillSuggestions, getOrCreateTodaysDigest, getPredictiveForecast } from "./scheduling";
+import { getWeeklyMinutesSummary, getGapFillSuggestions, getOrCreateTodaysDigest, getPredictiveForecast, rebalanceTherapistAbsence, getComplianceSentinelReport } from "./scheduling";
 import { askScheduler, analyzeData } from "./ollama";
 
 const therapyTypeEnum = z.enum(["PT", "OT", "SLP", "Eval", "Block"]);
@@ -457,6 +457,20 @@ export const appRouter = router({
       .mutation(async ({ input }) =>
         analyzeData(input.question, input.contextData, input.referenceDate ?? new Date(), input.history ?? []),
       ),
+  }),
+  /* ------------------------------------------------------------------ */
+  /* AI Clinical Agents Suite                                           */
+  /* ------------------------------------------------------------------ */
+  aiAgents: router({
+    rebalanceSickCall: publicProcedure
+      .input(z.object({ therapistId: z.number(), date: z.date() }))
+      .mutation(async ({ input }) => rebalanceTherapistAbsence(input.therapistId, input.date)),
+    getComplianceReport: publicProcedure
+      .input(z.object({ referenceDate: z.date().optional() }).optional())
+      .query(async ({ input }) => getComplianceSentinelReport(input?.referenceDate ?? new Date())),
+    getPredictiveForecast: publicProcedure
+      .input(z.object({ date: z.date() }))
+      .query(async ({ input }) => getPredictiveForecast(input.date)),
   }),
 });
 

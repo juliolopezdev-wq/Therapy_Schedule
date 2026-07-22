@@ -237,7 +237,7 @@ function dayBounds(date: Date) {
  *  the signal auto-scheduling uses to decide whether speech therapy belongs in their plan at
  *  all (unlike PT/OT, SLP isn't given to every rehab patient). A single existence check, not a
  *  full row fetch. */
-export async function hasEverHadTherapyType(patientId: number, therapyType: "PT" | "OT" | "SLP"): Promise<boolean> {
+export async function hasEverHadTherapyType(patientId: number, therapyType: "PT" | "OT" | "SLP" | "Eval" | "Block"): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
   const rows = await db

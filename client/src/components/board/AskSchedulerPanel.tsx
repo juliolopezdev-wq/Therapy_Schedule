@@ -227,8 +227,8 @@ export function AskSchedulerPanel({ open, onOpenChange }: AskSchedulerPanelProps
           )}
         </div>
 
-        <div className="glass-header border-t-white/40 p-4 z-10 border-t shadow-[0_-4px_20px_-10px_rgba(0,0,0,0.1)]">
-          <div className="flex items-end gap-2 rounded-xl glass-surface border border-white/40 p-2 focus-within:ring-2 focus-within:ring-ring/20 focus-within:border-ring transition-all shadow-sm">
+        <div className="bg-white border-t border-slate-200 p-4 z-10 shadow-xs">
+          <div className="flex items-center gap-2 rounded-xl bg-slate-50 border border-slate-200 p-2 focus-within:bg-white focus-within:border-sky-500 focus-within:ring-2 focus-within:ring-sky-500/20 transition-all">
             <Textarea
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
@@ -238,14 +238,14 @@ export function AskSchedulerPanel({ open, onOpenChange }: AskSchedulerPanelProps
                   submit(question);
                 }
               }}
-              placeholder="Ask PAMi anything..."
-              className="min-h-[44px] flex-1 resize-none border-0 bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 px-2 py-3 shadow-none"
+              placeholder="Ask PAMi e.g., 'Who had the most minutes this week?'..."
+              className="min-h-[40px] flex-1 resize-none border-0 bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 px-2 py-1.5 shadow-none font-medium text-slate-800 placeholder:text-slate-400"
             />
             <Button
               size="icon"
               className={cn(
-                "mb-1 mr-1 h-9 w-9 shrink-0 rounded-lg shadow-sm transition-all",
-                question.trim() ? "bg-primary hover:bg-primary/90 text-primary-foreground" : "bg-slate-200 text-slate-400 hover:bg-slate-300"
+                "h-9 w-9 shrink-0 rounded-lg transition-all shadow-none",
+                question.trim() ? "bg-sky-500 hover:bg-sky-600 text-white" : "bg-slate-200 text-slate-400 hover:bg-slate-300"
               )}
               onClick={() => submit(question)}
               disabled={pendingQuestion !== null || !question.trim()}
