@@ -61,7 +61,7 @@ function DateChooserImpl({ day, onDayChange }: { day: Date; onDayChange: (day: D
               variant="ghost"
               size="icon"
               aria-label="Daily forecast"
-              className="h-8 w-8 ml-1 shrink-0 rounded-full bg-gradient-to-br from-sky-500 via-blue-600 to-indigo-600 text-white shadow-glow-sm hover:shadow-glow-sm-hover hover:-translate-y-0.5 transition-all duration-300"
+              className="h-8 w-8 ml-1 shrink-0 rounded-full bg-gradient-to-br from-sky-500 via-blue-600 to-blue-700 text-white shadow-glow-sm hover:shadow-glow-sm-hover hover:-translate-y-0.5 transition-all duration-300"
             >
               <Sparkles className="h-4 w-4" />
             </Button>

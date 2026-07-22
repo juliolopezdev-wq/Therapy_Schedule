@@ -22,6 +22,11 @@ export const SESSION_STATUS_META: Record<SessionStatus, { label: string; bg: str
 export type DeliveryMode = "individual" | "concurrent" | "group";
 export const DELIVERY_MODES: DeliveryMode[] = ["individual", "concurrent", "group"];
 
+// Matches the server-side default in drizzle/schema.ts's patients.weeklyMinuteTarget column --
+// used client-side wherever a patient's target hasn't loaded/been set yet, so the default lives
+// in one place instead of being repeated as a bare `900` at every call site.
+export const DEFAULT_WEEKLY_MINUTE_TARGET = 900;
+
 export const THERAPY_META: Record<
   TherapyType,
   { label: string; full: string; bg: string; fg: string; accent: string; soft: string }

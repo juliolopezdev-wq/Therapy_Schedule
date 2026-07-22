@@ -1,15 +1,19 @@
 import { type DragStartEvent, type DragEndEvent, type CollisionDetection, pointerWithin } from "@dnd-kit/core";
 import { toast } from "sonner";
-import { TIME_SLOTS, slotIndexToDate } from "@/lib/board";
+import { TIME_SLOTS, slotIndexToDate, DEFAULT_WEEKLY_MINUTE_TARGET } from "@/lib/board";
 import { type SessionTileData } from "@/components/board/SessionTile";
+import type { Patient, Team } from "../../../drizzle/schema";
+import type { trpc } from "@/lib/trpc";
+
+export type BoardSection = Team & { patients: Patient[] };
 
 interface UseBoardDndProps {
   day: Date;
-  patientsBySection: any[];
+  patientsBySection: BoardSection[];
   setActiveDrag: (session: SessionTileData | null) => void;
-  setActiveDragPatient: (patient: any | null) => void;
-  updatePatient: any;
-  updateSession: any;
+  setActiveDragPatient: (patient: Patient | null) => void;
+  updatePatient: ReturnType<typeof trpc.patients.update.useMutation>;
+  updateSession: ReturnType<typeof trpc.sessions.update.useMutation>;
   checkLunchOverlap: (start: Date, end: Date) => string | null;
   checkTherapistAvailability: (therapistId: number | null, start: Date, end: Date) => string | null;
   checkDoubleBooking: (therapistId: number | null, deliveryMode: string, start: Date, end: Date, ignoreSessionId?: number) => string | null;
@@ -102,9 +106,9 @@ export function useBoardDnd({
           );
           
           if (targetSection) {
-            const overIndex = targetSection.patients.findIndex((p: any) => p.id === targetPatientId);
-            const activeIndex = data.patient.teamId === targetData.teamId 
-              ? targetSection.patients.findIndex((p: any) => p.id === data.patient.id)
+            const overIndex = targetSection.patients.findIndex((p) => p.id === targetPatientId);
+            const activeIndex = data.patient.teamId === targetData.teamId
+              ? targetSection.patients.findIndex((p) => p.id === data.patient.id)
               : -1;
 
             if (overIndex !== -1) {
@@ -114,8 +118,8 @@ export function useBoardDnd({
               const prevPatient = targetSection.patients[isMovingDown ? overIndex : overIndex - 1];
               const nextPatient = targetSection.patients[isMovingDown ? overIndex + 1 : overIndex];
 
-              const prevOrder = prevPatient ? ((prevPatient as any).orderIndex ?? 0) : (nextPatient ? ((nextPatient as any).orderIndex ?? 0) - 100 : 0);
-              const nextOrder = nextPatient ? ((nextPatient as any).orderIndex ?? 0) : (prevPatient ? ((prevPatient as any).orderIndex ?? 0) + 100 : 100);
+              const prevOrder = prevPatient ? (prevPatient.orderIndex ?? 0) : (nextPatient ? (nextPatient.orderIndex ?? 0) - 100 : 0);
+              const nextOrder = nextPatient ? (nextPatient.orderIndex ?? 0) : (prevPatient ? (prevPatient.orderIndex ?? 0) + 100 : 100);
 
               newOrderIndex = (prevOrder + nextOrder) / 2;
             }
@@ -132,7 +136,7 @@ export function useBoardDnd({
           notes: data.patient.notes ?? "",
           isDischarged: data.patient.isDischarged,
           admissionDate: data.patient.admissionDate ?? undefined,
-          weeklyMinuteTarget: data.patient.weeklyMinuteTarget ?? 900,
+          weeklyMinuteTarget: data.patient.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
           teamId: targetData.teamId === 0 ? null : targetData.teamId,
           orderIndex: newOrderIndex,
         });

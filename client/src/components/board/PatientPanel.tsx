@@ -20,14 +20,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Pencil, Plus, Trash2, Users, UserPlus } from "lucide-react";
-
-interface Patient {
-  id: number;
-  roomNumber: string;
-  name: string;
-  notes: string | null;
-  isDischarged: boolean;
-}
+import type { Patient } from "../../../../drizzle/schema";
 
 interface PatientPanelProps {
   open: boolean;

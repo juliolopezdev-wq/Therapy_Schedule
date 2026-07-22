@@ -38,6 +38,7 @@ import { FilterGroup, type FilterOption } from "@/components/board/header/Filter
 import { StatusBadge } from "@/components/board/header/StatusBadge";
 import { DateChooser } from "@/components/board/header/DateChooser";
 import { CommandBar, COMMAND_BAR_ICONS } from "@/components/board/header/CommandBar";
+import { cn } from "@/lib/utils";
 
 export interface BoardHeaderProps {
   day: Date;
@@ -81,6 +82,19 @@ export function BoardHeader({
   digestByPatientId, onBookSuggestion
 }: BoardHeaderProps) {
   const [isAttendanceOpen, setIsAttendanceOpen] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  const [isMobileExpanded, setIsMobileExpanded] = useState(false);
+  const [openDropdowns, setOpenDropdowns] = useState<Record<string, boolean>>({});
+
+  const handleDropdownOpen = useCallback((key: string, open: boolean) => {
+    setOpenDropdowns((prev) => ({ ...prev, [key]: open }));
+  }, []);
+
+  const isAnyDropdownOpen = useMemo(() => {
+    return Object.values(openDropdowns).some(Boolean);
+  }, [openDropdowns]);
+
+  const isExpanded = isMobileExpanded || isHovered || isAnyDropdownOpen;
 
   const disciplineOptions: FilterOption<TherapyType>[] = useMemo(
     () => THERAPY_TYPES.map((t) => ({
@@ -113,28 +127,35 @@ export function BoardHeader({
   const handleDayChange = useCallback((next: Date) => setDay(next), [setDay]);
 
   return (
-    <header className="sticky top-0 z-30 flex flex-col shadow-header transition-all">
+    <header className="sticky top-0 z-40 flex flex-col shadow-header transition-all">
       <CommandBar actions={navActions} onAskPami={handleAskPami} />
 
-      <div className="glass-header group relative flex flex-col md:flex-row flex-wrap items-center justify-between gap-x-6 px-4 py-3 sm:px-6 min-h-[68px] transition-all duration-300">
+      <div 
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        className="glass-header group relative flex flex-col md:flex-row flex-wrap items-center justify-between gap-x-6 px-4 py-3 sm:px-6 min-h-[68px] transition-all duration-300"
+      >
 
         {/* Left: Filters */}
-        <div className="hidden md:flex group-hover:flex flex-wrap items-center gap-5 w-full md:w-auto md:flex-1 justify-start order-2 md:order-1 mt-4 md:mt-0">
-          <FilterGroup label="Discipline" options={disciplineOptions} value={filter} onChange={setFilter} />
+        <div className={cn("flex-wrap items-center gap-5 w-full md:w-auto md:flex-1 justify-start order-2 md:order-1 mt-4 md:mt-0", isExpanded ? "flex" : "hidden md:flex")}>
+          <FilterGroup label="Discipline" options={disciplineOptions} value={filter} onChange={setFilter} onOpenChange={(o) => handleDropdownOpen("discipline", o)} />
           <div className="hidden sm:block w-[1px] h-4 bg-slate-200" />
-          <FilterGroup label="Team" options={teamOptions} value={teamFilter} onChange={setTeamFilter} allLabel="All Teams" dropdownWidthClass="w-48" />
+          <FilterGroup label="Team" options={teamOptions} value={teamFilter} onChange={setTeamFilter} allLabel="All Teams" dropdownWidthClass="w-48" onOpenChange={(o) => handleDropdownOpen("team", o)} />
         </div>
 
         {/* Center: Date Chooser */}
-        <div className="flex w-full md:w-auto items-center justify-center z-10 shrink-0 order-1 md:order-2">
+        <div 
+          onClick={() => setIsMobileExpanded((v) => !v)}
+          className="flex w-full md:w-auto items-center justify-center z-10 shrink-0 order-1 md:order-2 cursor-pointer md:cursor-default"
+        >
           <DateChooser day={day} onDayChange={handleDayChange} />
-          <div className="md:hidden ml-2 flex items-center justify-center text-slate-400 group-hover:opacity-0 transition-opacity">
-            <ChevronDown className="h-4 w-4 animate-bounce" />
+          <div className={cn("md:hidden ml-2 flex items-center justify-center text-slate-400 transition-all duration-200", isExpanded && "rotate-180")}>
+            <ChevronDown className="h-4 w-4" />
           </div>
         </div>
 
         {/* Right: Board Tools & Status */}
-        <div className="hidden md:flex group-hover:flex flex-wrap items-center gap-3 w-full md:w-auto md:flex-1 justify-center md:justify-end order-3 mt-4 md:mt-0">
+        <div className={cn("flex-wrap items-center gap-3 w-full md:w-auto md:flex-1 justify-center md:justify-end order-3 mt-4 md:mt-0", isExpanded ? "flex" : "hidden md:flex")}>
 
           <MySchedule
             therapists={therapists}
@@ -170,7 +191,7 @@ export function BoardHeader({
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
-            <DropdownMenu>
+            <DropdownMenu onOpenChange={(o) => handleDropdownOpen("more", o)}>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full text-slate-500 hover:bg-white hover:text-primary hover:shadow-sm transition-all">
                   <MoreHorizontal className="h-4 w-4" />

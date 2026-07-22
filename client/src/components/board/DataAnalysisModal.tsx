@@ -133,7 +133,7 @@ export function DataAnalysisModal({ open, onOpenChange, patients, onEditPatient 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[95vw] sm:max-w-4xl h-[90vh] sm:h-[85vh] flex flex-col p-0 glass-panel rounded-2xl overflow-hidden">
-        <DialogHeader className="px-6 py-5 bg-gradient-to-r from-indigo-50 via-white to-purple-50 border-b border-indigo-100/50 shrink-0">
+        <DialogHeader className="px-6 py-5 bg-gradient-to-r from-blue-50 via-white to-sky-50 border-b border-blue-100/50 shrink-0">
           <DialogTitle className="text-xl font-bold text-slate-800">
             Patient Session Analytics
           </DialogTitle>
@@ -162,14 +162,14 @@ export function DataAnalysisModal({ open, onOpenChange, patients, onEditPatient 
               </div>
 
               <div className="flex items-center gap-1 bg-white rounded-xl border border-slate-200/80 shadow-sm px-1.5 py-1">
-                <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 rounded-lg transition-colors" onClick={prevRange}>
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500 hover:bg-sky-50 hover:text-sky-600 rounded-lg transition-colors" onClick={prevRange}>
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
               
               <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
                 <PopoverTrigger asChild>
-                  <Button variant="ghost" className="h-8 px-3 text-sm font-bold text-slate-700 min-w-[140px] justify-center hover:bg-indigo-50 hover:text-indigo-700 rounded-lg transition-colors">
-                    <CalendarIcon className="mr-2 h-4 w-4 text-indigo-400" />
+                  <Button variant="ghost" className="h-8 px-3 text-sm font-bold text-slate-700 min-w-[140px] justify-center hover:bg-sky-50 hover:text-sky-700 rounded-lg transition-colors">
+                    <CalendarIcon className="mr-2 h-4 w-4 text-sky-400" />
                     {dateLabel}
                   </Button>
                 </PopoverTrigger>
@@ -189,7 +189,7 @@ export function DataAnalysisModal({ open, onOpenChange, patients, onEditPatient 
                 </PopoverContent>
               </Popover>
 
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 rounded-lg transition-colors" onClick={nextRange}>
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500 hover:bg-sky-50 hover:text-sky-600 rounded-lg transition-colors" onClick={nextRange}>
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </div>
@@ -201,13 +201,13 @@ export function DataAnalysisModal({ open, onOpenChange, patients, onEditPatient 
                 placeholder="Search patient..."
                 value={searchName}
                 onChange={(e) => setSearchName(e.target.value)}
-                className="h-10 w-full pl-9 text-sm bg-white/80 border-slate-200/80 shadow-sm rounded-xl focus-visible:ring-indigo-500 transition-all placeholder:text-slate-400"
+                className="h-10 w-full pl-9 text-sm bg-white/80 border-slate-200/80 shadow-sm rounded-xl focus-visible:ring-sky-500 transition-all placeholder:text-slate-400"
               />
               <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
             </div>
             <div className="w-full sm:w-56">
               <Select value={selectedPatientId} onValueChange={setSelectedPatientId}>
-                <SelectTrigger className="h-10 text-sm font-bold bg-white/80 border-slate-200/80 shadow-sm rounded-xl focus:ring-indigo-500 transition-all text-slate-700">
+                <SelectTrigger className="h-10 text-sm font-bold bg-white/80 border-slate-200/80 shadow-sm rounded-xl focus:ring-sky-500 transition-all text-slate-700">
                     <SelectValue placeholder="All Patients" />
                   </SelectTrigger>
                   <SelectContent>
@@ -219,61 +219,65 @@ export function DataAnalysisModal({ open, onOpenChange, patients, onEditPatient 
             </div>
           </div>
 
-          {/* Data Table */}
-          <div className="flex flex-col flex-1 min-h-[250px]">
-            <div className="grid grid-cols-[2fr_1fr_1fr_auto] sm:grid-cols-[3fr_1fr_1fr_auto] gap-4 px-4 py-3 text-xs font-bold text-slate-400 uppercase tracking-wider sticky top-0 glass-header z-10 rounded-t-2xl">
+          {/* Data Table Container */}
+          <div className="flex flex-col flex-1 min-h-0 rounded-2xl border border-slate-200/80 bg-white/70 overflow-hidden shadow-sm">
+            {/* Table Header */}
+            <div className="grid grid-cols-[2fr_1fr_1fr_auto] sm:grid-cols-[3fr_1fr_1fr_auto] gap-4 px-4 py-2.5 text-[11px] font-extrabold text-slate-400 uppercase tracking-wider bg-slate-100/80 border-b border-slate-200/80 shrink-0">
               <div>Patient</div>
               <div className="text-right">Sessions</div>
               <div className="text-right">Total Min</div>
               <div className="w-8 sm:w-10"></div>
             </div>
             
-            <ScrollArea className="h-full flex-1">
-              <div className="p-2 space-y-2">
+            <ScrollArea className="flex-1">
+              <div className="p-2 space-y-1.5">
                 {isLoading ? (
-                  <div className="flex flex-col items-center justify-center p-12 text-sm text-slate-400 bg-white/40 rounded-2xl border border-dashed border-slate-200">
-                    <div className="h-6 w-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+                  <div className="flex flex-col items-center justify-center p-8 text-sm text-slate-400 bg-white/40 rounded-xl border border-dashed border-slate-200">
+                    <div className="h-5 w-5 border-2 border-sky-500 border-t-transparent rounded-full animate-spin mb-2"></div>
                     Loading data...
                   </div>
                 ) : dischargedPatientsData.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center p-12 text-sm text-slate-400 bg-white/40 rounded-2xl border border-dashed border-slate-200">
-                    <BarChart3 className="h-8 w-8 text-slate-300 mb-2" />
+                  <div className="flex flex-col items-center justify-center p-8 text-sm text-slate-400 bg-white/40 rounded-xl border border-dashed border-slate-200">
+                    <BarChart3 className="h-7 w-7 text-slate-300 mb-1.5" />
                     No records found for selected filters.
                   </div>
                 ) : (
                   dischargedPatientsData.map(p => (
-                    <div key={p.id} className="group grid grid-cols-[2fr_1fr_1fr_auto] sm:grid-cols-[3fr_1fr_1fr_auto] gap-4 px-4 py-4 items-center glass-surface shadow-sm rounded-2xl hover:shadow-[0_8px_20px_-8px_rgba(79,70,229,0.15)] hover:border-indigo-100 hover:-translate-y-0.5 transition-all duration-300">
-                      <div className="flex flex-col min-w-0 gap-1">
+                    <div 
+                      key={p.id} 
+                      className="group grid grid-cols-[2fr_1fr_1fr_auto] sm:grid-cols-[3fr_1fr_1fr_auto] gap-4 px-3.5 py-2.5 items-center bg-white border border-slate-200/70 shadow-2xs rounded-xl hover:shadow-sm hover:border-sky-300 hover:bg-sky-50/30 transition-all duration-200"
+                    >
+                      <div className="flex flex-col min-w-0 gap-0.5">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-extrabold text-slate-800 text-sm sm:text-base truncate tracking-tight">{p.name}</span>
-                          {p.isDischarged && <span className="rounded-md bg-rose-50 px-1.5 py-0.5 text-micro font-extrabold text-rose-600 uppercase shrink-0 border border-rose-100">DC</span>}
+                          <span className="font-extrabold text-slate-800 text-sm truncate tracking-tight">{p.name}</span>
+                          {p.isDischarged && <span className="rounded bg-rose-50 px-1.5 py-0.5 text-micro font-extrabold text-rose-600 uppercase shrink-0 border border-rose-100">DC</span>}
                         </div>
                         <div className="flex items-center gap-1.5">
-                          <span className="flex items-center justify-center h-4 w-4 rounded bg-slate-100 text-[9px] font-bold text-slate-500">RM</span>
-                          <span className="text-xs font-semibold text-slate-500 truncate">{p.roomNumber}</span>
+                          <span className="flex items-center justify-center h-3.5 w-3.5 rounded bg-slate-100 text-[8px] font-bold text-slate-500">RM</span>
+                          <span className="text-micro font-semibold text-slate-500 truncate">{p.roomNumber}</span>
                         </div>
                       </div>
-                      <div className="text-right font-bold text-slate-600 tabular-nums text-sm sm:text-base">
+                      <div className="text-right font-extrabold text-slate-700 tabular-nums text-sm">
                         {p.sessionCount}
                       </div>
                       <div className="text-right flex justify-end">
-                        <span className="inline-flex items-center justify-center min-w-[3.5rem] rounded-xl bg-gradient-to-br from-emerald-50 to-teal-50 px-2.5 py-1 text-xs sm:text-sm font-extrabold text-emerald-700 shadow-sm border border-emerald-100/50">
+                        <span className="inline-flex items-center justify-center min-w-[3.25rem] rounded-lg bg-emerald-50 px-2 py-0.5 text-xs font-extrabold text-emerald-700 border border-emerald-200/60">
                           {p.totalMinutes}
-                          <span className="text-[10px] font-semibold text-emerald-500 ml-0.5 opacity-80">m</span>
+                          <span className="text-[9px] font-semibold text-emerald-500 ml-0.5">m</span>
                         </span>
                       </div>
                       <div className="flex justify-end pl-1 sm:pl-2">
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl opacity-0 group-hover:opacity-100 transition-all duration-300"
+                          className="h-7 w-7 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all duration-200"
                           onClick={() => {
                             onOpenChange(false);
                             onEditPatient(p.id);
                           }}
                           title="Edit Patient"
                         >
-                          <Edit className="h-4 w-4" />
+                          <Edit className="h-3.5 w-3.5" />
                         </Button>
                       </div>
                     </div>
@@ -284,32 +288,31 @@ export function DataAnalysisModal({ open, onOpenChange, patients, onEditPatient 
           </div>
 
           {/* AI Chat Integration */}
-          <div className="mt-2 rounded-2xl border border-indigo-100/60 bg-gradient-to-br from-indigo-50/50 to-white/50 overflow-hidden flex flex-col shadow-sm shrink-0">
-            <div className="bg-white/40 backdrop-blur-md px-4 py-3 border-b border-indigo-100/50 flex items-center gap-2">
-              <div className="p-1.5 bg-indigo-100 rounded-lg">
-                <Bot className="h-4 w-4 text-indigo-600" />
+          <div className="mt-1 rounded-xl border border-slate-200/80 bg-slate-50/70 overflow-hidden flex flex-col shadow-2xs shrink-0">
+            <div className="bg-white px-3.5 py-2 border-b border-slate-200/70 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-1 bg-sky-100 rounded-md">
+                  <Bot className="h-3.5 w-3.5 text-sky-600" />
+                </div>
+                <span className="text-micro font-extrabold text-sky-900 uppercase tracking-wider">Ask PAMi</span>
               </div>
-              <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider">Ask PAMi</span>
+              <span className="text-micro font-medium text-slate-400">AI Assistant</span>
             </div>
             
-            <div 
-              ref={scrollRef}
-              className="p-4 max-h-[160px] sm:max-h-[200px] overflow-y-auto space-y-4 flex-1 min-h-[100px]"
-            >
-              {chatHistory.length === 0 ? (
-                <div className="text-xs text-slate-400 font-medium italic flex items-center justify-center h-full text-center px-4 py-6">
-                  Try asking: "Who had the most minutes this week?" or "Summarize this data."
-                </div>
-              ) : (
-                chatHistory.map((msg, i) => (
+            {chatHistory.length > 0 && (
+              <div 
+                ref={scrollRef}
+                className="p-3 max-h-[120px] sm:max-h-[140px] overflow-y-auto space-y-3 flex-1 min-h-[60px]"
+              >
+                {chatHistory.map((msg, i) => (
                   <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
+                    <div className={`max-w-[85%] rounded-xl px-3 py-2 text-xs shadow-2xs ${
                       msg.role === 'user' 
-                        ? 'bg-gradient-to-br from-indigo-600 to-indigo-700 text-white rounded-br-sm' 
-                        : 'bg-white border border-slate-100 text-slate-700 rounded-bl-sm shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)]'
+                        ? 'bg-sky-600 text-white rounded-br-xs font-medium' 
+                        : 'bg-white border border-slate-200 text-slate-700 rounded-bl-xs'
                     }`}>
                       {msg.role === 'assistant' ? (
-                        <div className="prose prose-sm prose-slate max-w-none leading-relaxed">
+                        <div className="prose prose-xs prose-slate max-w-none leading-relaxed">
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>
                             {msg.content}
                           </ReactMarkdown>
@@ -319,36 +322,36 @@ export function DataAnalysisModal({ open, onOpenChange, patients, onEditPatient 
                       )}
                     </div>
                   </div>
-                ))
-              )}
-              {ask.isPending && (
-                <div className="flex justify-start">
-                  <div className="max-w-[85%] rounded-2xl rounded-bl-sm px-4 py-3 text-sm bg-white border border-slate-100 text-slate-400 shadow-sm flex items-center gap-2">
-                    <span className="h-1.5 w-1.5 bg-indigo-400 rounded-full animate-bounce" />
-                    <span className="h-1.5 w-1.5 bg-indigo-400 rounded-full animate-bounce delay-75" />
-                    <span className="h-1.5 w-1.5 bg-indigo-400 rounded-full animate-bounce delay-150" />
+                ))}
+                {ask.isPending && (
+                  <div className="flex justify-start">
+                    <div className="max-w-[85%] rounded-xl rounded-bl-xs px-3 py-2 text-xs bg-white border border-slate-200 text-slate-400 shadow-2xs flex items-center gap-1.5">
+                      <span className="h-1.5 w-1.5 bg-sky-400 rounded-full animate-bounce" />
+                      <span className="h-1.5 w-1.5 bg-sky-400 rounded-full animate-bounce delay-75" />
+                      <span className="h-1.5 w-1.5 bg-sky-400 rounded-full animate-bounce delay-150" />
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            )}
             
-            <div className="p-3 bg-white/60 backdrop-blur-md border-t border-indigo-100/50">
+            <div className="p-2 bg-white border-t border-slate-200/70">
               <form onSubmit={handleAskAI} className="relative flex items-center">
                 <Textarea 
                   value={question}
                   onChange={(e) => setQuestion(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="Ask PAMi..."
-                  className="min-h-[44px] h-[44px] resize-none pr-12 py-3 bg-white shadow-sm border-slate-200/80 rounded-xl focus-visible:ring-indigo-500 placeholder:text-slate-400 text-sm"
+                  placeholder="Ask PAMi e.g., 'Who had the most minutes this week?'..."
+                  className="min-h-[36px] h-[36px] resize-none pr-10 py-2 bg-slate-50/50 border-slate-200/80 rounded-lg focus-visible:ring-sky-500 placeholder:text-slate-400 text-xs"
                   rows={1}
                 />
                 <Button 
                   type="submit" 
                   size="icon" 
                   disabled={!question.trim() || ask.isPending}
-                  className="absolute right-1.5 h-8 w-8 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm disabled:opacity-50 transition-all"
+                  className="absolute right-1 h-7 w-7 rounded-md bg-sky-600 hover:bg-sky-700 text-white shadow-2xs disabled:opacity-40 transition-all"
                 >
-                  <Send className="h-4 w-4" />
+                  <Send className="h-3.5 w-3.5" />
                 </Button>
               </form>
             </div>

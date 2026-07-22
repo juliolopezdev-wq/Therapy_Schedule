@@ -18,7 +18,7 @@ function CommandBarImpl({ actions, onAskPami }: { actions: NavAction[]; onAskPam
     <div className="relative flex flex-wrap items-center justify-between px-4 py-3 sm:px-6 bg-gradient-to-r from-blue-800 via-sky-600 to-blue-800 text-blue-50 min-h-[88px] shadow-md border-b border-blue-700/50">
       {/* Left: Logo */}
       <div className="flex shrink-0 items-center gap-4 w-1/3 group cursor-default">
-        <div className="relative flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-400 via-blue-600 to-sky-600 shadow-glow-lg border border-white/20 overflow-hidden transition-all duration-500 group-hover:shadow-glow-lg-hover group-hover:-translate-y-0.5">
+        <div className="relative flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-400 via-blue-600 to-sky-600 shadow-glow-lg border border-white/20 overflow-hidden transition-all duration-500 group-hover:shadow-glow-lg-hover group-hover:-translate-y-0.5">
           <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent mix-blend-overlay" />
           <div className="absolute top-0 left-0 w-full h-1/2 bg-gradient-to-b from-white/30 to-transparent" />
           <svg viewBox="0 0 24 24" className="relative z-10 h-7 w-7 text-white drop-shadow-[0_2px_5px_rgba(0,0,0,0.4)] transform transition-transform duration-500 group-hover:scale-110 group-hover:rotate-3" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -59,7 +59,7 @@ function CommandBarImpl({ actions, onAskPami }: { actions: NavAction[]; onAskPam
           onClick={onAskPami}
         >
           {/* Animated Gradient Background */}
-          <div className="absolute inset-0 bg-gradient-to-r from-sky-500 via-blue-600 to-indigo-600 bg-[length:200%_auto] animate-[gradient_3s_ease_infinite]" />
+          <div className="absolute inset-0 bg-gradient-to-r from-sky-500 via-blue-600 to-blue-700 bg-[length:200%_auto] animate-[gradient_3s_ease_infinite]" />
           
           {/* Glow overlay on hover */}
           <div className="absolute inset-0 opacity-0 group-hover:opacity-100 bg-white/20 transition-opacity duration-300" />

@@ -66,6 +66,7 @@ import {
   sessionsOverlap,
   startOfWeek,
   weekRangeLabel,
+  DEFAULT_WEEKLY_MINUTE_TARGET,
 } from "@/lib/board";
 import { SessionTile, type SessionTileData } from "@/components/board/SessionTile";
 import { GridCell } from "@/components/board/GridCell";
@@ -105,6 +106,7 @@ import { useBoardDnd } from "@/hooks/useBoardDnd";
 const SLOT_WIDTH = 72; // px per 30-min slot
 
 import { getPatientWeekBounds } from "@/../../shared/weekUtils";
+import type { Patient } from "../../../drizzle/schema";
 
 const BOARD_SECTIONS = [
   { id: 1, name: "Team One",   color: "#3b82f6" },
@@ -122,7 +124,7 @@ const EMPTY_PATIENT: PatientFormValue = {
   notes: "",
   isDischarged: false,
   admissionDate: "",
-  weeklyMinuteTarget: 900,
+  weeklyMinuteTarget: DEFAULT_WEEKLY_MINUTE_TARGET,
   teamId: null,
   sessionTime: "none",
   sessionType: "PT",
@@ -146,7 +148,7 @@ export default function TherapyBoard() {
   const [mySchedTherapist, setMySchedTherapist] = useState<number | null>(null);
 
   const [activeDrag, setActiveDrag] = useState<SessionTileData | null>(null);
-  const [activeDragPatient, setActiveDragPatient] = useState<any | null>(null);
+  const [activeDragPatient, setActiveDragPatient] = useState<Patient | null>(null);
   
   const {
     sessionDialogOpen,
@@ -180,23 +182,32 @@ export default function TherapyBoard() {
   const jumpToPatient = (patientId: number) => {
     const patient = patientsQuery.data?.find((p) => p.id === patientId);
     if (patient) {
-      if ((patient as any).teamId) {
+      const teamId = patient.teamId;
+      if (teamId != null) {
         setCollapsedSections((prev) => {
           const next = new Set(prev);
-          next.delete((patient as any).teamId);
+          next.delete(teamId);
           return next;
         });
       }
       setFilter("all");
       setTeamFilter("all");
-      setTimeout(() => {
+      // The row for this patient doesn't exist yet -- it renders only after the collapse/filter
+      // state above triggers a re-render. Poll via rAF (bounded) instead of guessing a fixed
+      // delay, which could fire before the row exists on a slow render and silently no-op.
+      let attempts = 0;
+      const tryScroll = () => {
         const row = document.getElementById(`patient-row-${patientId}`);
         if (row) {
           row.scrollIntoView({ behavior: "smooth", block: "center" });
           row.classList.add("bg-amber-100/50", "transition-colors", "duration-500");
           setTimeout(() => row.classList.remove("bg-amber-100/50", "transition-colors", "duration-500"), 2000);
+          return;
         }
-      }, 100);
+        attempts++;
+        if (attempts < 30) requestAnimationFrame(tryScroll);
+      };
+      requestAnimationFrame(tryScroll);
     }
   };
 
@@ -306,10 +317,10 @@ export default function TherapyBoard() {
             name: patient.name,
             notes: patient.notes ?? "",
             isDischarged: false,
-            admissionDate: (patient as any).admissionDate ?? "",
-            estimatedDischargeDate: (patient as any).estimatedDischargeDate ?? "",
-            weeklyMinuteTarget: (patient as any).weeklyMinuteTarget ?? 900,
-            teamId: (patient as any).teamId ?? null,
+            admissionDate: patient.admissionDate ?? "",
+            estimatedDischargeDate: patient.estimatedDischargeDate ?? "",
+            weeklyMinuteTarget: patient.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
+            teamId: patient.teamId ?? null,
           });
           setPatientDialogOpen(true);
         }
@@ -369,29 +380,37 @@ export default function TherapyBoard() {
   const { conflictIds, conflictPairs } = useMemo(() => {
     const ids = new Set<number>();
     const pairs: ConflictPair[] = [];
-    const withTherapist = tiles.filter((t) => t.therapistId != null);
-    for (let i = 0; i < withTherapist.length; i++) {
-      for (let j = i + 1; j < withTherapist.length; j++) {
-        const a = withTherapist[i];
-        const b = withTherapist[j];
-        if (
-          a.therapistId === b.therapistId &&
-          sessionsOverlap(a.slotIndex, a.slotSpan, b.slotIndex, b.slotSpan)
-        ) {
-          const isMatchingGroupOrConcurrent = a.deliveryMode === b.deliveryMode && (a.deliveryMode === "group" || a.deliveryMode === "concurrent");
-          if (!isMatchingGroupOrConcurrent) {
-            ids.add(a.id);
-            ids.add(b.id);
-            pairs.push({
-              id: `t-${a.id}-${b.id}`,
-              type: "therapist",
-              sessionA: a,
-              sessionB: b,
-            });
+    // Bucket by therapist first -- a conflict can only occur between two tiles sharing the same
+    // therapistId, so comparing every pair across the whole day (O(n^2)) wastes work comparing
+    // tiles that could never conflict. Only pairs within the same bucket need checking.
+    const byTherapist = new Map<number, SessionTileData[]>();
+    tiles.forEach((t) => {
+      if (t.therapistId == null) return;
+      const arr = byTherapist.get(t.therapistId) ?? [];
+      arr.push(t);
+      byTherapist.set(t.therapistId, arr);
+    });
+    byTherapist.forEach((arr) => {
+      for (let i = 0; i < arr.length; i++) {
+        for (let j = i + 1; j < arr.length; j++) {
+          const a = arr[i];
+          const b = arr[j];
+          if (sessionsOverlap(a.slotIndex, a.slotSpan, b.slotIndex, b.slotSpan)) {
+            const isMatchingGroupOrConcurrent = a.deliveryMode === b.deliveryMode && (a.deliveryMode === "group" || a.deliveryMode === "concurrent");
+            if (!isMatchingGroupOrConcurrent) {
+              ids.add(a.id);
+              ids.add(b.id);
+              pairs.push({
+                id: `t-${a.id}-${b.id}`,
+                type: "therapist",
+                sessionA: a,
+                sessionB: b,
+              });
+            }
           }
         }
       }
-    }
+    });
     const byPatient = new Map<number, SessionTileData[]>();
     tiles.forEach((t) => {
       const arr = byPatient.get(t.patientId) ?? [];
@@ -427,7 +446,7 @@ export default function TherapyBoard() {
     const map = new Map<number, number>();
     patients.forEach((p) => {
       if (p.isDischarged) return;
-      const bounds = getPatientWeekBounds((p as any).admissionDate, day);
+      const bounds = getPatientWeekBounds(p.admissionDate, day);
       const patientSessions = weekSessions.filter((s) => {
         if (s.patientId !== p.id) return false;
         if (isMissedStatus(s.status) || s.therapyType === "Block") return false;
@@ -449,22 +468,30 @@ export default function TherapyBoard() {
       if (p.isDischarged) return false;
       if (teamFilter !== "all" && p.teamId !== teamFilter) return false;
       const mins = weekMinsByPatient.get(p.id) ?? 0;
-      const target = (p as any).weeklyMinuteTarget ?? 900;
+      const target = p.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET;
       return mins < target;
     });
   }, [patients, weekMinsByPatient, teamFilter]);
 
   // Fire a toast when a patient crosses from below to at/above their weekly target
-  const prevWeekMinsRef = useRef<Map<number, number>>(new Map());
+  const prevWeekMinsRef = useRef<Map<number, number> | null>(null);
   useEffect(() => {
     const prev = prevWeekMinsRef.current;
+    // First run after data loads has nothing real to compare against -- every already-on-target
+    // patient would otherwise look like they "just crossed" the line and pop the celebration
+    // dialog on a plain page refresh. Just record the baseline this time; only compare from the
+    // next run onward, when a change to weekMinsByPatient reflects an actual new session.
+    if (!prev) {
+      prevWeekMinsRef.current = new Map(weekMinsByPatient);
+      return;
+    }
     patients.forEach((p) => {
       if (p.isDischarged) return;
-      const target: number = (p as any).weeklyMinuteTarget ?? 900;
+      const target: number = p.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET;
       const prevMins = prev.get(p.id) ?? 0;
       const currMins = weekMinsByPatient.get(p.id) ?? 0;
       if (prevMins < target && currMins >= target) {
-        const bounds = getPatientWeekBounds((p as any).admissionDate, day);
+        const bounds = getPatientWeekBounds(p.admissionDate, day);
         const patientWeekSessions: WeekSessionRow[] = weekSessions
           .filter((s) => {
             if (s.patientId !== p.id) return false;
@@ -667,6 +694,14 @@ export default function TherapyBoard() {
     return map;
   }, [tiles]);
 
+  // Session count per patient, for the team-section header's session count -- built once per
+  // `tiles` change instead of re-filtering the full tile list for every patient on every render.
+  const sessionCountByPatient = useMemo(() => {
+    const map = new Map<number, number>();
+    tiles.forEach((t) => map.set(t.patientId, (map.get(t.patientId) ?? 0) + 1));
+    return map;
+  }, [tiles]);
+
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
@@ -822,7 +857,7 @@ export default function TherapyBoard() {
         isDischarged: value.isDischarged,
         admissionDate: value.admissionDate || undefined,
         estimatedDischargeDate: value.estimatedDischargeDate || undefined,
-        weeklyMinuteTarget: value.weeklyMinuteTarget ?? 900,
+        weeklyMinuteTarget: value.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
         teamId: value.teamId ?? null,
       }, {
         onSuccess: () => {
@@ -834,7 +869,7 @@ export default function TherapyBoard() {
               name: "Available",
               notes: "",
               isDischarged: false,
-              weeklyMinuteTarget: 900,
+              weeklyMinuteTarget: DEFAULT_WEEKLY_MINUTE_TARGET,
               teamId: oldPatient.teamId ?? null,
             });
           }
@@ -848,16 +883,17 @@ export default function TherapyBoard() {
         isDischarged: value.isDischarged,
         admissionDate: value.admissionDate || undefined,
         estimatedDischargeDate: value.estimatedDischargeDate || undefined,
-        weeklyMinuteTarget: value.weeklyMinuteTarget ?? 900,
+        weeklyMinuteTarget: value.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
         teamId: value.teamId ?? null,
       }, {
         onSuccess: (newPatient) => {
           if (value.sessionTime && value.sessionTime !== "none" && value.sessionType && value.sessionDuration) {
+            const sessionStart = slotIndexToDate(day, Number(value.sessionTime));
             createSession.mutate({
               patientId: newPatient.id,
               therapyType: value.sessionType,
-              startTime: new Date(day.getTime() + Number(value.sessionTime) * 30 * 60000),
-              endTime: new Date(day.getTime() + (Number(value.sessionTime) * 30 + value.sessionDuration) * 60000),
+              startTime: sessionStart,
+              endTime: new Date(sessionStart.getTime() + value.sessionDuration * 60000),
               durationMinutes: value.sessionDuration,
               therapistId: value.sessionTherapist,
               notes: "",
@@ -1038,9 +1074,10 @@ export default function TherapyBoard() {
               ) : (
                 patientsBySection.map((section) => {
                   const isCollapsed = collapsedSections.has(section.id);
-                  const sectionSessionCount = section.patients.reduce((acc, p) => {
-                    return acc + tiles.filter((t) => t.patientId === p.id).length;
-                  }, 0);
+                  const sectionSessionCount = section.patients.reduce(
+                    (acc, p) => acc + (sessionCountByPatient.get(p.id) ?? 0),
+                    0,
+                  );
 
                   return (
                     <TeamDroppable key={section.id} section={section}>
@@ -1072,17 +1109,16 @@ export default function TherapyBoard() {
 
                             // Missing Exit Eval Alert
                             let missingExitEvalAlert = false;
-                            const estimatedDC = (patient as any).estimatedDischargeDate;
+                            const estimatedDC = patient.estimatedDischargeDate;
                             if (estimatedDC && !isDC) {
                                const dcDate = new Date(estimatedDC + "T00:00:00");
-                               const diffTime = dcDate.getTime() - day.getTime();
-                               const dcDaysAway = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+                               const dcDaysAway = differenceInDays(dcDate, day);
                                if (dcDaysAway >= 0 && dcDaysAway <= 2) {
                                   // Approaching discharge. Check if there is an Eval session on dcDate or dcDate - 1 day.
                                   const evalExists = upcomingSessions.some((s) => {
                                       if (s.patientId !== patient.id || s.therapyType !== "Eval") return false;
                                       const sDate = new Date(s.startTime);
-                                      const diffToDC = Math.floor((dcDate.getTime() - startOfDay(sDate).getTime()) / (1000 * 60 * 60 * 24));
+                                      const diffToDC = differenceInDays(dcDate, startOfDay(sDate));
                                       return diffToDC === 0 || diffToDC === -1;
                                   });
                                   if (!evalExists) {
@@ -1214,6 +1250,7 @@ export default function TherapyBoard() {
         initial={sessionDraft}
         patients={patients}
         therapists={therapists}
+        referenceDate={day}
         onSave={saveSession}
         onDelete={(id) => {
           deleteSession.mutate({ id });
@@ -1251,10 +1288,10 @@ export default function TherapyBoard() {
               name: patient.name,
               notes: patient.notes ?? "",
               isDischarged: patient.isDischarged,
-              admissionDate: (patient as any).admissionDate ?? "",
-              estimatedDischargeDate: (patient as any).estimatedDischargeDate ?? "",
-              weeklyMinuteTarget: (patient as any).weeklyMinuteTarget ?? 900,
-              teamId: (patient as any).teamId ?? null,
+              admissionDate: patient.admissionDate ?? "",
+              estimatedDischargeDate: patient.estimatedDischargeDate ?? "",
+              weeklyMinuteTarget: patient.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
+              teamId: patient.teamId ?? null,
             });
             setPatientDialogOpen(true);
           }
@@ -1272,7 +1309,7 @@ export default function TherapyBoard() {
               name: initialData.name ?? "",
               notes: initialData.notes ?? "",
               isDischarged: false,
-              weeklyMinuteTarget: 900,
+              weeklyMinuteTarget: DEFAULT_WEEKLY_MINUTE_TARGET,
             });
           } else {
             setPatientDraft(null);
@@ -1286,10 +1323,10 @@ export default function TherapyBoard() {
             name: p.name,
             notes: p.notes ?? "",
             isDischarged: p.isDischarged,
-            admissionDate: (p as any).admissionDate ?? "",
-            estimatedDischargeDate: (p as any).estimatedDischargeDate ?? "",
-            weeklyMinuteTarget: (p as any).weeklyMinuteTarget ?? 900,
-            teamId: (p as any).teamId ?? null,
+            admissionDate: p.admissionDate ?? "",
+            estimatedDischargeDate: p.estimatedDischargeDate ?? "",
+            weeklyMinuteTarget: p.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
+            teamId: p.teamId ?? null,
           });
           setPatientDialogOpen(true);
         }}
@@ -1324,13 +1361,13 @@ export default function TherapyBoard() {
         open={targetAlertData !== null}
         onOpenChange={(o) => { if (!o) setTargetAlertData(null); }}
         patientName={targetAlertData?.patientName ?? ""}
-        target={targetAlertData?.target ?? 900}
+        target={targetAlertData?.target ?? DEFAULT_WEEKLY_MINUTE_TARGET}
         totalMinutes={targetAlertData?.totalMinutes ?? 0}
         weekSessions={targetAlertData?.weekSessions ?? []}
       />
       {/* Override Warning Modal */}
       <AlertDialog open={!!overrideWarning} onOpenChange={(open) => !open && setOverrideWarning(null)}>
-        <AlertDialogContent className="sm:max-w-[425px] overflow-hidden rounded-2xl border border-white/20 bg-white/80 backdrop-blur-xl shadow-2xl">
+        <AlertDialogContent className="sm:max-w-[425px] overflow-hidden rounded-2xl glass-panel p-6">
           <div className="absolute inset-0 bg-gradient-to-br from-white/40 to-slate-100/40 pointer-events-none" />
           <div className="relative">
             <AlertDialogHeader className="mb-4">

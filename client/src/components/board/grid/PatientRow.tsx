@@ -232,7 +232,7 @@ export function PatientRow({
           >
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="flex h-7 min-w-[1.75rem] items-center justify-center rounded-[10px] border border-white bg-gradient-to-br from-indigo-100 via-blue-50 to-indigo-200/80 px-1 text-[11px] font-black tracking-tight text-indigo-800 shadow-[0_2px_8px_-2px_rgba(79,70,229,0.3),inset_0_1px_1px_rgba(255,255,255,1)] transition-all hover:scale-105 hover:shadow-indigo-500/20">
+                <span className="flex h-7 min-w-[1.75rem] items-center justify-center rounded-[10px] border border-white bg-gradient-to-br from-blue-100 via-sky-50 to-blue-200/80 px-1 text-[11px] font-black tracking-tight text-blue-800 shadow-[0_2px_8px_-2px_rgba(2,132,199,0.3),inset_0_1px_1px_rgba(255,255,255,1)] transition-all hover:scale-105 hover:shadow-sky-500/20">
                   {EOW_DAY_LETTERS[eowDayIndex]}
                 </span>
               </TooltipTrigger>

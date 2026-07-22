@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { trpc } from "@/lib/trpc";
 import {
   Dialog,
   DialogContent,
@@ -52,6 +53,7 @@ interface SessionDialogProps {
   initial: SessionFormValue | null;
   patients: { id: number; name: string; roomNumber: string }[];
   therapists: { id: number; name: string; therapyType?: string }[];
+  referenceDate: Date;
   onSave: (value: SessionFormValue) => void;
   onDelete?: (id: number) => void;
 }
@@ -64,22 +66,39 @@ export function SessionDialog({
   initial,
   patients,
   therapists,
+  referenceDate,
   onSave,
   onDelete,
 }: SessionDialogProps) {
   const [form, setForm] = useState<SessionFormValue | null>(initial);
   const [customDurationMode, setCustomDurationMode] = useState(false);
+  const [dismissedCarryForward, setDismissedCarryForward] = useState(false);
 
   useEffect(() => {
     setForm(initial);
+    setDismissedCarryForward(false);
     if (initial) {
       setCustomDurationMode(!DURATIONS.includes(initial.durationMinutes));
     }
   }, [initial]);
 
+  const isEditing = Boolean(form?.id);
+
+  const lastNoteQuery = trpc.sessions.lastNote.useQuery(
+    {
+      patientId: form?.patientId ?? 0,
+      therapyType: form?.therapyType ?? "PT",
+      referenceDate,
+      excludeSessionId: form?.id,
+    },
+    { enabled: open && !isEditing && !!form && form.therapyType !== "Block" },
+  );
+  const lastNote = lastNoteQuery.data;
+  const showCarryForward =
+    !isEditing && !dismissedCarryForward && !!lastNote && !form?.notes;
+
   if (!form) return null;
 
-  const isEditing = Boolean(form.id);
   const patient = patients.find((p) => p.id === form.patientId);
 
   const maxDur = (TIME_SLOTS.length - form.slotIndex) * 30;
@@ -332,6 +351,31 @@ export function SessionDialog({
           {/* Notes */}
           <div className="space-y-2">
             <Label>Notes (optional)</Label>
+            {showCarryForward && (
+              <div className="flex items-center justify-between gap-2 rounded-md bg-slate-100 px-3 py-2 text-xs text-slate-600">
+                <span>Note from last {form.therapyType} session ({new Date(lastNote!.startTime).toLocaleDateString()}) available.</span>
+                <div className="flex gap-1 shrink-0">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-6 px-2 text-xs"
+                    onClick={() => setForm({ ...form, notes: lastNote!.notes })}
+                  >
+                    Use it
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-2 text-xs"
+                    onClick={() => setDismissedCarryForward(true)}
+                  >
+                    Dismiss
+                  </Button>
+                </div>
+              </div>
+            )}
             <Textarea
               value={form.notes}
               onChange={(e) => setForm({ ...form, notes: e.target.value })}

@@ -40,6 +40,7 @@ import {
   callOffTherapist,
   cancelCallOffTherapist,
   getTherapistAbsences,
+  getLastSessionNoteForPatient,
   RoomConflictError,
 } from "./db";
 import { getWeeklyMinutesSummary, getGapFillSuggestions, getOrCreateTodaysDigest, getPredictiveForecast } from "./scheduling";
@@ -207,6 +208,18 @@ export const appRouter = router({
     movePatientSessionsToNextDay: publicProcedure
       .input(z.object({ patientId: z.number(), date: z.date() }))
       .mutation(async ({ input }) => movePatientSessionsToNextDay(input.patientId, input.date)),
+    lastNote: publicProcedure
+      .input(
+        z.object({
+          patientId: z.number(),
+          therapyType: therapyTypeEnum,
+          referenceDate: z.date(),
+          excludeSessionId: z.number().optional(),
+        }),
+      )
+      .query(async ({ input }) =>
+        getLastSessionNoteForPatient(input.patientId, input.therapyType, input.referenceDate, input.excludeSessionId) ?? null,
+      ),
   }),
 
   /* ------------------------------------------------------------------ */

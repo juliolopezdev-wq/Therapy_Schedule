@@ -319,6 +319,41 @@ export async function getMostRecentSessionsForPatients(patientIds: number[]): Pr
   return result;
 }
 
+/**
+ * Most recent past session's notes for a patient in a given discipline, excluding a specific
+ * session id (the one currently being edited, if any) and any Block sessions -- used to carry
+ * a note forward into a new session so staff edit deltas instead of writing one from scratch.
+ * Only ever reads sessions that already started, so it never surfaces a future/still-scheduled
+ * session's placeholder notes as if they were a completed note.
+ */
+export async function getLastSessionNoteForPatient(
+  patientId: number,
+  therapyType: "PT" | "OT" | "SLP" | "Eval" | "Block",
+  referenceDate: Date,
+  excludeSessionId?: number,
+): Promise<{ sessionId: number; startTime: Date; notes: string } | undefined> {
+  const db = await getDb();
+  if (!db) return undefined;
+  const idCond = excludeSessionId != null ? ne(therapySessions.id, excludeSessionId) : undefined;
+  const rows = await db
+    .select()
+    .from(therapySessions)
+    .where(
+      and(
+        eq(therapySessions.patientId, patientId),
+        eq(therapySessions.therapyType, therapyType),
+        lt(therapySessions.startTime, referenceDate),
+        idCond,
+      ),
+    );
+  const withNotes = rows.filter((r) => r.notes && r.notes.trim().length > 0);
+  if (withNotes.length === 0) return undefined;
+  const mostRecent = withNotes.reduce((latest, r) =>
+    new Date(r.startTime).getTime() > new Date(latest.startTime).getTime() ? r : latest,
+  );
+  return { sessionId: mostRecent.id, startTime: mostRecent.startTime, notes: mostRecent.notes! };
+}
+
 /** Thrown by createTherapySession/updateTherapySession when the requested time would
  *  double-book the patient, or double-book the therapist outside a legitimate
  *  concurrent/group pairing. Callers that book in bulk (auto-schedule, copy-day, etc.)

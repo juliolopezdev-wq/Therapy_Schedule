@@ -94,7 +94,7 @@ export function DailyAttendance({
         <div className="flex flex-col h-full bg-transparent">
           <SheetHeader className="px-6 py-5 glass-header">
             <div className="flex items-center gap-2">
-              <UserMinus className="h-5 w-5 text-indigo-500" />
+              <UserMinus className="h-5 w-5 text-sky-500" />
               <SheetTitle>Daily Attendance</SheetTitle>
             </div>
             <SheetDescription>
