@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { memo, useState, useEffect } from "react";
 import { 
   Flag,
   LogOut,
@@ -44,7 +44,7 @@ const FLAG_ICONS: Record<FlagType, React.ElementType> = {
   "Family Training": HeartHandshake,
 };
 
-export function FlagBadge({ flag, iconOnly = false }: { flag: FlagType; iconOnly?: boolean }) {
+function FlagBadgeImpl({ flag, iconOnly = false }: { flag: FlagType; iconOnly?: boolean }) {
   const meta = FLAG_META[flag];
   const Icon = FLAG_ICONS[flag];
   return (
@@ -63,12 +63,16 @@ export function FlagBadge({ flag, iconOnly = false }: { flag: FlagType; iconOnly
   );
 }
 
+// Rendered several times per patient row (one per active flag) -- memoize since `flag`/`iconOnly`
+// are primitives that are cheap and reliable to shallow-compare.
+export const FlagBadge = memo(FlagBadgeImpl);
+
 interface FlagToggleProps {
   activeFlags: FlagType[];
   onToggle: (flag: FlagType, active: boolean) => void;
 }
 
-export function FlagToggle({ activeFlags, onToggle }: FlagToggleProps) {
+function FlagToggleImpl({ activeFlags, onToggle }: FlagToggleProps) {
   const [optimisticFlags, setOptimisticFlags] = useState<FlagType[]>(activeFlags);
 
   // Sync optimistic state when server state updates
@@ -127,3 +131,7 @@ export function FlagToggle({ activeFlags, onToggle }: FlagToggleProps) {
     </Popover>
   );
 }
+
+// Rendered once per patient row -- memoize so it doesn't re-render (and re-mount its Popover)
+// just because some other patient's row changed.
+export const FlagToggle = memo(FlagToggleImpl);

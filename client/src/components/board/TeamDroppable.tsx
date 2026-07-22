@@ -1,7 +1,15 @@
+import { memo } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { cn } from "@/lib/utils";
+import type { Team, Patient } from "../../../../drizzle/schema";
 
-export function TeamDroppable({ section, children, className }: { section: any, children: React.ReactNode, className?: string }) {
+interface TeamDroppableProps {
+  section: Team & { patients: Patient[] };
+  children: React.ReactNode;
+  className?: string;
+}
+
+function TeamDroppableImpl({ section, children, className }: TeamDroppableProps) {
   const { isOver, setNodeRef } = useDroppable({
     id: `team-${section.id}`,
     data: { teamId: section.id, teamName: section.name },
@@ -16,3 +24,5 @@ export function TeamDroppable({ section, children, className }: { section: any, 
     </div>
   );
 }
+
+export const TeamDroppable = memo(TeamDroppableImpl);

@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -11,7 +12,7 @@ interface GridCellProps {
   isLunch?: boolean;
 }
 
-export function GridCell({ patientId, slotIndex, onAdd, children, isAlternate, isLunch }: GridCellProps) {
+function GridCellImpl({ patientId, slotIndex, onAdd, children, isAlternate, isLunch }: GridCellProps) {
   // isLunch is a visual hint only (diagonal hatch) -- the cell stays fully droppable/clickable.
   // The lunch confirm-before-booking prompt happens where the write actually happens
   // (saveSession/handleDragEnd/handleResizeSession in TherapyBoard.tsx), not by disabling this cell.
@@ -51,3 +52,7 @@ export function GridCell({ patientId, slotIndex, onAdd, children, isAlternate, i
     </div>
   );
 }
+
+// Rendered ~22 times per patient row -- memoize so an unrelated cell doesn't re-render just
+// because some other cell/row in the board changed.
+export const GridCell = memo(GridCellImpl);

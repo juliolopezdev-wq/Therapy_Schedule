@@ -1,11 +1,19 @@
+import { memo } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { cn } from "@/lib/utils";
+import type { Patient } from "../../../../drizzle/schema";
 
-export function PatientDraggable({ patient, children, className }: { patient: any, children: React.ReactNode, className?: string }) {
+interface PatientDraggableProps {
+  patient: Patient;
+  children: React.ReactNode;
+  className?: string;
+}
+
+function PatientDraggableImpl({ patient, children, className }: PatientDraggableProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `patient-${patient.id}`,
-    data: { patient, isPatientDrop: true, teamId: patient.teamId, teamName: patient.teamName },
+    data: { patient, isPatientDrop: true, teamId: patient.teamId },
   });
 
   const style = {
@@ -30,3 +38,6 @@ export function PatientDraggable({ patient, children, className }: { patient: an
     </div>
   );
 }
+
+export const PatientDraggable = memo(PatientDraggableImpl);
+export default PatientDraggable;

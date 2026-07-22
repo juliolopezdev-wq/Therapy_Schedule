@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -34,6 +34,9 @@ import {
   XCircle,
   UserCircle2,
 } from "lucide-react";
+import { SickCallModal } from "@/components/board/SickCallModal";
+import { ComplianceSentinelModal } from "@/components/board/ComplianceSentinelModal";
+import { PredictiveStaffingPanel } from "@/components/board/PredictiveStaffingPanel";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -140,6 +143,25 @@ export interface ConflictPair {
   sessionB: SessionTileData;
 }
 
+// A patient with no sessions today gets this same empty-array reference every time, instead of a
+// fresh `[]` per render, so it doesn't defeat memoization on the (memoized) PatientRow that
+// receives it as a prop.
+const EMPTY_TILES: SessionTileData[] = [];
+
+// Pure function of its arguments (no component state) -- hoisted out of the component so it has
+// stable identity across renders instead of being recreated (and passed to memoized children)
+// on every render for no reason.
+function checkLunchOverlapPure(startTime: Date, endTime: Date): string | null {
+  const lunchStart = new Date(startTime);
+  lunchStart.setHours(12, 0, 0, 0);
+  const lunchEnd = new Date(startTime);
+  lunchEnd.setHours(13, 0, 0, 0);
+  if (startTime.getTime() < lunchEnd.getTime() && endTime.getTime() > lunchStart.getTime()) {
+    return "This session overlaps the lunch period (12:00 PM - 1:00 PM).";
+  }
+  return null;
+}
+
 export default function TherapyBoard() {
   const utils = trpc.useUtils();
   const [day, setDay] = useState(() => startOfDay(new Date()));
@@ -178,6 +200,10 @@ export default function TherapyBoard() {
     collapsedSections,
     setCollapsedSections,
   } = useBoardUI();
+
+  const [sickCallModalOpen, setSickCallModalOpen] = useState(false);
+  const [complianceSentinelOpen, setComplianceSentinelOpen] = useState(false);
+  const [predictiveStaffingOpen, setPredictiveStaffingOpen] = useState(false);
 
   const jumpToPatient = (patientId: number) => {
     const patient = patientsQuery.data?.find((p) => p.id === patientId);
@@ -352,13 +378,20 @@ export default function TherapyBoard() {
     onError: () => toast.error("Could not copy sessions."),
   });
 
-  // Map sessions to tile data with slot positions
+  // Map sessions to tile data with slot positions. Reuses the previous tile object for a session
+  // whose derived fields haven't actually changed, instead of allocating a brand-new object for
+  // every session on every render -- invalidateBoard() refetches sessions.list on nearly every
+  // mutation (even ones for a different patient), so without this every SessionTile/GridCell/
+  // PatientRow downstream would see a new prop reference and re-render regardless of memoization.
+  const tileCacheRef = useRef(new Map<number, SessionTileData>());
   const tiles: SessionTileData[] = useMemo(() => {
-    return rawSessions.map((s) => {
+    const cache = tileCacheRef.current;
+    const nextCache = new Map<number, SessionTileData>();
+    const result = rawSessions.map((s) => {
       const start = new Date(s.startTime);
       const slotIndex = dateToSlotIndex(start);
       const slotSpan = durationToSlots(s.durationMinutes);
-      return {
+      const computed: SessionTileData = {
         id: s.id,
         patientId: s.patientId,
         therapyType: s.therapyType as TherapyType,
@@ -372,7 +405,16 @@ export default function TherapyBoard() {
         missedReason: s.missedReason,
         notes: s.notes,
       };
+      const cached = cache.get(s.id);
+      const unchanged =
+        !!cached &&
+        (Object.keys(computed) as (keyof SessionTileData)[]).every((key) => cached[key] === computed[key]);
+      const tile = unchanged ? cached! : computed;
+      nextCache.set(s.id, tile);
+      return tile;
     });
+    tileCacheRef.current = nextCache;
+    return result;
   }, [rawSessions]);
 
 
@@ -559,20 +601,32 @@ export default function TherapyBoard() {
     return set;
   }, [weekSessions, day]);
 
-  const therapistName = (id: number | null) =>
-    id ? therapists.find((t) => t.id === id)?.name : undefined;
-  const therapistColor = (id: number | null) =>
-    id ? therapists.find((t) => t.id === id)?.color : undefined;
+  // Therapist lookups as a memoized Map instead of an Array#find per call -- also gives
+  // therapistName/therapistColor stable function identity (only changes when `therapists`
+  // itself changes), which matters once callers of these are passed as memoized child props.
+  const therapistById = useMemo(() => {
+    const map = new Map<number, (typeof therapists)[number]>();
+    therapists.forEach((t) => map.set(t.id, t));
+    return map;
+  }, [therapists]);
+  const therapistName = useCallback(
+    (id: number | null) => (id != null ? therapistById.get(id)?.name : undefined),
+    [therapistById],
+  );
+  const therapistColor = useCallback(
+    (id: number | null) => (id != null ? therapistById.get(id)?.color : undefined),
+    [therapistById],
+  );
 
-  const checkDoubleBooking = (therapistId: number | null, deliveryMode: string, startTime: Date, endTime: Date, excludeSessionId?: number): string | null => {
+  const checkDoubleBooking = useCallback((therapistId: number | null, deliveryMode: string, startTime: Date, endTime: Date, excludeSessionId?: number): string | null => {
     if (!therapistId) return null;
-    
+
     const therapistOverlap = tiles.find(t => {
       if (t.therapistId !== therapistId || t.id === excludeSessionId) return false;
-      
+
       const isMatchingGroupOrConcurrent = t.deliveryMode === deliveryMode && (deliveryMode === "group" || deliveryMode === "concurrent");
       if (isMatchingGroupOrConcurrent) return false;
-      
+
       const tStart = slotIndexToDate(day, t.slotIndex);
       const tEnd = new Date(tStart.getTime() + t.durationMinutes * 60000);
       return tStart < endTime && tEnd > startTime;
@@ -582,11 +636,11 @@ export default function TherapyBoard() {
       return `${therapistName(therapistId)} is already scheduled with ${pName} at this time. Do you want to double-book them anyway?`;
     }
     return null;
-  };
+  }, [tiles, day, patients, therapistName]);
 
-  const checkTherapistAvailability = (therapistId: number | null, startTime: Date, endTime: Date): string | null => {
+  const checkTherapistAvailability = useCallback((therapistId: number | null, startTime: Date, endTime: Date): string | null => {
     if (!therapistId) return null;
-    const therapist = therapists.find((t) => t.id === therapistId);
+    const therapist = therapistById.get(therapistId);
     if (!therapist) return null;
 
     if (therapist.workDays) {
@@ -618,22 +672,15 @@ export default function TherapyBoard() {
       }
     }
     return null;
-  };
+  }, [therapistById]);
 
   // Lunch (12:00-1:00) is bookable, but flagged as an override warning rather than silently
-  // allowed -- staff should notice they're cutting into it, not just get it by accident.
-  const checkLunchOverlap = (startTime: Date, endTime: Date): string | null => {
-    const lunchStart = new Date(startTime);
-    lunchStart.setHours(12, 0, 0, 0);
-    const lunchEnd = new Date(startTime);
-    lunchEnd.setHours(13, 0, 0, 0);
-    if (startTime.getTime() < lunchEnd.getTime() && endTime.getTime() > lunchStart.getTime()) {
-      return "This session overlaps the lunch period (12:00 PM - 1:00 PM).";
-    }
-    return null;
-  };
+  // allowed -- staff should notice they're cutting into it, not just get it by accident. Pure
+  // function of its arguments (no component state), so it's hoisted as a stable module-level
+  // function rather than recreated every render.
+  const checkLunchOverlap = checkLunchOverlapPure;
 
-  const processWarnings = (warnings: (string | null | undefined)[], onComplete: () => void) => {
+  const processWarnings = useCallback((warnings: (string | null | undefined)[], onComplete: () => void) => {
     const activeWarnings = warnings.filter(Boolean) as string[];
     if (activeWarnings.length === 0) {
       onComplete();
@@ -655,19 +702,52 @@ export default function TherapyBoard() {
       }
     };
     showNext();
-  };
+  }, [setOverrideWarning]);
 
-  // Tiles per patient row, keyed by start slot
+  // Tiles per patient row, keyed by start slot. Reuses the previous merged object when the
+  // underlying tile and its conflict flag haven't changed, so the memoized GridCell/SessionTile
+  // below only re-render for the one slot that actually changed.
+  const tileWithConflictCacheRef = useRef(new Map<string, { source: SessionTileData; hasConflict: boolean; merged: SessionTileData }>());
   const tilesByPatientSlot = useMemo(() => {
+    const cache = tileWithConflictCacheRef.current;
+    const nextCache = new Map<string, { source: SessionTileData; hasConflict: boolean; merged: SessionTileData }>();
     const map = new Map<string, SessionTileData>();
     visibleTiles.forEach((t) => {
-      map.set(`${t.patientId}-${t.slotIndex}`, {
-        ...t,
-        hasConflict: conflictIds.has(t.id),
-      });
+      const key = `${t.patientId}-${t.slotIndex}`;
+      const hasConflict = conflictIds.has(t.id);
+      const cached = cache.get(key);
+      const merged = cached && cached.source === t && cached.hasConflict === hasConflict
+        ? cached.merged
+        : { ...t, hasConflict };
+      nextCache.set(key, { source: t, hasConflict, merged });
+      map.set(key, merged);
     });
+    tileWithConflictCacheRef.current = nextCache;
     return map;
   }, [visibleTiles, conflictIds]);
+
+  // Per-patient session lists, for PatientDayQuickView's popover -- reuses the previous array
+  // reference for a patient whose own sessions haven't changed, so passing this into the
+  // memoized PatientRow doesn't force every row to re-render just because some other patient's
+  // session moved (tiles/visibleTiles are whole-day arrays and change reference on any edit).
+  const tilesByPatientRef = useRef(new Map<number, SessionTileData[]>());
+  const tilesByPatient = useMemo(() => {
+    const grouped = new Map<number, SessionTileData[]>();
+    tiles.forEach((t) => {
+      const arr = grouped.get(t.patientId);
+      if (arr) arr.push(t);
+      else grouped.set(t.patientId, [t]);
+    });
+    const prev = tilesByPatientRef.current;
+    grouped.forEach((arr, patientId) => {
+      const prevArr = prev.get(patientId);
+      if (prevArr && prevArr.length === arr.length && prevArr.every((t, i) => t === arr[i])) {
+        grouped.set(patientId, prevArr);
+      }
+    });
+    tilesByPatientRef.current = grouped;
+    return grouped;
+  }, [tiles]);
 
   // Cells occupied by a multi-slot tile (so we don't render an add button there)
   const occupiedCells = useMemo(() => {
@@ -709,8 +789,10 @@ export default function TherapyBoard() {
 
 
 
-  // Session dialog handlers
-  function openNewSession(patientId: number, slotIndex: number) {
+  // Session dialog handlers -- useCallback so these keep a stable identity across renders,
+  // otherwise every memoized PatientRow/GridCell down the tree would see a "new" prop on every
+  // render and re-render regardless of React.memo.
+  const openNewSession = useCallback((patientId: number, slotIndex: number) => {
     setSessionDraft({
       patientId,
       therapyType: "PT",
@@ -722,9 +804,9 @@ export default function TherapyBoard() {
       notes: "",
     });
     setSessionDialogOpen(true);
-  }
+  }, [setSessionDraft, setSessionDialogOpen]);
 
-  function openEditSession(tile: SessionTileData) {
+  const openEditSession = useCallback((tile: SessionTileData) => {
     setSessionDraft({
       id: tile.id,
       patientId: tile.patientId,
@@ -738,12 +820,12 @@ export default function TherapyBoard() {
       notes: tile.notes ?? "",
     });
     setSessionDialogOpen(true);
-  }
+  }, [setSessionDraft, setSessionDialogOpen]);
 
-  function handleResizeSession(sessionId: number, newDurationMinutes: number) {
+  const handleResizeSession = useCallback((sessionId: number, newDurationMinutes: number) => {
     const session = rawSessions.find(s => s.id === sessionId);
     if (!session) return;
-    
+
     const tile = tiles.find(t => t.id === sessionId);
     if (!tile) return;
 
@@ -771,7 +853,7 @@ export default function TherapyBoard() {
 
     const warnings = [checkLunchOverlap(start, end), checkTherapistAvailability(session.therapistId, start, end), checkDoubleBooking(session.therapistId, session.deliveryMode, start, end, session.id)];
     processWarnings(warnings, doUpdate);
-  }
+  }, [rawSessions, tiles, checkTherapistAvailability, checkDoubleBooking, processWarnings, updateSession]);
 
   // Books a slot proposed by this morning's auto-generated gap-fill digest directly, without
   // opening the full session dialog -- one click from the "At Risk" popover in BoardHeader.
@@ -980,14 +1062,24 @@ export default function TherapyBoard() {
   });
 
 
-  function toggleSection(id: number) {
+  const toggleSection = useCallback((id: number) => {
     setCollapsedSections((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  }
+  }, [setCollapsedSections]);
+
+  // Hoisted out of the patient .map() below -- one stable function shared by every row instead of
+  // a fresh closure allocated per patient on every render.
+  const handleToggleFlag = useCallback((patientId: number, flag: FlagType, active: boolean) => {
+    toggleFlag.mutate({ patientId, flagType: flag, date: day, active });
+  }, [toggleFlag, day]);
+
+  const handleCopyPatientSessions = useCallback((patientId: number) => {
+    copyPatientSessions.mutate({ patientId, date: day });
+  }, [copyPatientSessions, day]);
 
   const totalSessions = tiles.length;
   const conflictCount = conflictIds.size;
@@ -1025,6 +1117,9 @@ export default function TherapyBoard() {
         handleCopyDay={handleCopyDay}
         digestByPatientId={digestByPatientId}
         onBookSuggestion={quickBookDigestSlot}
+        onOpenSickCall={() => setSickCallModalOpen(true)}
+        onOpenComplianceSentinel={() => setComplianceSentinelOpen(true)}
+        onOpenPredictiveStaffing={() => setPredictiveStaffingOpen(true)}
       />
 
       {/* Mobile hint */}
@@ -1133,7 +1228,7 @@ export default function TherapyBoard() {
                                 patient={patient}
                                 rowIdx={rowIdx}
                                 day={day}
-                                tiles={tiles}
+                                tiles={tilesByPatient.get(patient.id) ?? EMPTY_TILES}
                                 therapists={therapists}
                                 pFlags={pFlags}
                                 weekMinsByPatient={weekMinsByPatient}
@@ -1146,8 +1241,8 @@ export default function TherapyBoard() {
                                 isMedicalHold={isMedicalHold}
                                 setPatientDraft={setPatientDraft}
                                 setPatientDialogOpen={setPatientDialogOpen}
-                                toggleFlag={(patientId, flag, active) => toggleFlag.mutate({ patientId, flagType: flag, date: day, active })}
-                                copyPatientSessions={(patientId) => copyPatientSessions.mutate({ patientId, date: day })}
+                                toggleFlag={handleToggleFlag}
+                                copyPatientSessions={handleCopyPatientSessions}
                                 isCopying={copyPatientSessions.isPending}
                                 openNewSession={openNewSession}
                                 openEditSession={openEditSession}
@@ -1355,6 +1450,31 @@ export default function TherapyBoard() {
           deleteTherapist.mutate({ id });
           toast.success("Staff member removed");
         }}
+      />
+
+      <SickCallModal
+        open={sickCallModalOpen}
+        onOpenChange={setSickCallModalOpen}
+        therapists={therapists}
+        day={day}
+        onSuccess={() => {
+          sessionsQuery.refetch();
+        }}
+      />
+
+      <ComplianceSentinelModal
+        open={complianceSentinelOpen}
+        onOpenChange={setComplianceSentinelOpen}
+        day={day}
+        onFixPatient={(patientId) => {
+          jumpToPatient(patientId);
+        }}
+      />
+
+      <PredictiveStaffingPanel
+        open={predictiveStaffingOpen}
+        onOpenChange={setPredictiveStaffingOpen}
+        day={day}
       />
 
       <TargetReachedDialog

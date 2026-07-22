@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { memo, useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import { AlertTriangle, Lock, CheckCircle2, XCircle, Users } from "lucide-react";
@@ -32,7 +32,7 @@ interface SessionTileProps {
   onResize?: (id: number, newDurationMinutes: number) => void;
 }
 
-export function SessionTile({
+function SessionTileImpl({
   session,
   therapistName,
   therapistColor,
@@ -266,3 +266,8 @@ export function SessionTile({
 
   return tileContent;
 }
+
+// Rendered once per booked session, and the board re-renders often (query refetches, drag state,
+// other rows' interactions) -- memoize so a session tile only re-renders when its own data
+// actually changes, not on every unrelated board update.
+export const SessionTile = memo(SessionTileImpl);

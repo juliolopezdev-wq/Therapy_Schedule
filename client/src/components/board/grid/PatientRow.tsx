@@ -1,3 +1,4 @@
+import { memo, useCallback, useMemo } from "react";
 import { AlertTriangle, Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -24,7 +25,7 @@ import { PatientDraggable } from "@/components/board/PatientDraggable";
 import { GridCell } from "@/components/board/GridCell";
 import { SessionTile, type SessionTileData } from "@/components/board/SessionTile";
 
-import { TIME_SLOTS, type FlagType, isMissedStatus } from "@/lib/board";
+import { TIME_SLOTS, type FlagType, isMissedStatus, DEFAULT_WEEKLY_MINUTE_TARGET } from "@/lib/board";
 import { getPatientWeekBounds } from "../../../../../shared/weekUtils";
 import type { Patient, Therapist } from "../../../../../drizzle/schema";
 
@@ -33,12 +34,12 @@ const EOW_DAY_LETTERS = ["S", "M", "T", "W", "TH", "F", "S"];
 const EOW_DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 interface PatientRowProps {
-  patient: any;
+  patient: Patient;
   rowIdx: number;
   day: Date;
   tiles: SessionTileData[];
   therapists: Therapist[];
-  pFlags: any[];
+  pFlags: { id: number; flagType: FlagType }[];
   weekMinsByPatient: Map<number, number>;
   tilesByPatientSlot: Map<string, SessionTileData>;
   occupiedCells: Set<string>;
@@ -59,7 +60,7 @@ interface PatientRowProps {
   therapistColor: (id: number | null) => string | undefined;
 }
 
-export function PatientRow({
+function PatientRowImpl({
   patient,
   rowIdx,
   day,
@@ -85,6 +86,15 @@ export function PatientRow({
   therapistName,
   therapistColor,
 }: PatientRowProps) {
+  // Stable across re-renders unless pFlags itself changes -- otherwise FlagToggle would see a
+  // "new" array/callback (and thus re-render) on every PatientRow render regardless of its own
+  // memoization.
+  const activeFlags = useMemo(() => pFlags.map((f) => f.flagType), [pFlags]);
+  const handleFlagToggle = useCallback(
+    (flag: FlagType, active: boolean) => toggleFlag(patient.id, flag, active),
+    [toggleFlag, patient.id],
+  );
+
   return (
     <div id={`patient-row-${patient.id}`} className={cn("group/row flex h-16 border-b border-slate-100 transition-colors last:border-b-0 hover:bg-slate-50/80", isDC && "bg-slate-200 opacity-60 grayscale")}>
       {/* Patient label */}
@@ -106,7 +116,7 @@ export function PatientRow({
               isDischarged: patient.isDischarged,
               admissionDate: patient.admissionDate ?? "",
               estimatedDischargeDate: patient.estimatedDischargeDate ?? "",
-              weeklyMinuteTarget: patient.weeklyMinuteTarget ?? 900,
+              weeklyMinuteTarget: patient.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
               teamId: patient.teamId ?? null,
             });
             setPatientDialogOpen(true);
@@ -152,7 +162,7 @@ export function PatientRow({
           )}
           {!isDC && (() => {
             const weekMins = weekMinsByPatient.get(patient.id) ?? 0;
-            const target = patient.weeklyMinuteTarget ?? 900;
+            const target = patient.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET;
             const pct = Math.min(100, Math.round((weekMins / target) * 100));
             const isOnTrack = weekMins >= target;
             const isClose = !isOnTrack && pct >= 67;
@@ -173,10 +183,8 @@ export function PatientRow({
         </button>
         <div className="flex items-center shrink-0 ml-0.5 gap-0.5">
           <FlagToggle
-            activeFlags={pFlags.map((f) => f.flagType)}
-            onToggle={(flag, active) =>
-              toggleFlag(patient.id, flag, active)
-            }
+            activeFlags={activeFlags}
+            onToggle={handleFlagToggle}
           />
           <AlertDialog>
             <Tooltip>
@@ -292,3 +300,9 @@ export function PatientRow({
     </div>
   );
 }
+
+// This row renders once per patient per day (up to ~22 grid cells each) and the board re-renders
+// on nearly every query refetch/drag interaction -- memoize so a patient's row only re-renders
+// when its own props actually changed, not whenever any other patient's session/flag/drag state
+// changes. Depends on the parent (TherapyBoard.tsx) passing stable references for tiles/handlers.
+export const PatientRow = memo(PatientRowImpl);
