@@ -36,8 +36,10 @@ import {
 } from "lucide-react";
 import { SickCallModal } from "@/components/board/SickCallModal";
 import { StaffStatsModal } from "@/components/board/StaffStatsModal";
+import { WeekendStaffingModal } from "@/components/board/WeekendStaffingModal";
 import { ComplianceSentinelModal } from "@/components/board/ComplianceSentinelModal";
 import { PredictiveStaffingPanel } from "@/components/board/PredictiveStaffingPanel";
+import { ProductivityHubModal } from "@/components/board/ProductivityHubModal";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -206,6 +208,10 @@ export default function TherapyBoard() {
   const [complianceSentinelOpen, setComplianceSentinelOpen] = useState(false);
   const [predictiveStaffingOpen, setPredictiveStaffingOpen] = useState(false);
   const [statsTherapistId, setStatsTherapistId] = useState<number | null>(null);
+  const [productivityHubOpen, setProductivityHubOpen] = useState(false);
+  const [productivityHubTherapistId, setProductivityHubTherapistId] = useState<number | null>(null);
+  const [productivityHubViewMode, setProductivityHubViewMode] = useState<"admin" | "staff">("admin");
+  const [weekendStaffingOpen, setWeekendStaffingOpen] = useState(false);
 
   const jumpToPatient = (patientId: number) => {
     const patient = patientsQuery.data?.find((p) => p.id === patientId);
@@ -368,6 +374,31 @@ export default function TherapyBoard() {
   });
   const deleteTherapist = trpc.therapists.delete.useMutation({
     onSuccess: () => utils.therapists.list.invalidate(),
+  });
+  const sendTomorrowAssignments = trpc.therapists.sendTomorrowAssignments.useMutation({
+    onSuccess: (result) => {
+      const { sent, skippedNoEmail, noSessions, failed } = result;
+      if (sent.length === 0 && skippedNoEmail.length === 0 && noSessions.length === 0 && failed.length === 0) {
+        toast.info("No sessions scheduled for tomorrow yet.");
+        return;
+      }
+      const parts: string[] = [];
+      if (sent.length > 0) parts.push(`Sent ${sent.length} assignment email${sent.length === 1 ? "" : "s"}.`);
+      if (noSessions.length > 0) {
+        const names = noSessions.map((n) => n.therapistName).join(", ");
+        parts.push(`${names} ${noSessions.length === 1 ? "has" : "have"} no sessions scheduled tomorrow.`);
+      }
+      if (skippedNoEmail.length > 0) parts.push(`${skippedNoEmail.length} skipped (no email on file).`);
+      if (failed.length > 0) parts.push(`${failed.length} failed to send.`);
+      if (failed.length > 0) {
+        toast.error(parts.join(" "));
+      } else if (sent.length === 0) {
+        toast.info(parts.join(" "));
+      } else {
+        toast.success(parts.join(" "));
+      }
+    },
+    onError: (err) => toast.error(err.message),
   });
   const copyDayToNextDay = trpc.sessions.copyDayToNextDay.useMutation({
     onSuccess: () => invalidateBoard(),
@@ -645,32 +676,49 @@ export default function TherapyBoard() {
     const therapist = therapistById.get(therapistId);
     if (!therapist) return null;
 
-    if (therapist.workDays) {
+    const dayIdx = startTime.getDay();
+    const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const formatTime = (time: string) => {
+      const [h, m] = time.split(':').map(Number);
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      const h12 = h % 12 || 12;
+      return `${h12}:${m.toString().padStart(2, '0')} ${ampm}`;
+    };
+
+    let isWorking = true;
+    let workStart = therapist.workStartTime;
+    let workEnd = therapist.workEndTime;
+
+    if ((therapist as any).workHours) {
+      try {
+        const parsed = JSON.parse((therapist as any).workHours);
+        const daySchedule = parsed[String(dayIdx)];
+        if (daySchedule) {
+          isWorking = !!daySchedule.active;
+          workStart = daySchedule.start;
+          workEnd = daySchedule.end;
+        }
+      } catch (e) {}
+    } else if (therapist.workDays) {
       const days = therapist.workDays.split(',').map(Number);
-      if (!days.includes(startTime.getDay())) {
-        const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-        return `${therapist.name} is not scheduled to work on ${dayNames[startTime.getDay()]}.`;
-      }
+      isWorking = days.includes(dayIdx);
     }
 
-    if (therapist.workStartTime && therapist.workEndTime) {
+    if (!isWorking) {
+      return `${therapist.name} is not scheduled to work on ${dayNames[dayIdx]}.`;
+    }
+
+    if (workStart && workEnd) {
       const sessionStartMins = startTime.getHours() * 60 + startTime.getMinutes();
       const sessionEndMins = endTime.getHours() * 60 + endTime.getMinutes();
 
-      const [wsH, wsM] = therapist.workStartTime.split(':').map(Number);
+      const [wsH, wsM] = workStart.split(':').map(Number);
       const workStartMins = wsH * 60 + wsM;
-      const [weH, weM] = therapist.workEndTime.split(':').map(Number);
+      const [weH, weM] = workEnd.split(':').map(Number);
       const workEndMins = weH * 60 + weM;
 
       if (sessionStartMins < workStartMins || sessionEndMins > workEndMins) {
-        // Format to standard 12-hour AM/PM for nicer reading
-        const formatTime = (time: string) => {
-          const [h, m] = time.split(':').map(Number);
-          const ampm = h >= 12 ? 'PM' : 'AM';
-          const h12 = h % 12 || 12;
-          return `${h12}:${m.toString().padStart(2, '0')} ${ampm}`;
-        };
-        return `${therapist.name}'s hours are ${formatTime(therapist.workStartTime)} to ${formatTime(therapist.workEndTime)}. This session falls outside their shift.`;
+        return `${therapist.name}'s hours on ${dayNames[dayIdx]} are ${formatTime(workStart)} to ${formatTime(workEnd)}. This session falls outside their shift.`;
       }
     }
     return null;
@@ -1122,6 +1170,11 @@ export default function TherapyBoard() {
         onOpenSickCall={() => setSickCallModalOpen(true)}
         onOpenComplianceSentinel={() => setComplianceSentinelOpen(true)}
         onOpenPredictiveStaffing={() => setPredictiveStaffingOpen(true)}
+        onOpenProductivityHub={() => {
+          setProductivityHubTherapistId(null);
+          setProductivityHubViewMode("admin");
+          setProductivityHubOpen(true);
+        }}
         onViewStats={setStatsTherapistId}
       />
 
@@ -1441,12 +1494,29 @@ export default function TherapyBoard() {
         onOpenChange={setStaffPanelOpen}
         therapists={therapists}
         teams={teams}
-        onAdd={(name, teamId, therapyType, schedule) => {
-          createTherapist.mutate({ name, teamId, therapyType, ...schedule });
+        onAdd={(data) => {
+          createTherapist.mutate({
+            name: data.name,
+            email: data.email,
+            teamId: data.teamId,
+            therapyType: data.therapyType,
+            employmentType: data.employmentType,
+            weekendRotation: data.weekendRotation,
+            ...data.schedule,
+          });
           toast.success("Staff member added");
         }}
-        onEdit={(id, name, teamId, therapyType, schedule) => {
-          updateTherapist.mutate({ id, name, teamId, therapyType, ...schedule });
+        onEdit={(id, data) => {
+          updateTherapist.mutate({
+            id,
+            name: data.name,
+            email: data.email,
+            teamId: data.teamId,
+            therapyType: data.therapyType,
+            employmentType: data.employmentType,
+            weekendRotation: data.weekendRotation,
+            ...data.schedule,
+          });
           toast.success("Staff member updated");
         }}
         onDelete={(id) => {
@@ -1454,6 +1524,30 @@ export default function TherapyBoard() {
           toast.success("Staff member removed");
         }}
         onViewStats={setStatsTherapistId}
+        onOpenProductivityHub={(tId?: number) => {
+          setProductivityHubTherapistId(tId ?? null);
+          setProductivityHubViewMode(tId ? "staff" : "admin");
+          setProductivityHubOpen(true);
+        }}
+        onSendTomorrowAssignments={(therapistIds) => sendTomorrowAssignments.mutate({ referenceDate: day, therapistIds })}
+        sendingTomorrowAssignments={sendTomorrowAssignments.isPending}
+        sendingTherapistIds={sendTomorrowAssignments.isPending ? sendTomorrowAssignments.variables?.therapistIds ?? [] : []}
+        onOpenWeekendStaffing={() => setWeekendStaffingOpen(true)}
+      />
+
+      <WeekendStaffingModal
+        open={weekendStaffingOpen}
+        onOpenChange={setWeekendStaffingOpen}
+        referenceDate={day}
+      />
+
+      <ProductivityHubModal
+        open={productivityHubOpen}
+        onOpenChange={setProductivityHubOpen}
+        therapists={therapists}
+        date={day}
+        initialTherapistId={productivityHubTherapistId}
+        initialViewMode={productivityHubViewMode}
       />
 
       <SickCallModal
@@ -1506,7 +1600,7 @@ export default function TherapyBoard() {
           <div className="relative">
             <AlertDialogHeader className="mb-4">
               <AlertDialogTitle className="flex items-center gap-2">
-                <CalendarClock className="h-5 w-5 text-indigo-500" />
+                <CalendarClock className="h-5 w-5 text-sky-600" />
                 Schedule Override
               </AlertDialogTitle>
               <AlertDialogDescription>
@@ -1524,7 +1618,7 @@ export default function TherapyBoard() {
                     overrideWarning.onConfirm();
                   }
                 }}
-                className="bg-indigo-600 hover:bg-indigo-700"
+                className="bg-sky-600 hover:bg-sky-700 font-bold"
               >
                 Schedule Anyway
               </AlertDialogAction>

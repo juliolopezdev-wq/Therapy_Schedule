@@ -14,7 +14,9 @@ import {
   Users,
   User,
   Home,
-  HeartHandshake
+  HeartHandshake,
+  Hospital,
+  Clock
 } from "lucide-react";
 import { FLAG_META, FLAG_TYPES, type FlagType } from "@/lib/board";
 import {
@@ -42,6 +44,8 @@ const FLAG_ICONS: Record<FlagType, React.ElementType> = {
   "Female Therapist Only": User,
   "Home Eval": Home,
   "Family Training": HeartHandshake,
+  LOA: Hospital,
+  "15/7": Clock,
 };
 
 function FlagBadgeImpl({ flag, iconOnly = false }: { flag: FlagType; iconOnly?: boolean }) {

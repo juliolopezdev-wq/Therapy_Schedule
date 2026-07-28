@@ -158,17 +158,17 @@ export function StaffStatsModal({
                   </div>
                 </div>
 
-                <div className="p-3.5 rounded-xl bg-indigo-50/70 border border-indigo-200/60 flex flex-col justify-between shadow-2xs hover:shadow-xs transition-all">
-                  <div className="flex items-center justify-between text-indigo-800 text-xs font-bold">
+                <div className="p-3.5 rounded-xl bg-sky-50/70 border border-sky-200/60 flex flex-col justify-between shadow-2xs hover:shadow-xs transition-all">
+                  <div className="flex items-center justify-between text-sky-800 text-xs font-bold">
                     <span>Weekly Target</span>
-                    <BarChart3 className="h-4 w-4 text-indigo-500" />
+                    <BarChart3 className="h-4 w-4 text-sky-600" />
                   </div>
                   <div className="mt-2.5">
                     <span className="text-2xl font-black text-slate-900 tabular-nums">{stats.week.totalMinutes}</span>
                     <span className="text-xs font-bold text-slate-500 ml-1">/ {stats.week.targetMinutes}m</span>
-                    <div className="w-full h-1.5 rounded-full bg-indigo-200/60 mt-1.5 overflow-hidden">
+                    <div className="w-full h-1.5 rounded-full bg-sky-200/60 mt-1.5 overflow-hidden">
                       <div
-                        className="h-full bg-indigo-600 rounded-full transition-all"
+                        className="h-full bg-sky-600 rounded-full transition-all"
                         style={{ width: `${stats.week.productivityPct}%` }}
                       />
                     </div>

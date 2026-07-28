@@ -74,6 +74,7 @@ export interface BoardHeaderProps {
   onOpenSickCall?: () => void;
   onOpenComplianceSentinel?: () => void;
   onOpenPredictiveStaffing?: () => void;
+  onOpenProductivityHub?: () => void;
   onViewStats?: (therapistId: number) => void;
 }
 
@@ -84,7 +85,7 @@ export function BoardHeader({
   setWeeklyMinutesPanelOpen, setAskSchedulerPanelOpen, setHistoryOpen, setDataAnalysisOpen, handleSnapshot,
   handlePrintAllPatients, mySchedTherapist, setMySchedTherapist, tiles, handleCopyDay,
   digestByPatientId, onBookSuggestion,
-  onOpenSickCall, onOpenComplianceSentinel, onOpenPredictiveStaffing, onViewStats,
+  onOpenSickCall, onOpenComplianceSentinel, onOpenPredictiveStaffing, onOpenProductivityHub, onViewStats,
 }: BoardHeaderProps) {
   const [isAttendanceOpen, setIsAttendanceOpen] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
@@ -227,6 +228,9 @@ export function BoardHeader({
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={onOpenPredictiveStaffing} className="cursor-pointer font-bold text-sky-600 hover:bg-sky-50">
                   <span>📈 Capacity Planner</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={onOpenProductivityHub} className="cursor-pointer font-bold text-emerald-600 hover:bg-emerald-50">
+                  <span>📊 81% Productivity Hub</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

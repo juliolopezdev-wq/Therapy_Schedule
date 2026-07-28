@@ -296,7 +296,7 @@ export function DataAnalysisModal({ open, onOpenChange, patients, onEditPatient 
                 </div>
                 <span className="text-micro font-extrabold text-sky-900 uppercase tracking-wider">Ask PAMi</span>
               </div>
-              <span className="text-micro font-medium text-slate-400">AI Assistant</span>
+              <span className="text-micro font-extrabold text-slate-500 uppercase tracking-wider">Clinical Analytics Assistant</span>
             </div>
             
             {chatHistory.length > 0 && (

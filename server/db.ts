@@ -18,6 +18,8 @@ import {
   therapistAbsences,
   scheduleOverrides,
   digestEmailLog,
+  weekendStaffingOverrides,
+  InsertWeekendStaffingOverride,
   InsertPatient,
   InsertTherapySession,
   InsertStatusFlag,
@@ -30,6 +32,7 @@ import {
   TherapySession,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+import { isMissedStatus } from "../shared/weekUtils";
 
 // libsql's insert result exposes the new row's id as `lastInsertRowid`, not `insertId`/`[0]`.
 function extractInsertId(result: unknown): number {
@@ -1374,6 +1377,7 @@ export async function getTherapistStats(therapistId: number, targetDate: Date) {
       workDays: therapist.workDays,
       workStartTime: therapist.workStartTime,
       workEndTime: therapist.workEndTime,
+      workHours: therapist.workHours,
       isPRN: therapist.isPRN,
     },
     today: {
@@ -1398,4 +1402,237 @@ export async function getTherapistStats(therapistId: number, targetDate: Date) {
       recentAbsences,
     },
   };
+}
+
+/* ========================================================================== */
+/* THERAPIST PRODUCTIVITY ENGINE (81% BENCHMARK)                              */
+/* ========================================================================== */
+
+export interface TherapistProductivityItem {
+  therapistId: number;
+  therapistName: string;
+  therapyType: string;
+  teamId: number | null;
+  teamName: string | null;
+  color: string;
+  isPRN: boolean;
+  shiftHours: number;
+  shiftMinutes: number;
+  targetBillableMinutes: number;
+  targetBillableHours: number;
+  capturedBillableMinutes: number;
+  capturedBillableHours: number;
+  sessionCount: number;
+  completedSessionCount: number;
+  productivityRate: number;
+  targetAchievementPercent: number;
+  billableVarianceMinutes: number;
+  status: "exceeding" | "near_target" | "under_target";
+  rank: number;
+}
+
+export interface ProductivitySummary {
+  date: string;
+  benchmarkPercent: number;
+  departmentAverageProductivityRate: number;
+  departmentTargetBillableHours: number;
+  departmentCapturedBillableHours: number;
+  departmentVarianceMinutes: number;
+  totalTherapistsCount: number;
+  exceedingCount: number;
+  nearTargetCount: number;
+  underTargetCount: number;
+  disciplineAverages: {
+    PT: { count: number; averageProductivityRate: number };
+    OT: { count: number; averageProductivityRate: number };
+    SLP: { count: number; averageProductivityRate: number };
+  };
+  leaderboard: TherapistProductivityItem[];
+}
+
+export async function getTherapistProductivityStats(targetDate: Date): Promise<ProductivitySummary> {
+  const db = await getDb();
+  if (!db) throw new Error("Database uninitialized");
+
+  const allTherapists = await db.select().from(therapists);
+  const allTeams = await db.select().from(teams);
+  const teamMap = new Map(allTeams.map((t) => [t.id, t.name]));
+
+  const { startOfDay, endOfDay } = dayBounds(targetDate);
+
+  const daySessions = await db
+    .select()
+    .from(therapySessions)
+    .where(and(gte(therapySessions.startTime, startOfDay), lte(therapySessions.startTime, endOfDay)));
+
+  const dayAbsences = await db
+    .select()
+    .from(therapistAbsences)
+    .where(and(gte(therapistAbsences.date, startOfDay), lte(therapistAbsences.date, endOfDay)));
+
+  const absentTherapistIds = new Set(dayAbsences.map((a) => a.therapistId));
+
+  const items: TherapistProductivityItem[] = [];
+
+  for (const t of allTherapists) {
+    // Skip if therapist is on call-off/absent today
+    if (absentTherapistIds.has(t.id)) continue;
+
+    // Determine shift duration in hours
+    let shiftMinutes = 480; // 8 hours default
+    if (t.workStartTime && t.workEndTime) {
+      const [sh, sm] = t.workStartTime.split(":").map(Number);
+      const [eh, em] = t.workEndTime.split(":").map(Number);
+      if (!isNaN(sh) && !isNaN(eh)) {
+        let mins = (eh * 60 + em) - (sh * 60 + sm);
+        if (mins > 0) {
+          // If shift is > 6 hours, deduct 30 min lunch break automatically
+          if (mins >= 360) mins -= 30;
+          shiftMinutes = mins;
+        }
+      }
+    }
+
+    const shiftHours = Math.round((shiftMinutes / 60) * 10) / 10;
+    const targetBillableMinutes = Math.round(shiftMinutes * 0.81);
+    const targetBillableHours = Math.round((targetBillableMinutes / 60) * 100) / 100;
+
+    const tSessions = daySessions.filter(
+      (s) => s.therapistId === t.id && s.therapyType !== "Block" && !isMissedStatus(s.status)
+    );
+
+    const completedSessions = tSessions.filter((s) => s.status === "completed");
+
+    const capturedBillableMinutes = tSessions.reduce(
+      (sum, s) => sum + (s.actualDurationMinutes || s.durationMinutes || 0),
+      0
+    );
+    const capturedBillableHours = Math.round((capturedBillableMinutes / 60) * 100) / 100;
+
+    const productivityRate = shiftMinutes > 0 ? Math.round((capturedBillableMinutes / shiftMinutes) * 1000) / 10 : 0;
+    const targetAchievementPercent =
+      targetBillableMinutes > 0 ? Math.round((capturedBillableMinutes / targetBillableMinutes) * 1000) / 10 : 0;
+
+    const billableVarianceMinutes = capturedBillableMinutes - targetBillableMinutes;
+
+    let status: "exceeding" | "near_target" | "under_target" = "under_target";
+    if (productivityRate >= 81.0) {
+      status = "exceeding";
+    } else if (productivityRate >= 75.0) {
+      status = "near_target";
+    }
+
+    items.push({
+      therapistId: t.id,
+      therapistName: t.name,
+      therapyType: t.therapyType,
+      teamId: t.teamId,
+      teamName: t.teamId ? teamMap.get(t.teamId) ?? null : null,
+      color: t.color,
+      isPRN: !!t.isPRN,
+      shiftHours,
+      shiftMinutes,
+      targetBillableMinutes,
+      targetBillableHours,
+      capturedBillableMinutes,
+      capturedBillableHours,
+      sessionCount: tSessions.length,
+      completedSessionCount: completedSessions.length,
+      productivityRate,
+      targetAchievementPercent,
+      billableVarianceMinutes,
+      status,
+      rank: 0,
+    });
+  }
+
+  // Sort leaderboard by productivityRate descending
+  items.sort((a, b) => b.productivityRate - a.productivityRate);
+  items.forEach((item, idx) => {
+    item.rank = idx + 1;
+  });
+
+  const totalCount = items.length;
+  const sumProd = items.reduce((acc, i) => acc + i.productivityRate, 0);
+  const departmentAverageProductivityRate = totalCount > 0 ? Math.round((sumProd / totalCount) * 10) / 10 : 0;
+
+  const departmentTargetBillableHours = Math.round(items.reduce((acc, i) => acc + i.targetBillableHours, 0) * 10) / 10;
+  const departmentCapturedBillableHours = Math.round(items.reduce((acc, i) => acc + i.capturedBillableHours, 0) * 10) / 10;
+  const departmentVarianceMinutes = items.reduce((acc, i) => acc + i.billableVarianceMinutes, 0);
+
+  const exceedingCount = items.filter((i) => i.status === "exceeding").length;
+  const nearTargetCount = items.filter((i) => i.status === "near_target").length;
+  const underTargetCount = items.filter((i) => i.status === "under_target").length;
+
+  const getDisciplineAvg = (disc: string) => {
+    const discItems = items.filter((i) => i.therapyType.toUpperCase() === disc.toUpperCase());
+    if (discItems.length === 0) return { count: 0, averageProductivityRate: 0 };
+    const avg = Math.round((discItems.reduce((a, b) => a + b.productivityRate, 0) / discItems.length) * 10) / 10;
+    return { count: discItems.length, averageProductivityRate: avg };
+  };
+
+  return {
+    date: targetDate.toISOString(),
+    benchmarkPercent: 81.0,
+    departmentAverageProductivityRate,
+    departmentTargetBillableHours,
+    departmentCapturedBillableHours,
+    departmentVarianceMinutes,
+    totalTherapistsCount: totalCount,
+    exceedingCount,
+    nearTargetCount,
+    underTargetCount,
+    disciplineAverages: {
+      PT: getDisciplineAvg("PT"),
+      OT: getDisciplineAvg("OT"),
+      SLP: getDisciplineAvg("SLP"),
+    },
+    leaderboard: items,
+  };
+}
+
+/* ---------------------------------------------------------------------------
+ * Weekend staffing overrides
+ * ------------------------------------------------------------------------ */
+
+export async function getWeekendOverridesForRange(startDate: Date, endDate: Date) {
+  const db = await getDb();
+  if (!db) return [];
+  const { startOfDay } = dayBounds(startDate);
+  const { endOfDay } = dayBounds(endDate);
+  return db
+    .select()
+    .from(weekendStaffingOverrides)
+    .where(and(gte(weekendStaffingOverrides.date, startOfDay), lte(weekendStaffingOverrides.date, endOfDay)));
+}
+
+/** Upserts a manual working/not-working call for one therapist on one date; pass `working: null` to clear back to the computed default. */
+export async function setWeekendOverride(therapistId: number, date: Date, working: boolean | null) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const { startOfDay, endOfDay } = dayBounds(date);
+  const existing = await db
+    .select()
+    .from(weekendStaffingOverrides)
+    .where(
+      and(
+        eq(weekendStaffingOverrides.therapistId, therapistId),
+        gte(weekendStaffingOverrides.date, startOfDay),
+        lte(weekendStaffingOverrides.date, endOfDay),
+      ),
+    );
+
+  if (working === null) {
+    if (existing.length > 0) {
+      await db.delete(weekendStaffingOverrides).where(eq(weekendStaffingOverrides.id, existing[0].id));
+    }
+    return { success: true };
+  }
+
+  if (existing.length > 0) {
+    await db.update(weekendStaffingOverrides).set({ working }).where(eq(weekendStaffingOverrides.id, existing[0].id));
+  } else {
+    await db.insert(weekendStaffingOverrides).values({ therapistId, date: startOfDay, working } as InsertWeekendStaffingOverride);
+  }
+  return { success: true };
 }

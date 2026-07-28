@@ -157,44 +157,69 @@ function parseTimeToMinutes(hhmm: string): number {
   return h * 60 + m;
 }
 
+export function getShiftForDay(
+  t: { workDays: string | null; workStartTime: string | null; workEndTime: string | null; workHours?: string | null },
+  day: Date,
+): { active: boolean; startMin: number; endMin: number } {
+  const dayIdx = day.getDay();
+  if (t.workHours) {
+    try {
+      const parsed = JSON.parse(t.workHours);
+      const daySchedule = parsed[String(dayIdx)];
+      if (daySchedule) {
+        if (!daySchedule.active) return { active: false, startMin: 0, endMin: 0 };
+        const startMin = daySchedule.start ? parseTimeToMinutes(daySchedule.start) : START_HOUR * 60;
+        const endMin = daySchedule.end ? parseTimeToMinutes(daySchedule.end) : END_HOUR * 60;
+        return { active: true, startMin, endMin };
+      }
+    } catch (e) {
+      // fallback
+    }
+  }
+
+  if (t.workDays) {
+    const days = t.workDays.split(",").map(Number);
+    if (!days.includes(dayIdx)) return { active: false, startMin: 0, endMin: 0 };
+  }
+
+  const startMin = t.workStartTime ? parseTimeToMinutes(t.workStartTime) : START_HOUR * 60;
+  const endMin = t.workEndTime ? parseTimeToMinutes(t.workEndTime) : END_HOUR * 60;
+  return { active: true, startMin, endMin };
+}
+
 /**
  * Whether a therapist is actually on shift for the given day/slot span, per their optional
- * workDays/workStartTime/workEndTime. Any of the three left unset means "no restriction" on
- * that dimension -- a therapist with nothing set is available every day, full board hours,
- * exactly as gap-fill behaved before this field existed.
+ * workDays/workStartTime/workEndTime or per-day workHours schedule.
  */
 function therapistWorksAt(
-  t: { workDays: string | null; workStartTime: string | null; workEndTime: string | null },
+  t: { workDays: string | null; workStartTime: string | null; workEndTime: string | null; workHours?: string | null },
   day: Date,
   slot: number,
   span: number,
 ): boolean {
-  if (t.workDays) {
-    const days = t.workDays.split(",").map(Number);
-    if (!days.includes(day.getDay())) return false;
-  }
+  const shift = getShiftForDay(t, day);
+  if (!shift.active) return false;
+
   const slotStartMin = START_HOUR * 60 + slot * SLOT_MINUTES;
   const slotEndMin = slotStartMin + span * SLOT_MINUTES;
-  if (t.workStartTime && slotStartMin < parseTimeToMinutes(t.workStartTime)) return false;
-  if (t.workEndTime && slotEndMin > parseTimeToMinutes(t.workEndTime)) return false;
+  if (slotStartMin < shift.startMin) return false;
+  if (slotEndMin > shift.endMin) return false;
   return true;
 }
 
 /**
  * How many bookable minutes a therapist actually has on a given calendar day, for productivity
  * math -- their shift window (or the full 7am-6pm board grid if unset) minus the board's fixed
- * lunch hour (12:00-1:00) when the shift spans it, or 0 entirely if workDays excludes that day.
+ * lunch hour (12:00-1:00) when the shift spans it, or 0 entirely if excluded for that day.
  */
 function availableShiftMinutesForDay(
-  t: { workDays: string | null; workStartTime: string | null; workEndTime: string | null },
+  t: { workDays: string | null; workStartTime: string | null; workEndTime: string | null; workHours?: string | null },
   day: Date,
 ): number {
-  if (t.workDays) {
-    const days = t.workDays.split(",").map(Number);
-    if (!days.includes(day.getDay())) return 0;
-  }
-  const startMin = t.workStartTime ? parseTimeToMinutes(t.workStartTime) : START_HOUR * 60;
-  const endMin = t.workEndTime ? parseTimeToMinutes(t.workEndTime) : END_HOUR * 60;
+  const shift = getShiftForDay(t, day);
+  if (!shift.active) return 0;
+
+  const { startMin, endMin } = shift;
   let available = Math.max(0, endMin - startMin);
   const lunchStart = 12 * 60;
   const lunchEnd = 13 * 60;
@@ -1174,10 +1199,243 @@ export async function getPredictiveForecast(targetDate: Date): Promise<Predictiv
 }
 
 /* ========================================================================== */
-/* SICK-CALL EMERGENCY RE-BALANCER AGENT                                      */
+/* SICK-CALL EMERGENCY RE-BALANCER AGENT & PRIORITY LADDER ENGINE              */
 /* ========================================================================== */
 
-export async function rebalanceTherapistAbsence(therapistId: number, targetDate: Date) {
+export interface PriorityTriageItem {
+  sessionId: number;
+  patientId: number;
+  patientName: string;
+  roomNumber: string;
+  therapyType: string;
+  durationMinutes: number;
+  originalTimeLabel: string;
+  tier: 1 | 2 | 3 | 4;
+  tierLabel: string;
+  priorityScore: number;
+  reason: string;
+  proposedTherapistId: number | null;
+  proposedTherapistName: string | null;
+  proposedIsPRN: boolean;
+  proposedTimeLabel: string;
+  proposedStartTime: Date;
+  proposedEndTime: Date;
+}
+
+export async function previewSickCallPriorityTriage(
+  therapistId: number,
+  targetDate: Date,
+  includePRN: boolean = true
+) {
+  const therapistsList = await getTherapists();
+  const therapist = therapistsList.find((t) => Number(t.id) === Number(therapistId));
+  if (!therapist) throw new Error("Therapist not found");
+
+  const start = startOfDayLocal(targetDate);
+  const end = new Date(start);
+  end.setHours(23, 59, 59, 999);
+
+  const daySessions = await getTherapySessionsForDateRange(start, end);
+  const therapistSessions = daySessions.filter(
+    (s) => Number(s.therapistId) === Number(therapistId) && (s.status === "scheduled" || !s.status)
+  );
+
+  if (therapistSessions.length === 0) {
+    return {
+      therapistName: therapist.name,
+      items: [],
+      tier1Count: 0,
+      tier2Count: 0,
+      tier3Count: 0,
+      tier4Count: 0,
+    };
+  }
+
+  const weeklySummary = await getWeeklyMinutesSummary(targetDate);
+  const items: PriorityTriageItem[] = [];
+
+  for (const session of therapistSessions) {
+    const patient = await getPatientById(session.patientId);
+    const patientName = patient?.name ?? `Patient ${session.patientId}`;
+    const roomNumber = patient?.roomNumber ?? "—";
+    const duration = session.durationMinutes ?? 30;
+
+    let tier: 1 | 2 | 3 | 4 = 3;
+    let tierLabel = "Tier 3: Standard Treatment";
+    let priorityScore = 400;
+    let reason = "Scheduled therapy treatment";
+
+    const isEval = session.therapyType === "Eval";
+    if (isEval || patient?.isDischarged) {
+      tier = 1;
+      tierLabel = "Tier 1: Discharge / Eval (Urgent)";
+      priorityScore = 1000;
+      reason = "Discharge evaluation or required CMS exit assessment today";
+    } else {
+      const patientSummary = weeklySummary.find((s) => s.patientId === session.patientId);
+      const weekMins = (patientSummary?.completedMinutes ?? 0) + (patientSummary?.pendingMinutes ?? 0);
+      const targetMins = patientSummary?.target ?? 150;
+      const deficit = Math.max(0, targetMins - weekMins);
+      if (deficit > 30 || (weekMins / Math.max(1, targetMins)) < 0.6) {
+        tier = 2;
+        tierLabel = "Tier 2: Compliance Risk (High)";
+        priorityScore = 700 + deficit;
+        reason = `${deficit} mins behind weekly CMS compliance target`;
+      } else if (session.therapyType === "PT" || session.therapyType === "OT" || session.therapyType === "SLP") {
+        tier = 3;
+        tierLabel = "Tier 3: Standard Discipline Session";
+        priorityScore = 400;
+        reason = `Core ${session.therapyType} discipline treatment`;
+      } else {
+        tier = 4;
+        tierLabel = "Tier 4: Routine Maintenance";
+        priorityScore = 100;
+        reason = "Routine maintenance treatment";
+      }
+    }
+
+    const origTimeStr = new Date(session.startTime).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+
+    items.push({
+      sessionId: session.id,
+      patientId: session.patientId,
+      patientName,
+      roomNumber,
+      therapyType: session.therapyType,
+      durationMinutes: duration,
+      originalTimeLabel: origTimeStr,
+      tier,
+      tierLabel,
+      priorityScore,
+      reason,
+      proposedTherapistId: null,
+      proposedTherapistName: null,
+      proposedIsPRN: false,
+      proposedTimeLabel: origTimeStr,
+      proposedStartTime: new Date(session.startTime),
+      proposedEndTime: new Date(new Date(session.startTime).getTime() + duration * 60000),
+    });
+  }
+
+  // Sort by priorityScore descending
+  items.sort((a, b) => b.priorityScore - a.priorityScore);
+
+  const availableStaff = therapistsList.filter((t) => {
+    if (Number(t.id) === Number(therapistId)) return false;
+    if (!includePRN && t.isPRN) return false;
+    return true;
+  });
+
+  const simulatedDaySessions = [...daySessions.filter((s) => Number(s.therapistId) !== Number(therapistId))];
+
+  for (const item of items) {
+    const session = therapistSessions.find((s) => s.id === item.sessionId)!;
+    const patient = await getPatientById(session.patientId);
+    const patientTeamId = patient?.teamId;
+
+    const matchesDiscipline = (st: typeof availableStaff[0]) => {
+      if (!st.therapyType) return true;
+      if (session.therapyType === "Eval" || session.therapyType === "Block") return true;
+      return st.therapyType.toUpperCase() === session.therapyType.toUpperCase();
+    };
+
+    const hasTherapistConflict = (candidateId: number, windowStart: Date, windowEnd: Date) => {
+      return simulatedDaySessions.some((other) => {
+        if (Number(other.therapistId) !== Number(candidateId) || isMissedStatus(other.status)) return false;
+        const oStart = new Date(other.startTime);
+        const oEnd = new Date(other.endTime ?? oStart.getTime() + (other.durationMinutes ?? 30) * 60000);
+        return windowStart < oEnd && oStart < windowEnd;
+      });
+    };
+
+    const findCandidateForWindow = (windowStart: Date, windowEnd: Date) => {
+      let found = availableStaff.find(
+        (st) => !st.isPRN && Number(st.teamId) === Number(patientTeamId) && matchesDiscipline(st) && !hasTherapistConflict(st.id, windowStart, windowEnd)
+      );
+      if (found) return found;
+
+      found = availableStaff.find(
+        (st) => !st.isPRN && matchesDiscipline(st) && !hasTherapistConflict(st.id, windowStart, windowEnd)
+      );
+      if (found) return found;
+
+      if (includePRN) {
+        found = availableStaff.find(
+          (st) => st.isPRN && matchesDiscipline(st) && !hasTherapistConflict(st.id, windowStart, windowEnd)
+        );
+        if (found) return found;
+      }
+
+      found = availableStaff.find(
+        (st) => !hasTherapistConflict(st.id, windowStart, windowEnd)
+      );
+      return found ?? null;
+    };
+
+    const exactStart = new Date(session.startTime);
+    const exactEnd = new Date(exactStart.getTime() + item.durationMinutes * 60000);
+
+    let chosenCandidate = findCandidateForWindow(exactStart, exactEnd);
+    let chosenStart = exactStart;
+    let chosenEnd = exactEnd;
+
+    if (!chosenCandidate) {
+      const neededSlots = Math.ceil(item.durationMinutes / SLOT_MINUTES);
+      for (let slotIdx = 0; slotIdx <= TOTAL_SLOTS - neededSlots; slotIdx++) {
+        const altStart = slotIndexToDate(targetDate, slotIdx);
+        const altEnd = new Date(altStart.getTime() + item.durationMinutes * 60000);
+        const altCandidate = findCandidateForWindow(altStart, altEnd);
+        if (altCandidate) {
+          chosenCandidate = altCandidate;
+          chosenStart = altStart;
+          chosenEnd = altEnd;
+          break;
+        }
+      }
+    }
+
+    if (chosenCandidate) {
+      item.proposedTherapistId = chosenCandidate.id;
+      item.proposedTherapistName = chosenCandidate.name;
+      item.proposedIsPRN = !!chosenCandidate.isPRN;
+      item.proposedStartTime = chosenStart;
+      item.proposedEndTime = chosenEnd;
+      item.proposedTimeLabel = chosenStart.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+
+      simulatedDaySessions.push({
+        id: session.id,
+        therapistId: chosenCandidate.id,
+        patientId: session.patientId,
+        startTime: chosenStart,
+        endTime: chosenEnd,
+        durationMinutes: item.durationMinutes,
+        status: "scheduled",
+        therapyType: session.therapyType,
+      } as any);
+    }
+  }
+
+  const tier1Count = items.filter((i) => i.tier === 1).length;
+  const tier2Count = items.filter((i) => i.tier === 2).length;
+  const tier3Count = items.filter((i) => i.tier === 3).length;
+  const tier4Count = items.filter((i) => i.tier === 4).length;
+
+  return {
+    therapistName: therapist.name,
+    items,
+    tier1Count,
+    tier2Count,
+    tier3Count,
+    tier4Count,
+  };
+}
+
+export async function rebalanceTherapistAbsence(
+  therapistId: number,
+  targetDate: Date,
+  customPriorityOrder?: number[],
+  includePRN: boolean = true
+) {
   const therapistsList = await getTherapists();
   const therapist = therapistsList.find((t) => Number(t.id) === Number(therapistId));
   if (!therapist) throw new Error("Therapist not found");
@@ -1190,7 +1448,7 @@ export async function rebalanceTherapistAbsence(therapistId: number, targetDate:
   end.setHours(23, 59, 59, 999);
 
   const daySessions = await getTherapySessionsForDateRange(start, end);
-  const therapistSessions = daySessions.filter(
+  let therapistSessions = daySessions.filter(
     (s) => Number(s.therapistId) === Number(therapistId) && (s.status === "scheduled" || !s.status)
   );
 
@@ -1198,9 +1456,30 @@ export async function rebalanceTherapistAbsence(therapistId: number, targetDate:
     return { reassignedCount: 0, unassignedCount: 0, reassignments: [] };
   }
 
-  const availableStaff = therapistsList.filter((t) => Number(t.id) !== Number(therapistId));
+  // If custom priority order is supplied by user, reorder therapistSessions accordingly
+  if (customPriorityOrder && customPriorityOrder.length > 0) {
+    therapistSessions.sort((a, b) => {
+      const idxA = customPriorityOrder.indexOf(a.id);
+      const idxB = customPriorityOrder.indexOf(b.id);
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      if (idxA !== -1) return -1;
+      if (idxB !== -1) return 1;
+      return 0;
+    });
+  } else {
+    // Default to preview priority triage ordering
+    const preview = await previewSickCallPriorityTriage(therapistId, targetDate, includePRN);
+    const orderMap = new Map(preview.items.map((item, idx) => [item.sessionId, idx]));
+    therapistSessions.sort((a, b) => (orderMap.get(a.id) ?? 99) - (orderMap.get(b.id) ?? 99));
+  }
 
-  const reassignments: { sessionId: number; patientName: string; oldTherapist: string; newTherapist: string | null; time: string }[] = [];
+  const availableStaff = therapistsList.filter((t) => {
+    if (Number(t.id) === Number(therapistId)) return false;
+    if (!includePRN && t.isPRN) return false;
+    return true;
+  });
+
+  const reassignments: { sessionId: number; patientName: string; oldTherapist: string; newTherapist: string | null; time: string; isPRN?: boolean }[] = [];
   let reassignedCount = 0;
   let unassignedCount = 0;
 
@@ -1236,19 +1515,21 @@ export async function rebalanceTherapistAbsence(therapistId: number, targetDate:
 
     const findCandidateForWindow = (windowStart: Date, windowEnd: Date) => {
       let found = availableStaff.find(
-        (st) => Number(st.teamId) === Number(patientTeamId) && matchesDiscipline(st) && !hasTherapistConflict(st.id, windowStart, windowEnd)
+        (st) => !st.isPRN && Number(st.teamId) === Number(patientTeamId) && matchesDiscipline(st) && !hasTherapistConflict(st.id, windowStart, windowEnd)
       );
       if (found) return found;
 
       found = availableStaff.find(
-        (st) => matchesDiscipline(st) && !hasTherapistConflict(st.id, windowStart, windowEnd)
+        (st) => !st.isPRN && matchesDiscipline(st) && !hasTherapistConflict(st.id, windowStart, windowEnd)
       );
       if (found) return found;
 
-      found = availableStaff.find(
-        (st) => Number(st.teamId) === Number(patientTeamId) && !hasTherapistConflict(st.id, windowStart, windowEnd)
-      );
-      if (found) return found;
+      if (includePRN) {
+        found = availableStaff.find(
+          (st) => st.isPRN && matchesDiscipline(st) && !hasTherapistConflict(st.id, windowStart, windowEnd)
+        );
+        if (found) return found;
+      }
 
       found = availableStaff.find(
         (st) => !hasTherapistConflict(st.id, windowStart, windowEnd)
@@ -1308,6 +1589,7 @@ export async function rebalanceTherapistAbsence(therapistId: number, targetDate:
         oldTherapist: therapist.name,
         newTherapist: chosenCandidate.name,
         time: timeLabel,
+        isPRN: !!chosenCandidate.isPRN,
       });
       reassignedCount++;
     } else {
@@ -1325,13 +1607,15 @@ export async function rebalanceTherapistAbsence(therapistId: number, targetDate:
     }
   }
 
-  return { reassignedCount, unassignedCount, reassignments };
+  return {
+    reassignedCount,
+    unassignedCount,
+    reassignments,
+  };
 }
 
 /* ========================================================================== */
 /* REAL-TIME COMPLIANCE & RISK SENTINEL AGENT                                 */
-/* ========================================================================== */
-
 export async function getComplianceSentinelReport(referenceDate: Date = new Date()) {
   const summary = await getWeeklyMinutesSummary(referenceDate);
   const allPatients = await getPatients();

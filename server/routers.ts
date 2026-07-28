@@ -42,15 +42,28 @@ import {
   getTherapistAbsences,
   getLastSessionNoteForPatient,
   getTherapistStats,
+  getTherapistProductivityStats,
+  setWeekendOverride,
   RoomConflictError,
 } from "./db";
-import { getWeeklyMinutesSummary, getGapFillSuggestions, getOrCreateTodaysDigest, getPredictiveForecast, rebalanceTherapistAbsence, getComplianceSentinelReport } from "./scheduling";
+import { sendTomorrowAssignments } from "./assignmentEmail";
+import { getWeekendCoverage, autoAssignWeekendStaff } from "./weekendStaffing";
+import { getWeeklyMinutesSummary, getGapFillSuggestions, getOrCreateTodaysDigest, getPredictiveForecast, rebalanceTherapistAbsence, getComplianceSentinelReport, previewSickCallPriorityTriage } from "./scheduling";
 import { askScheduler, analyzeData } from "./ollama";
 
 const therapyTypeEnum = z.enum(["PT", "OT", "SLP", "Eval", "Block"]);
-const flagTypeEnum = z.enum(["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program", "Shower", "Medical Hold", "Dialysis", "Block Time", "Group Appropriate", "Male Therapist Only", "Female Therapist Only", "Home Eval", "Family Training"]);
+const flagTypeEnum = z.enum(["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program", "Shower", "Medical Hold", "Dialysis", "Block Time", "Group Appropriate", "Male Therapist Only", "Female Therapist Only", "Home Eval", "Family Training", "LOA", "15/7"]);
 const sessionStatusEnum = z.enum(["scheduled", "completed", "missed_refusal", "missed_clinical_hold", "missed_staffing", "missed_other"]);
 const deliveryModeEnum = z.enum(["individual", "concurrent", "group"]);
+const employmentTypeEnum = z.enum(["full_time", "part_time", "prn"]);
+const weekendRotationSchema = z
+  .object({
+    days: z.array(z.number().min(0).max(6)),
+    intervalWeeks: z.number().min(1).max(12),
+    anchorDate: z.string(),
+  })
+  .nullable()
+  .optional();
 
 export const appRouter = router({
   system: systemRouter,
@@ -232,6 +245,7 @@ export const appRouter = router({
       .input(
         z.object({
           name: z.string().min(1),
+          email: z.string().email().nullable().optional(),
           teamId: z.number().nullable().optional(),
           userId: z.number().nullable().optional(),
           therapyType: z.enum(["PT", "OT", "SLP"]).optional(),
@@ -240,13 +254,18 @@ export const appRouter = router({
           workDays: z.array(z.number().min(0).max(6)).nullable().optional(),
           workStartTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
           workEndTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+          workHours: z.string().nullable().optional(),
+          employmentType: employmentTypeEnum.optional(),
+          weekendRotation: weekendRotationSchema,
         }),
       )
       .mutation(async ({ input }) => {
         const therapists = await getTherapists();
         const hue = Math.floor((therapists.length * 137.5) % 360).toString();
+        const employmentType = input.employmentType ?? "full_time";
         return createTherapist({
           name: input.name,
+          email: input.email ?? null,
           teamId: input.teamId ?? null,
           userId: input.userId ?? null,
           color: hue,
@@ -254,6 +273,10 @@ export const appRouter = router({
           workDays: input.workDays ? input.workDays.join(",") : null,
           workStartTime: input.workStartTime ?? null,
           workEndTime: input.workEndTime ?? null,
+          workHours: input.workHours ?? null,
+          employmentType,
+          isPRN: employmentType === "prn",
+          weekendRotation: input.weekendRotation ? JSON.stringify(input.weekendRotation) : null,
         });
       }),
     update: publicProcedure
@@ -261,18 +284,24 @@ export const appRouter = router({
         z.object({
           id: z.number(),
           name: z.string().optional(),
+          email: z.string().email().nullable().optional(),
           teamId: z.number().nullable().optional(),
           therapyType: z.enum(["PT", "OT", "SLP"]).optional(),
           workDays: z.array(z.number().min(0).max(6)).nullable().optional(),
           workStartTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
           workEndTime: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+          workHours: z.string().nullable().optional(),
+          employmentType: employmentTypeEnum.optional(),
+          weekendRotation: weekendRotationSchema,
         }),
       )
       .mutation(async ({ input }) => {
-        const { id, workDays, ...rest } = input;
+        const { id, workDays, employmentType, weekendRotation, ...rest } = input;
         return updateTherapist(id, {
           ...rest,
           ...(workDays !== undefined ? { workDays: workDays ? workDays.join(",") : null } : {}),
+          ...(employmentType !== undefined ? { employmentType, isPRN: employmentType === "prn" } : {}),
+          ...(weekendRotation !== undefined ? { weekendRotation: weekendRotation ? JSON.stringify(weekendRotation) : null } : {}),
         });
       }),
     delete: publicProcedure
@@ -281,6 +310,27 @@ export const appRouter = router({
     getStats: publicProcedure
       .input(z.object({ therapistId: z.number(), date: z.date().optional() }))
       .query(async ({ input }) => getTherapistStats(input.therapistId, input.date ?? new Date())),
+    getProductivity: publicProcedure
+      .input(z.object({ date: z.date().optional() }).optional())
+      .query(async ({ input }) => getTherapistProductivityStats(input?.date ?? new Date())),
+    sendTomorrowAssignments: publicProcedure
+      .input(z.object({ referenceDate: z.date().optional(), therapistIds: z.array(z.number()).optional() }))
+      .mutation(async ({ input }) => sendTomorrowAssignments(input.referenceDate ?? new Date(), input.therapistIds)),
+  }),
+
+  /* ------------------------------------------------------------------ */
+  /* Weekend staffing (rotation-based coverage + manual/AI assignment)  */
+  /* ------------------------------------------------------------------ */
+  weekendStaffing: router({
+    getCoverage: publicProcedure
+      .input(z.object({ referenceDate: z.date().optional() }))
+      .query(async ({ input }) => getWeekendCoverage(input.referenceDate ?? new Date())),
+    setOverride: publicProcedure
+      .input(z.object({ therapistId: z.number(), date: z.date(), working: z.boolean().nullable() }))
+      .mutation(async ({ input }) => setWeekendOverride(input.therapistId, input.date, input.working)),
+    autoAssign: publicProcedure
+      .input(z.object({ referenceDate: z.date().optional() }))
+      .mutation(async ({ input }) => autoAssignWeekendStaff(input.referenceDate ?? new Date())),
   }),
 
   /* ------------------------------------------------------------------ */
@@ -466,9 +516,19 @@ export const appRouter = router({
   /* AI Clinical Agents Suite                                           */
   /* ------------------------------------------------------------------ */
   aiAgents: router({
+    previewSickCallTriage: publicProcedure
+      .input(z.object({ therapistId: z.number(), date: z.date(), includePRN: z.boolean().optional() }))
+      .query(async ({ input }) => previewSickCallPriorityTriage(input.therapistId, input.date, input.includePRN ?? true)),
     rebalanceSickCall: publicProcedure
-      .input(z.object({ therapistId: z.number(), date: z.date() }))
-      .mutation(async ({ input }) => rebalanceTherapistAbsence(input.therapistId, input.date)),
+      .input(
+        z.object({
+          therapistId: z.number(),
+          date: z.date(),
+          customPriorityOrder: z.array(z.number()).optional(),
+          includePRN: z.boolean().optional(),
+        })
+      )
+      .mutation(async ({ input }) => rebalanceTherapistAbsence(input.therapistId, input.date, input.customPriorityOrder, input.includePRN ?? true)),
     getComplianceReport: publicProcedure
       .input(z.object({ referenceDate: z.date().optional() }).optional())
       .query(async ({ input }) => getComplianceSentinelReport(input?.referenceDate ?? new Date())),

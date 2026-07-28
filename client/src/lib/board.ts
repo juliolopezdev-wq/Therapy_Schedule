@@ -4,10 +4,10 @@ import { type SessionStatus, isMissedStatus } from "../../../shared/weekUtils";
 export { type SessionStatus, isMissedStatus };
 
 export type TherapyType = "PT" | "OT" | "SLP" | "Eval" | "Block";
-export type FlagType = "DC" | "Name Alert" | "Weekend" | "In-Service" | "Appointment" | "Stroke Program" | "Shower" | "Medical Hold" | "Dialysis" | "Block Time" | "Group Appropriate" | "Male Therapist Only" | "Female Therapist Only" | "Home Eval" | "Family Training";
+export type FlagType = "DC" | "Name Alert" | "Weekend" | "In-Service" | "Appointment" | "Stroke Program" | "Shower" | "Medical Hold" | "Dialysis" | "Block Time" | "Group Appropriate" | "Male Therapist Only" | "Female Therapist Only" | "Home Eval" | "Family Training" | "LOA" | "15/7";
 
 export const THERAPY_TYPES: TherapyType[] = ["PT", "OT", "SLP", "Eval", "Block"];
-export const FLAG_TYPES: FlagType[] = ["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program", "Shower", "Medical Hold", "Dialysis", "Block Time", "Group Appropriate", "Male Therapist Only", "Female Therapist Only", "Home Eval", "Family Training"];
+export const FLAG_TYPES: FlagType[] = ["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program", "Shower", "Medical Hold", "Dialysis", "Block Time", "Group Appropriate", "Male Therapist Only", "Female Therapist Only", "Home Eval", "Family Training", "LOA", "15/7"];
 
 export const SESSION_STATUSES: SessionStatus[] = ["scheduled", "completed", "missed_refusal", "missed_clinical_hold", "missed_staffing", "missed_other"];
 export const SESSION_STATUS_META: Record<SessionStatus, { label: string; bg: string; fg: string }> = {
@@ -64,6 +64,8 @@ export const FLAG_META: Record<
   "Female Therapist Only": { label: "Female Ther.", bg: "#fce7f3", fg: "#9d174d", description: "Requires female therapist" },
   "Home Eval": { label: "Home Eval", bg: "#f59e0b", fg: "#ffffff", description: "Home Evaluation Required" },
   "Family Training": { label: "Fam Training", bg: "#fef3c7", fg: "#92400e", description: "Family training needed" },
+  LOA: { label: "LOA", bg: "#fef3c7", fg: "#b45309", description: "Leave of Absence / Out to Hospital" },
+  "15/7": { label: "15/7", bg: "#e0f2fe", fg: "#0369a1", description: "CMS 15 Hours / 7 Days Rule" },
 };
 
 import {

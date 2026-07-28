@@ -30,6 +30,7 @@ export const therapists = sqliteTable("therapists", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   userId: integer("userId"),
   name: text("name").notNull(),
+  email: text("email"), // Used to send next-day assignment notifications
   color: text("color").notNull().default("#3b82f6"), // Default to a blue
   therapyType: text("therapyType", { enum: ["PT", "OT", "SLP"] }).notNull().default("PT"),
   teamId: integer("teamId"),
@@ -40,16 +41,39 @@ export const therapists = sqliteTable("therapists", {
   workDays: text("workDays"),
   workStartTime: text("workStartTime"), // "HH:MM", 24-hour
   workEndTime: text("workEndTime"), // "HH:MM", 24-hour
+  workHours: text("workHours"), // JSON string representing per-day availability schedules {"0":{"active":bool,"start":"HH:MM","end":"HH:MM"},...}
   // PRN/per-diem staff -- their availability isn't guaranteed the way regular staff's is, so
   // PAMi's risk-tier logic (server/riskAssessment.ts) requires human confirmation before writing
-  // to their schedule, even for an action that would otherwise auto-execute.
+  // to their schedule, even for an action that would otherwise auto-execute. Kept in sync with
+  // employmentType ("prn" <-> true) by the therapists.create/update routers so older isPRN-based
+  // risk logic keeps working unchanged.
   isPRN: integer("isPRN", { mode: "boolean" }).default(false).notNull(),
+  employmentType: text("employmentType", { enum: ["full_time", "part_time", "prn"] }).notNull().default("full_time"),
+  // Only meaningful for part_time/prn staff whose weekend coverage repeats on a cycle instead of
+  // every week (e.g. "every other Sat+Sun", "every 3rd Friday"). JSON: { days: number[] (0=Sun..
+  // 6=Sat), intervalWeeks: number, anchorDate: "YYYY-MM-DD" (any date that falls in an "on" week) }.
+  // null means no rotation -- weekend eligibility falls back to workDays/workHours like any other day.
+  weekendRotation: text("weekendRotation"),
   createdAt: integer("createdAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
   updatedAt: integer("updatedAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
 });
 
 export type Therapist = typeof therapists.$inferSelect;
 export type InsertTherapist = typeof therapists.$inferInsert;
+
+// One-off manual assign/unassign for a specific weekend date, overriding whatever the
+// rotation pattern (or plain workDays for full-time staff) would otherwise compute. Lets an
+// admin hand-pick "certain staff" for a given weekend without changing their standing rotation.
+export const weekendStaffingOverrides = sqliteTable("weekendStaffingOverrides", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  therapistId: integer("therapistId").notNull(),
+  date: integer("date", { mode: "timestamp" }).notNull(),
+  working: integer("working", { mode: "boolean" }).notNull(),
+  createdAt: integer("createdAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type WeekendStaffingOverride = typeof weekendStaffingOverrides.$inferSelect;
+export type InsertWeekendStaffingOverride = typeof weekendStaffingOverrides.$inferInsert;
 
 export const patients = sqliteTable("patients", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -77,7 +101,7 @@ export type InsertPatient = typeof patients.$inferInsert;
 export const statusFlags = sqliteTable("statusFlags", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   patientId: integer("patientId").notNull(),
-  flagType: text("flagType", { enum: ["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program", "Shower", "Medical Hold", "Dialysis", "Block Time", "Group Appropriate", "Male Therapist Only", "Female Therapist Only", "Home Eval", "Family Training"] }).notNull(),
+  flagType: text("flagType", { enum: ["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program", "Shower", "Medical Hold", "Dialysis", "Block Time", "Group Appropriate", "Male Therapist Only", "Female Therapist Only", "Home Eval", "Family Training", "LOA", "15/7"] }).notNull(),
   // The day this row takes effect from. A flag carries forward to every later day until a newer
   // row for the same patient+flagType is written (see setStatusFlag) -- it is not a one-day-only marker.
   date: integer("date", { mode: 'timestamp' }).notNull(),
