@@ -15,6 +15,11 @@ function getTransporter() {
   return _transporter;
 }
 
+/** Fast, synchronous, no-I/O check -- safe to await/check inline before deciding whether to queue a send. */
+export function isEmailConfigured(): boolean {
+  return !!(ENV.smtpHost && ENV.smtpUser && ENV.smtpPass);
+}
+
 /**
  * Sends an email via generic SMTP (SMTP_HOST/PORT/USER/PASS/FROM env vars -- works with a Gmail
  * app password, SES SMTP credentials, SendGrid SMTP, etc.). Returns false (and just logs a

@@ -377,22 +377,24 @@ export default function TherapyBoard() {
   });
   const sendTomorrowAssignments = trpc.therapists.sendTomorrowAssignments.useMutation({
     onSuccess: (result) => {
-      const { sent, skippedNoEmail, noSessions, failed } = result;
-      if (sent.length === 0 && skippedNoEmail.length === 0 && noSessions.length === 0 && failed.length === 0) {
+      const { queued, skippedNoEmail, noSessions, failed } = result;
+      if (queued.length === 0 && skippedNoEmail.length === 0 && noSessions.length === 0 && failed.length === 0) {
         toast.info("No sessions scheduled for tomorrow yet.");
         return;
       }
       const parts: string[] = [];
-      if (sent.length > 0) parts.push(`Sent ${sent.length} assignment email${sent.length === 1 ? "" : "s"}.`);
+      // "Queued," not "Sent" -- the actual send happens in the background after this response,
+      // so this only confirms the email was handed off, not that it landed in an inbox yet.
+      if (queued.length > 0) parts.push(`Queued ${queued.length} assignment email${queued.length === 1 ? "" : "s"} to send.`);
       if (noSessions.length > 0) {
         const names = noSessions.map((n) => n.therapistName).join(", ");
         parts.push(`${names} ${noSessions.length === 1 ? "has" : "have"} no sessions scheduled tomorrow.`);
       }
       if (skippedNoEmail.length > 0) parts.push(`${skippedNoEmail.length} skipped (no email on file).`);
-      if (failed.length > 0) parts.push(`${failed.length} failed to send.`);
+      if (failed.length > 0) parts.push(`${failed.length} couldn't be queued -- email isn't configured on the server.`);
       if (failed.length > 0) {
         toast.error(parts.join(" "));
-      } else if (sent.length === 0) {
+      } else if (queued.length === 0) {
         toast.info(parts.join(" "));
       } else {
         toast.success(parts.join(" "));

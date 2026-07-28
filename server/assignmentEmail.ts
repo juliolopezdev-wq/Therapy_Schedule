@@ -1,5 +1,5 @@
 import { getTherapists, getPatients, getTherapySessionsForDateRange } from "./db";
-import { sendEmail } from "./email";
+import { sendEmail, isEmailConfigured } from "./email";
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -67,9 +67,11 @@ function buildEmailContent(
 }
 
 export interface SendTomorrowAssignmentsResult {
-  sent: { therapistId: number; therapistName: string; sessionCount: number }[];
+  /** Handed off to the mail server -- NOT a delivery confirmation. See the note below on why. */
+  queued: { therapistId: number; therapistName: string; sessionCount: number }[];
   skippedNoEmail: { therapistId: number; therapistName: string }[];
   noSessions: { therapistId: number; therapistName: string }[];
+  /** Only ever populated by the fast, no-I/O "SMTP isn't configured at all" check -- never by a slow/network send failure (see below). */
   failed: { therapistId: number; therapistName: string }[];
 }
 
@@ -83,6 +85,14 @@ export interface SendTomorrowAssignmentsResult {
  * therapistIds (an explicit pick-this-person action from the Staff panel), every requested
  * therapist gets a result row, including a "noSessions" one if the board doesn't have anything
  * booked for them yet -- so a single/few-person send always gives clear feedback.
+ *
+ * The actual SMTP round-trip (`sendEmail`) is deliberately NOT awaited here. On some hosts
+ * (Render's outbound path to Gmail in particular) that round-trip can take long enough to blow
+ * past the platform's request timeout -- the client then sees the request fail even though the
+ * server keeps running and the email goes out moments later. Awaiting it turns a slow network hop
+ * into a false "failed to send" in the UI. Firing it and responding immediately means the client
+ * always gets an accurate, fast answer to "did I hand this off"; any genuine delivery failure
+ * (bad address, auth error) is still logged server-side by sendEmail() itself.
  */
 export async function sendTomorrowAssignments(
   referenceDate: Date = new Date(),
@@ -120,7 +130,8 @@ export async function sendTomorrowAssignments(
     byTherapist.get(s.therapistId)!.push(entry);
   }
 
-  const result: SendTomorrowAssignmentsResult = { sent: [], skippedNoEmail: [], noSessions: [], failed: [] };
+  const result: SendTomorrowAssignmentsResult = { queued: [], skippedNoEmail: [], noSessions: [], failed: [] };
+  const emailReady = isEmailConfigured(); // fast, no I/O -- safe to check inline
 
   const targetIds = therapistIds && therapistIds.length > 0 ? therapistIds : Array.from(byTherapist.keys());
 
@@ -137,13 +148,13 @@ export async function sendTomorrowAssignments(
       result.skippedNoEmail.push({ therapistId, therapistName });
       continue;
     }
-    const { subject, html, text } = buildEmailContent(therapistName, dateLabel, entries);
-    const ok = await sendEmail({ to: [therapist.email], subject, html, text });
-    if (ok) {
-      result.sent.push({ therapistId, therapistName, sessionCount: entries.length });
-    } else {
+    if (!emailReady) {
       result.failed.push({ therapistId, therapistName });
+      continue;
     }
+    const { subject, html, text } = buildEmailContent(therapistName, dateLabel, entries);
+    void sendEmail({ to: [therapist.email], subject, html, text });
+    result.queued.push({ therapistId, therapistName, sessionCount: entries.length });
   }
 
   return result;
