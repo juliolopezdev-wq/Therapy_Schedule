@@ -126,6 +126,7 @@ export function StaffAvailabilityModal({
   const [selectedDay, setSelectedDay] = useState<number>(initialDayIndex);
   const [schedule, setSchedule] = useState<WeeklyAvailability>(() => buildDefaultSchedule(therapist));
   const [email, setEmail] = useState(therapist?.email ?? "");
+  const [phone, setPhone] = useState(therapist?.phone ?? "");
 
   const utils = trpc.useUtils();
 
@@ -134,6 +135,7 @@ export function StaffAvailabilityModal({
       setSchedule(buildDefaultSchedule(therapist));
       setSelectedDay(initialDayIndex);
       setEmail(therapist.email ?? "");
+      setPhone(therapist.phone ?? "");
     }
   }, [therapist, open, initialDayIndex]);
 
@@ -248,6 +250,7 @@ export function StaffAvailabilityModal({
     updateTherapist.mutate({
       id: therapist.id,
       email: email.trim() || null,
+      phone: phone.trim() || null,
       workDays: activeDayIndices,
       workStartTime: activeDayIndices.length > 0 ? minStart : null,
       workEndTime: activeDayIndices.length > 0 ? maxEnd : null,
@@ -279,16 +282,28 @@ export function StaffAvailabilityModal({
         </DialogHeader>
 
         <div className="space-y-5">
-          {/* Email */}
-          <div className="space-y-1.5">
-            <Label className="text-xs font-bold text-slate-600">Email</Label>
-            <Input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="name@example.com"
-              className="h-10 rounded-xl text-sm bg-slate-50/80 border-slate-200"
-            />
+          {/* Contact info */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-bold text-slate-600">Email</Label>
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="name@example.com"
+                className="h-10 rounded-xl text-sm bg-slate-50/80 border-slate-200"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-bold text-slate-600">Phone</Label>
+              <Input
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="(555) 555-5555"
+                className="h-10 rounded-xl text-sm bg-slate-50/80 border-slate-200"
+              />
+            </div>
           </div>
 
           {/* Day Selector Header Bar */}

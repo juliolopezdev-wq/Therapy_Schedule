@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Printer, ClipboardList, MoveRight } from "lucide-react";
+import { Printer, ClipboardList, MoveRight, CalendarDays, Clock3, Loader2 } from "lucide-react";
 import { THERAPY_META, TIME_SLOTS, formatLongDate, isCanceledStatus, type SessionStatus, type TherapyType } from "@/lib/board";
 import type { SessionTileData } from "./SessionTile";
 import { trpc } from "@/lib/trpc";
@@ -259,70 +259,92 @@ export function PatientDayQuickView({ patient, day, sessions, therapists }: Pati
       </Tooltip>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-sm" onClick={(e) => e.stopPropagation()}>
-          <DialogHeader>
-            <DialogTitle className="flex items-center justify-between gap-2 pr-6">
-              <span className="truncate">
-                {patient.name} · Rm {patient.roomNumber}
+        <DialogContent
+          className="flex max-h-[90dvh] flex-col gap-0 overflow-y-auto overscroll-contain rounded-2xl border-slate-200 bg-slate-50 p-0 shadow-2xl sm:max-w-xl"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <DialogHeader className="shrink-0 bg-gradient-to-r from-blue-800 to-sky-700 px-5 py-6 text-left sm:px-6">
+            <div className="mb-3 flex items-center gap-2 pr-12 text-xs font-semibold uppercase tracking-[0.14em] text-blue-100">
+              <ClipboardList className="h-4 w-4 shrink-0" /> Daily therapy schedule
+            </div>
+            <DialogTitle className="break-words text-2xl font-bold leading-tight tracking-tight text-white [overflow-wrap:anywhere]">
+              {patient.name}
+            </DialogTitle>
+            <DialogDescription className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-blue-100">
+              <span className="rounded-lg bg-white/15 px-2.5 py-1 font-semibold text-white ring-1 ring-inset ring-white/20">
+                Room {patient.roomNumber}
               </span>
-              <div className="flex items-center gap-2">
-                {canManagePatient && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 shrink-0 gap-1.5 text-xs text-amber-700 hover:text-amber-800 hover:bg-amber-50 border-amber-200"
-                    onClick={() => {
-                      if (confirm("Move all of this patient's sessions from today to tomorrow?")) {
-                        moveSessions.mutate({ patientId: patient.id, date: day });
-                      }
-                    }}
-                    disabled={moveSessions.isPending || rows.length === 0}
-                  >
-                    <MoveRight className="h-3.5 w-3.5" /> Transfer
-                  </Button>
-                )}
+              <span className="flex items-center gap-1.5">
+                <CalendarDays className="h-4 w-4 shrink-0" /> {dateLabel}
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4 sm:px-6">
+            <h3 className="text-sm font-semibold text-slate-800">Schedule actions</h3>
+            <div className="flex flex-wrap items-center gap-2">
+              {canManagePatient && (
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-7 shrink-0 gap-1.5 text-xs"
-                  onClick={() => printPatientDay(patient.name, patient.roomNumber, dateLabel, rows)}
+                  className="h-9 gap-1.5 rounded-xl border-amber-200 bg-white text-amber-800 hover:bg-amber-50 hover:text-amber-900"
+                  onClick={() => {
+                    if (confirm("Move all of this patient's sessions from today to tomorrow?")) {
+                      moveSessions.mutate({ patientId: patient.id, date: day });
+                    }
+                  }}
+                  disabled={moveSessions.isPending || rows.length === 0}
                 >
-                  <Printer className="h-3.5 w-3.5" /> Print
+                  {moveSessions.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoveRight className="h-4 w-4" />}
+                  {moveSessions.isPending ? "Transferring…" : "Transfer to tomorrow"}
                 </Button>
-              </div>
-            </DialogTitle>
-            <DialogDescription>{dateLabel}</DialogDescription>
-          </DialogHeader>
-
-          {rows.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 py-10 text-center">
-              <ClipboardList className="h-8 w-8 text-slate-300" />
-              <p className="text-sm text-slate-500">No therapy sessions scheduled for today.</p>
+              )}
+              <Button
+                size="sm"
+                className="h-9 gap-1.5 rounded-xl bg-sky-600 text-white hover:bg-sky-700"
+                onClick={() => printPatientDay(patient.name, patient.roomNumber, dateLabel, rows)}
+              >
+                <Printer className="h-4 w-4" /> Print
+              </Button>
             </div>
-          ) : (
-            <ul className="max-h-80 space-y-2 overflow-y-auto">
-              {rows.map((r, i) => (
-                <li
-                  key={i}
-                  className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-3"
-                >
-                  <span
-                    className="flex h-9 w-11 shrink-0 items-center justify-center rounded text-xs font-bold"
-                    style={{ backgroundColor: r.typeMeta.bg, color: r.typeMeta.fg }}
-                  >
-                    {r.typeMeta.label}
-                  </span>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-800">{r.typeMeta.full}</p>
-                    <p className="text-xs text-slate-400">
-                      {r.time} · {r.durationMinutes} min
-                      {r.therapistName ? ` · ${r.therapistName}` : ""}
-                    </p>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
+          </div>
+
+          <div className="shrink-0 p-5 sm:p-6">
+            {rows.length === 0 ? (
+              <div className="flex flex-col items-center rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-10 text-center">
+                <span className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-50 text-sky-600">
+                  <ClipboardList className="h-6 w-6" />
+                </span>
+                <h3 className="text-base font-semibold text-slate-800">No sessions scheduled</h3>
+                <p className="mt-2 max-w-xs text-sm leading-relaxed text-slate-500">
+                  There are no therapy sessions for this patient on the selected day.
+                </p>
+              </div>
+            ) : (
+              <ul className="space-y-3" aria-label="Therapy sessions">
+                {rows.map((row, index) => (
+                  <li key={index} className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <span
+                      className="flex h-10 w-12 shrink-0 items-center justify-center rounded-lg text-xs font-bold"
+                      style={{ backgroundColor: row.typeMeta.bg, color: row.typeMeta.fg }}
+                    >
+                      {row.typeMeta.label}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="break-words text-sm font-semibold text-slate-800">{row.typeMeta.full}</p>
+                      <p className="mt-1 flex items-center gap-1.5 text-xs text-slate-500">
+                        <Clock3 className="h-3.5 w-3.5 shrink-0" /> {row.time} · {row.durationMinutes} min
+                      </p>
+                      {row.therapistName && <p className="mt-1 break-words text-xs text-slate-500 [overflow-wrap:anywhere]">{row.therapistName}</p>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="flex shrink-0 justify-end border-t border-slate-200 bg-white px-5 py-3 sm:px-6">
+            <Button variant="outline" className="rounded-xl" onClick={() => setOpen(false)}>Close</Button>
+          </div>
         </DialogContent>
       </Dialog>
     </>

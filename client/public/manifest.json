@@ -1,0 +1,17 @@
+{
+  "name": "MinuteMinder",
+  "short_name": "MinuteMinder",
+  "description": "Therapy scheduling, staffing, and productivity board",
+  "start_url": "/board",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#1d4ed8",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any maskable"
+    }
+  ]
+}

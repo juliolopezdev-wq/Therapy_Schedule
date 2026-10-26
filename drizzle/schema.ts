@@ -140,6 +140,7 @@ export const therapists = sqliteTable("therapists", {
   userId: integer("userId"),
   name: text("name").notNull(),
   email: text("email"), // Used to send next-day assignment notifications
+  phone: text("phone"),
   color: text("color").notNull().default("#3b82f6"), // Default to a blue
   therapyType: text("therapyType", { enum: ["PT", "OT", "SLP"] }).notNull().default("PT"),
   teamId: integer("teamId"),
@@ -413,3 +414,106 @@ export const therapistAbsences = sqliteTable("therapistAbsences", {
 
 export type TherapistAbsence = typeof therapistAbsences.$inferSelect;
 export type InsertTherapistAbsence = typeof therapistAbsences.$inferInsert;
+
+// Who viewed a patient's chart, and when -- a HIPAA-style access log distinct from auditLog
+// (which only records admin actions). High-volume by design: every chart open gets a row.
+export const patientAccessLog = sqliteTable("patientAccessLog", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  patientId: integer("patientId").notNull(),
+  userId: integer("userId").notNull(),
+  accessedAt: integer("accessedAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type PatientAccessLogEntry = typeof patientAccessLog.$inferSelect;
+export type InsertPatientAccessLogEntry = typeof patientAccessLog.$inferInsert;
+
+/* ---------------------------------------------------------------------------
+ * Clinical documentation -- treatment notes, goals, and Section GG functional scoring.
+ * Deliberately separate from the scheduling-side therapySessions.notes free-text field.
+ * ------------------------------------------------------------------------ */
+
+// A structured treatment/progress note. One or more notes can exist per session -- a correction
+// after signing adds a new addendum row rather than editing signed history.
+export const treatmentNotes = sqliteTable("treatmentNotes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  sessionId: integer("sessionId").notNull(),
+  patientId: integer("patientId").notNull(),
+  therapistId: integer("therapistId").notNull(),
+  subjective: text("subjective"),
+  objective: text("objective"),
+  assessment: text("assessment"),
+  plan: text("plan"),
+  isAddendum: integer("isAddendum", { mode: "boolean" }).default(false).notNull(),
+  // Electronic signature -- once signed, the note is locked (immutable); a correction requires a
+  // new addendum row, matching real clinical documentation practice.
+  signedAt: integer("signedAt", { mode: "timestamp" }),
+  signedByUserId: integer("signedByUserId"),
+  createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+  updatedAt: integer("updatedAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type TreatmentNote = typeof treatmentNotes.$inferSelect;
+export type InsertTreatmentNote = typeof treatmentNotes.$inferInsert;
+
+export const patientGoals = sqliteTable("patientGoals", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  patientId: integer("patientId").notNull(),
+  therapyType: text("therapyType", { enum: ["PT", "OT", "SLP"] }).notNull(),
+  termType: text("termType", { enum: ["long_term", "short_term"] }).notNull().default("short_term"),
+  description: text("description").notNull(),
+  baselineValue: text("baselineValue"),
+  targetValue: text("targetValue"),
+  currentValue: text("currentValue"),
+  targetDate: text("targetDate"), // "YYYY-MM-DD"
+  status: text("status", { enum: ["not_started", "in_progress", "met", "discontinued"] }).notNull().default("not_started"),
+  createdByUserId: integer("createdByUserId"),
+  archivedAt: integer("archivedAt", { mode: "timestamp" }),
+  createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+  updatedAt: integer("updatedAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type PatientGoal = typeof patientGoals.$inferSelect;
+export type InsertPatientGoal = typeof patientGoals.$inferInsert;
+
+// CMS Section GG functional status scoring (self-care + mobility items, scored 1-6 for usual
+// performance or 07-10 for activity-not-attempted codes) -- the same measure PDPM/MDS 3.0
+// Section GG requires. itemScores is JSON keyed by GG item code (e.g. { "GG0130A1": 3 }) so
+// adding/retiring an item never needs a migration.
+export const functionalAssessments = sqliteTable("functionalAssessments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  patientId: integer("patientId").notNull(),
+  assessmentType: text("assessmentType", { enum: ["admission", "interim", "discharge"] }).notNull(),
+  assessmentDate: text("assessmentDate").notNull(), // "YYYY-MM-DD"
+  itemScores: text("itemScores", { mode: "json" }).notNull(),
+  completedByTherapistId: integer("completedByTherapistId"),
+  signedAt: integer("signedAt", { mode: "timestamp" }),
+  signedByUserId: integer("signedByUserId"),
+  createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+  updatedAt: integer("updatedAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type FunctionalAssessment = typeof functionalAssessments.$inferSelect;
+export type InsertFunctionalAssessment = typeof functionalAssessments.$inferInsert;
+
+// Therapist self-scheduling requests (PTO or a shift swap with a named colleague), queued for a
+// team lead/admin to approve or deny rather than only ever being admin-initiated. Approving a
+// "pto" request marks the therapist absent for each day in range via the existing call-off path;
+// "shift_swap" is a tracked request only -- the actual reassignment is still done on the board.
+export const scheduleChangeRequests = sqliteTable("scheduleChangeRequests", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  therapistId: integer("therapistId").notNull(),
+  requestType: text("requestType", { enum: ["pto", "shift_swap"] }).notNull(),
+  startDate: text("startDate").notNull(), // "YYYY-MM-DD"
+  endDate: text("endDate").notNull(), // "YYYY-MM-DD" -- same as startDate for a single day
+  swapWithTherapistId: integer("swapWithTherapistId"), // shift_swap only
+  reason: text("reason"),
+  status: text("status", { enum: ["pending", "approved", "denied", "canceled"] }).notNull().default("pending"),
+  reviewedByUserId: integer("reviewedByUserId"),
+  reviewedAt: integer("reviewedAt", { mode: "timestamp" }),
+  reviewNote: text("reviewNote"),
+  createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+  updatedAt: integer("updatedAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type ScheduleChangeRequest = typeof scheduleChangeRequests.$inferSelect;
+export type InsertScheduleChangeRequest = typeof scheduleChangeRequests.$inferInsert;

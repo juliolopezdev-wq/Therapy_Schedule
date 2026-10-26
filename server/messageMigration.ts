@@ -1,26 +1,48 @@
 import { eq, sql } from "drizzle-orm";
 import type { getDb } from "./db";
 import { staffMessages, staffDirectMessages } from "../drizzle/schema";
-import { messageEncryptionKey, migrateMessage, boardMessageContext, directMessageContext } from "./messageEncryption";
+import {
+  messageEncryptionKey,
+  migrateMessage,
+  boardMessageContext,
+  directMessageContext,
+} from "./messageEncryption";
 
-export async function migrateStoredMessages(db: NonNullable<Awaited<ReturnType<typeof getDb>>>) {
+type Database = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+
+export async function migrateStoredMessages(db: Database) {
   messageEncryptionKey();
   // One write transaction prevents partial migration and concurrent plaintext changes.
   return db.transaction(async tx => {
     let board = 0;
     let direct = 0;
     for (const row of await tx.select().from(staffMessages)) {
-      const title = migrateMessage(row.title, boardMessageContext(row.authorUserId, "title"));
-      const body = migrateMessage(row.body, boardMessageContext(row.authorUserId, "body"));
+      const title = migrateMessage(
+        row.title,
+        boardMessageContext(row.authorUserId, "title")
+      );
+      const body = migrateMessage(
+        row.body,
+        boardMessageContext(row.authorUserId, "body")
+      );
       if (title !== row.title || body !== row.body) {
-        await tx.update(staffMessages).set({ title, body }).where(eq(staffMessages.id, row.id));
+        await tx
+          .update(staffMessages)
+          .set({ title, body })
+          .where(eq(staffMessages.id, row.id));
         board++;
       }
     }
     for (const row of await tx.select().from(staffDirectMessages)) {
-      const body = migrateMessage(row.body, directMessageContext(row.senderUserId, row.recipientUserId));
+      const body = migrateMessage(
+        row.body,
+        directMessageContext(row.senderUserId, row.recipientUserId)
+      );
       if (body !== row.body) {
-        await tx.update(staffDirectMessages).set({ body }).where(eq(staffDirectMessages.id, row.id));
+        await tx
+          .update(staffDirectMessages)
+          .set({ body })
+          .where(eq(staffDirectMessages.id, row.id));
         direct++;
       }
     }

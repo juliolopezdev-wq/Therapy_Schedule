@@ -1,7 +1,7 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import type { Patient, TherapySession, User } from "../drizzle/schema";
-import { therapists } from "../drizzle/schema";
+import { therapists, users } from "../drizzle/schema";
 import {
   getDb,
   getPatients,
@@ -32,32 +32,58 @@ export async function resolveAccessScope(user: User): Promise<AccessScope> {
     return { role: user.role, therapistId: null, teamId: null, linked: true };
   }
 
+  const unlinkedScope: AccessScope = {
+    role: user.role,
+    therapistId: null,
+    teamId: null,
+    linked: false,
+  };
   const db = await getDb();
-  if (!db) return { role: user.role, therapistId: null, teamId: null, linked: false };
+  if (!db) return unlinkedScope;
 
-  const [linked] = await db.select().from(therapists)
+  const [linked] = await db
+    .select()
+    .from(therapists)
     .where(and(eq(therapists.userId, user.id), isNull(therapists.archivedAt)))
     .limit(1);
-  if (linked) {
-    return { role: user.role, therapistId: linked.id, teamId: linked.teamId, linked: true };
+  let profile = linked;
+
+  if (!profile) {
+    const normalizedEmail = user.email?.trim().toLowerCase();
+    if (!normalizedEmail) return unlinkedScope;
+
+    const matches = await db
+      .select()
+      .from(therapists)
+      .where(
+        and(
+          sql`lower(trim(${therapists.email})) = ${normalizedEmail}`,
+          isNull(therapists.userId),
+          isNull(therapists.archivedAt)
+        )
+      );
+    if (matches.length !== 1) return unlinkedScope;
+
+    profile = matches[0];
+    await db
+      .update(therapists)
+      .set({ userId: user.id, updatedAt: new Date() })
+      .where(and(eq(therapists.id, profile.id), isNull(therapists.userId)));
   }
 
-  const normalizedEmail = user.email?.trim().toLowerCase();
-  if (!normalizedEmail) return { role: user.role, therapistId: null, teamId: null, linked: false };
-
-  const matches = await db.select().from(therapists)
-    .where(and(
-      sql`lower(trim(${therapists.email})) = ${normalizedEmail}`,
-      isNull(therapists.userId),
-      isNull(therapists.archivedAt),
-    ));
-  if (matches.length !== 1) {
-    return { role: user.role, therapistId: null, teamId: null, linked: false };
+  // Use the staff profile for messaging attribution when the account has no name.
+  if (!user.name?.trim()) {
+    await db
+      .update(users)
+      .set({ name: profile.name, updatedAt: new Date() })
+      .where(eq(users.id, user.id));
   }
-
-  await db.update(therapists).set({ userId: user.id, updatedAt: new Date() })
-    .where(and(eq(therapists.id, matches[0].id), isNull(therapists.userId)));
-  return { role: user.role, therapistId: matches[0].id, teamId: matches[0].teamId, linked: true };
+  return {
+    role: user.role,
+    therapistId: profile.id,
+    teamId: profile.teamId,
+    linked: true,
+  };
 }
 
 export function requireLinkedScope(scope: AccessScope): asserts scope is AccessScope & { therapistId: number } {
@@ -172,18 +198,17 @@ export async function getScopedTherapists(user: User) {
   const rows = await getTherapists();
   if (scope.role === "admin") return rows;
   if (scope.role === "team_lead") {
-    return rows.map((therapist) => ({
-      ...therapist,
-      email: null,
-      linkedUserEmail: null,
-      linkedUserRole: null,
-    }));
+    // Mirrors their write scope: full contact info for their own team (so they can actually see
+    // what they're editing), redacted for everyone else.
+    return rows.map((therapist) => therapist.teamId === scope.teamId
+      ? { ...therapist, linkedUserEmail: null, linkedUserRole: null }
+      : { ...therapist, email: null, phone: null, linkedUserEmail: null, linkedUserRole: null });
   }
   requireLinkedScope(scope);
   return rows
     .map((therapist) => therapist.id === scope.therapistId
       ? therapist
-      : { ...therapist, email: null, linkedUserEmail: null, linkedUserRole: null });
+      : { ...therapist, email: null, phone: null, linkedUserEmail: null, linkedUserRole: null });
 }
 
 export async function getScopedTeams(user: User) {

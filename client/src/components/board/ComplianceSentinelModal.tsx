@@ -21,6 +21,7 @@ import {
   Search,
   ShieldAlert,
   TimerReset,
+  TrendingDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -31,7 +32,13 @@ interface ComplianceSentinelModalProps {
   onFixPatient?: (patientId: number) => void;
 }
 
-type RiskFilter = "all" | "critical" | "minutes" | "evaluation";
+type RiskFilter = "all" | "critical" | "minutes" | "evaluation" | "pdpm";
+
+const RISK_TYPE_META: Record<string, { icon: typeof TimerReset; label: string }> = {
+  cms_15hr_shortfall: { icon: TimerReset, label: "Weekly minutes" },
+  exit_eval_missing: { icon: CalendarClock, label: "Evaluation review" },
+  pdpm_timeline: { icon: TrendingDown, label: "PDPM timeline" },
+};
 
 export function ComplianceSentinelModal({ open, onOpenChange, day, onFixPatient }: ComplianceSentinelModalProps) {
   const [filter, setFilter] = useState<RiskFilter>("all");
@@ -51,6 +58,7 @@ export function ComplianceSentinelModal({ open, onOpenChange, day, onFixPatient 
   const warningCount = report?.riskItems.filter((risk) => risk.severity === "warning").length ?? 0;
   const minuteRiskCount = report?.riskItems.filter((risk) => risk.riskType === "cms_15hr_shortfall").length ?? 0;
   const evaluationRiskCount = report?.riskItems.filter((risk) => risk.riskType === "exit_eval_missing").length ?? 0;
+  const pdpmRiskCount = report?.riskItems.filter((risk) => risk.riskType === "pdpm_timeline").length ?? 0;
 
   const filteredRisks = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -58,6 +66,7 @@ export function ComplianceSentinelModal({ open, onOpenChange, day, onFixPatient 
       if (filter === "critical" && risk.severity !== "critical") return false;
       if (filter === "minutes" && risk.riskType !== "cms_15hr_shortfall") return false;
       if (filter === "evaluation" && risk.riskType !== "exit_eval_missing") return false;
+      if (filter === "pdpm" && risk.riskType !== "pdpm_timeline") return false;
       return !term || risk.patientName.toLowerCase().includes(term) || risk.roomNumber.toLowerCase().includes(term);
     });
   }, [filter, report?.riskItems, search]);
@@ -102,7 +111,7 @@ export function ComplianceSentinelModal({ open, onOpenChange, day, onFixPatient 
           </div>
         ) : report ? (
           <>
-            <div className="grid shrink-0 grid-cols-2 gap-2 border-b border-slate-200 bg-white p-4 sm:px-6 lg:grid-cols-4">
+            <div className="grid shrink-0 grid-cols-2 gap-2 border-b border-slate-200 bg-white p-4 sm:px-6 lg:grid-cols-5">
               <button type="button" onClick={() => setFilter("all")} className={cn("rounded-xl border p-3 text-left transition-colors", filter === "all" ? "border-blue-400 bg-blue-50 ring-2 ring-blue-100" : "border-slate-200 bg-white hover:bg-slate-50")}>
                 <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Without flags</p>
                 <p className="mt-1 text-2xl font-extrabold tabular-nums text-blue-700">{report.complianceScore}%</p>
@@ -122,6 +131,11 @@ export function ComplianceSentinelModal({ open, onOpenChange, day, onFixPatient 
                 <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Eval review</p>
                 <p className="mt-1 text-2xl font-extrabold tabular-nums text-violet-700">{evaluationRiskCount}</p>
                 <p className="text-xs text-slate-500">near discharge</p>
+              </button>
+              <button type="button" onClick={() => setFilter("pdpm")} className={cn("rounded-xl border p-3 text-left transition-colors", filter === "pdpm" ? "border-sky-400 bg-sky-50 ring-2 ring-sky-100" : "border-slate-200 bg-white hover:bg-slate-50")}>
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">PDPM timeline</p>
+                <p className="mt-1 text-2xl font-extrabold tabular-nums text-sky-700">{pdpmRiskCount}</p>
+                <p className="text-xs text-slate-500">rate/benefit changes</p>
               </button>
             </div>
 
@@ -161,8 +175,8 @@ export function ComplianceSentinelModal({ open, onOpenChange, day, onFixPatient 
                 ) : (
                   <div className="divide-y divide-slate-100">
                     {filteredRisks.map((risk) => {
-                      const minuteRisk = risk.riskType === "cms_15hr_shortfall";
-                      const RiskIcon = minuteRisk ? TimerReset : CalendarClock;
+                      const meta = RISK_TYPE_META[risk.riskType] ?? { icon: AlertTriangle, label: risk.riskType };
+                      const RiskIcon = meta.icon;
                       return (
                         <div key={`${risk.patientId}-${risk.riskType}`} className="grid gap-4 p-4 sm:p-5 lg:grid-cols-[auto_minmax(0,1fr)_auto] lg:items-center">
                           <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl", risk.severity === "critical" ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-700")}><RiskIcon className="h-5 w-5" /></div>
@@ -171,7 +185,7 @@ export function ComplianceSentinelModal({ open, onOpenChange, day, onFixPatient 
                               <h3 className="truncate text-sm font-bold text-slate-950">{risk.patientName}</h3>
                               <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-700">Room {risk.roomNumber}</span>
                               <span className={cn("rounded-full px-2 py-0.5 text-xs font-bold", risk.severity === "critical" ? "bg-rose-100 text-rose-800" : "bg-amber-100 text-amber-800")}>{risk.severity === "critical" ? "Critical" : "Warning"}</span>
-                              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-800">{minuteRisk ? "Weekly minutes" : "Evaluation review"}</span>
+                              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-800">{meta.label}</span>
                             </div>
                             <p className="mt-2 text-sm text-slate-700">{risk.message}</p>
                             <p className="mt-1 text-sm font-semibold text-slate-900">Recommended: {risk.actionNeeded}</p>

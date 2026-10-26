@@ -39,6 +39,7 @@ import {
 } from "../shared/timeGrid";
 import { availableShiftMinutesForDay, getShiftForDay } from "../shared/workSchedule";
 import { isActiveAdmission } from "../shared/patientLifecycle";
+import { upcomingPdpmEvents } from "../shared/pdpm";
 import {
   ALL_EVALUATION_THERAPY_TYPES,
   isEvaluationTherapyType,
@@ -1705,7 +1706,7 @@ export async function getComplianceSentinelReport(referenceDate: Date = new Date
     patientId: number;
     patientName: string;
     roomNumber: string;
-    riskType: "cms_15hr_shortfall" | "exit_eval_missing";
+    riskType: "cms_15hr_shortfall" | "exit_eval_missing" | "pdpm_timeline";
     severity: "critical" | "warning";
     message: string;
     actionNeeded: string;
@@ -1747,7 +1748,28 @@ export async function getComplianceSentinelReport(referenceDate: Date = new Date
     }
   }
 
-  const patientsWithRisks = new Set(riskItems.map((risk) => risk.patientId));
+  // PDPM variable per diem step-downs and the Part A 100-day benefit cap, surfaced 14 days out
+  // so billing/therapy can plan around a rate change -- not a certified MDS/billing calculation.
+  for (const patient of activePatients) {
+    if (!patient.admissionDate) continue;
+    const events = upcomingPdpmEvents(patient.admissionDate, referenceDate, 14);
+    for (const event of events) {
+      // Informational only -- not a compliance failure -- so always "warning", never "critical",
+      // and excluded from the compliance-score/critical-count math below.
+      riskItems.push({
+        patientId: patient.id,
+        patientName: patient.name,
+        roomNumber: patient.roomNumber,
+        riskType: "pdpm_timeline",
+        severity: "warning",
+        message: `${event.label} on ${event.date} (day ${event.day} of stay).`,
+        actionNeeded: "Confirm this is reflected in billing/MDS planning; no action needed on the schedule itself.",
+      });
+    }
+  }
+
+  const scoredRiskItems = riskItems.filter((risk) => risk.riskType !== "pdpm_timeline");
+  const patientsWithRisks = new Set(scoredRiskItems.map((risk) => risk.patientId));
   const complianceScore = activePatients.length > 0
     ? Math.round(((activePatients.length - patientsWithRisks.size) / activePatients.length) * 100)
     : 100;

@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
-import { encryptMessage, decryptMessage, migrateMessage, boardMessageContext, directMessageContext, storeMessage, readMessage } from "./messageEncryption";
+import {
+  encryptMessage,
+  decryptMessage,
+  migrateMessage,
+  boardMessageContext,
+  directMessageContext,
+  storeMessage,
+  readMessage,
+} from "./messageEncryption";
 
 describe("stored message encryption", () => {
   beforeEach(() => {
@@ -23,11 +31,15 @@ describe("stored message encryption", () => {
     for (const offset of [0, 12, 28]) {
       const changed = Buffer.from(payload);
       changed[offset] ^= 1;
-      expect(() => decryptMessage("msgenc:v1:" + changed.toString("base64"), context)).toThrow();
+      expect(() =>
+        decryptMessage("msgenc:v1:" + changed.toString("base64"), context)
+      ).toThrow();
     }
     expect(() => decryptMessage(value, directMessageContext(1, 3))).toThrow();
     const title = encryptMessage("private", boardMessageContext(1, "title"));
-    expect(() => decryptMessage(title, boardMessageContext(1, "body"))).toThrow();
+    expect(() =>
+      decryptMessage(title, boardMessageContext(1, "body"))
+    ).toThrow();
     vi.stubEnv("MESSAGE_ENCRYPTION_KEY", randomBytes(32).toString("base64"));
     expect(() => decryptMessage(value, context)).toThrow();
   });
@@ -49,7 +61,9 @@ describe("stored message encryption", () => {
 
   it("requires encryption by default and only permits plaintext with an explicit rollout opt-out", () => {
     vi.stubEnv("MESSAGE_ENCRYPTION_ENABLED", "");
-    expect(readMessage(storeMessage("private", context), context)).toBe("private");
+    expect(readMessage(storeMessage("private", context), context)).toBe(
+      "private"
+    );
     expect(() => readMessage("plaintext", context)).toThrow();
     vi.stubEnv("MESSAGE_ENCRYPTION_ENABLED", "false");
     expect(storeMessage("legacy", context)).toBe("legacy");

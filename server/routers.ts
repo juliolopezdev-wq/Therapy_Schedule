@@ -1,3 +1,4 @@
+import { permanentlyDeleteAccount } from "./accountDeletion";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router, protectedProcedure, staffProcedure, schedulerProcedure, adminProcedure } from "./_core/trpc";
 import { logout as logoutUser, requestMagicLink } from "./_core/auth";
@@ -81,6 +82,26 @@ import {
   listDirectConversation,
   createDirectMessage,
   markDirectConversationRead,
+  logPatientChartAccess,
+  getPatientChartAccessLog,
+  getTreatmentNotesForPatient,
+  getTreatmentNoteById,
+  createTreatmentNote,
+  updateTreatmentNote,
+  signTreatmentNote,
+  getPatientGoals,
+  createPatientGoal,
+  updatePatientGoal,
+  archivePatientGoal,
+  getFunctionalAssessmentsForPatient,
+  createFunctionalAssessment,
+  updateFunctionalAssessment,
+  signFunctionalAssessment,
+  listScheduleChangeRequests,
+  getScheduleChangeRequestById,
+  createScheduleChangeRequest,
+  cancelScheduleChangeRequest,
+  reviewScheduleChangeRequest,
 } from "./db";
 import {
   assertOwnTherapist,
@@ -102,6 +123,7 @@ import {
 import { sendTomorrowAssignments } from "./assignmentEmail";
 import { getWeekendCoverage, autoAssignWeekendStaff } from "./weekendStaffing";
 import { getWeeklyMinutesSummary, getGapFillSuggestions, getOrCreateTodaysDigest, getPredictiveForecast, rebalanceTherapistAbsence, getComplianceSentinelReport, previewSickCallPriorityTriage } from "./scheduling";
+import { getGGCompletenessReport, getGGTrendReport, getGGScoringConsistencyReport } from "./sectionGGCompliance";
 import { askScheduler, analyzeData } from "./ollama";
 import { canManageSchedule, isChartOnlyUpdate } from "../shared/accessPolicy";
 import { ALL_THERAPY_TYPES } from "../shared/therapyTypes";
@@ -145,7 +167,21 @@ export const appRouter = router({
   }),
 
   admin: router({
-    listUsers: adminProcedure.query(async () => listUsers()),
+    /** Admins can manage each other's access (role, activation) but can't see each other's
+     *  personal identity -- only the acting admin's own row is shown in full; every other
+     *  admin's name, email, and last-sign-in are redacted. */
+    listUsers: adminProcedure.query(async ({ ctx }) => {
+      const rows = await listUsers();
+      return rows.map((row) => row.role !== "admin" || row.id === ctx.user.id ? row : {
+        ...row,
+        name: null,
+        email: null,
+        openId: "",
+        lastSignedIn: null,
+        staffName: null,
+        teamName: null,
+      });
+    }),
     listInvites: adminProcedure.query(async () => listInvites()),
     invite: adminProcedure
       .input(z.object({ email: z.string().email(), role: accountRoleEnum }))
@@ -283,6 +319,12 @@ export const appRouter = router({
         });
         return { success: true } as const;
       }),
+    deleteUser: adminProcedure
+      .input(z.object({ userId: z.number().int().positive(), confirmation: z.literal("DELETE") }))
+      .mutation(async ({ input, ctx }) => {
+        await permanentlyDeleteAccount(input.userId, ctx.user.id);
+        return { success: true } as const;
+      }),
     setUserDeactivated: adminProcedure
       .input(z.object({ userId: z.number(), deactivated: z.boolean() }))
       .mutation(async ({ input, ctx }) => {
@@ -299,7 +341,12 @@ export const appRouter = router({
         });
         return { success: true } as const;
       }),
-    listSessions: adminProcedure.query(async () => listAllActiveSessions()),
+    // Other admins' active sessions (identity + IP) are hidden entirely -- an admin's own
+    // session, and every non-admin user's sessions, are unaffected.
+    listSessions: adminProcedure.query(async ({ ctx }) => {
+      const rows = await listAllActiveSessions();
+      return rows.filter((row) => row.userRole !== "admin" || row.userId === ctx.user.id);
+    }),
     revokeSession: adminProcedure
       .input(z.object({ sessionId: z.number() }))
       .mutation(async ({ input, ctx }) => {
@@ -748,6 +795,7 @@ export const appRouter = router({
         z.object({
           name: z.string().min(1),
           email: z.string().email().nullable().optional(),
+          phone: z.string().trim().max(30).nullable().optional(),
           teamId: z.number().nullable().optional(),
           userId: z.number().nullable().optional(),
           therapyType: z.enum(["PT", "OT", "SLP"]).optional(),
@@ -768,6 +816,7 @@ export const appRouter = router({
         const result = await createTherapist({
           name: input.name,
           email: input.email ?? null,
+          phone: input.phone ?? null,
           teamId: input.teamId ?? null,
           userId: input.userId ?? null,
           color: hue,
@@ -799,6 +848,7 @@ export const appRouter = router({
           id: z.number(),
           name: z.string().optional(),
           email: z.string().email().nullable().optional(),
+          phone: z.string().trim().max(30).nullable().optional(),
           teamId: z.number().nullable().optional(),
           therapyType: z.enum(["PT", "OT", "SLP"]).optional(),
           workDays: z.array(z.number().min(0).max(6)).nullable().optional(),
@@ -842,6 +892,32 @@ export const appRouter = router({
           targetId: String(id),
         });
         return result;
+      }),
+    /** Any linked staff member can update their own contact info without waiting on a team
+     *  lead or admin -- scoped to email/phone only, and only ever "my own" record. */
+    updateOwnContact: protectedProcedure
+      .input(z.object({
+        email: z.string().email().nullable().optional(),
+        phone: z.string().trim().max(30).nullable().optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const scope = await resolveAccessScope(ctx.user);
+        requireLinkedScope(scope);
+        if (scope.therapistId == null) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Your account isn't linked to a staff profile, so there's nothing to update here." });
+        }
+        await updateTherapist(scope.therapistId, {
+          ...(input.email !== undefined ? { email: input.email } : {}),
+          ...(input.phone !== undefined ? { phone: input.phone } : {}),
+        });
+        await logAudit({
+          actorUserId: ctx.user.id,
+          actorEmail: ctx.user.email,
+          action: "staff.update_own_contact",
+          targetType: "therapist",
+          targetId: String(scope.therapistId),
+        });
+        return { success: true } as const;
       }),
     upcomingSessionCount: adminProcedure
       .input(z.object({ therapistId: z.number() }))
@@ -1280,6 +1356,331 @@ export const appRouter = router({
       .mutation(async ({ input, ctx }) => {
         await markDirectConversationRead(ctx.user.id, input.peerUserId);
         return { success: true } as const;
+      }),
+  }),
+
+  /* ------------------------------------------------------------------ */
+  /* Clinical documentation -- treatment notes, goals, Section GG scoring */
+  /* ------------------------------------------------------------------ */
+  charting: router({
+    /** Fired when a chart is opened, not when it's just fetched in the bulk board list -- a
+     *  HIPAA-style "who looked at this patient" trail, separate from the admin audit log. */
+    logView: protectedProcedure
+      .input(z.object({ patientId: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        await logPatientChartAccess(input.patientId, ctx.user.id);
+        return { success: true } as const;
+      }),
+    accessLog: adminProcedure
+      .input(z.object({ patientId: z.number() }))
+      .query(({ input }) => getPatientChartAccessLog(input.patientId)),
+
+    /** Facility-level Section GG oversight -- completeness (reporting-threshold risk), the
+     *  admission-to-discharge trend (the public quality measure), and cross-therapist scoring
+     *  consistency (calibration/audit risk). Scheduler-level (admin/team lead), not per-patient. */
+    ggCompleteness: schedulerProcedure
+      .input(z.object({ referenceDate: z.date().optional() }).optional())
+      .query(({ input }) => getGGCompletenessReport(input?.referenceDate ?? new Date())),
+    ggTrend: schedulerProcedure.query(() => getGGTrendReport()),
+    ggScoringConsistency: schedulerProcedure.query(() => getGGScoringConsistencyReport()),
+
+    notes: router({
+      list: protectedProcedure
+        .input(z.object({ patientId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          await assertPatientInScope(await resolveAccessScope(ctx.user), input.patientId);
+          return getTreatmentNotesForPatient(input.patientId);
+        }),
+      create: staffProcedure
+        .input(z.object({
+          sessionId: z.number(),
+          patientId: z.number(),
+          subjective: z.string().trim().max(4000).optional(),
+          objective: z.string().trim().max(4000).optional(),
+          assessment: z.string().trim().max(4000).optional(),
+          plan: z.string().trim().max(4000).optional(),
+          isAddendum: z.boolean().optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          const scope = await resolveAccessScope(ctx.user);
+          await assertPatientInScope(scope, input.patientId);
+          const session = await getSessionById(input.sessionId);
+          if (!session || session.patientId !== input.patientId) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "That session doesn't belong to this patient." });
+          }
+          if (scope.role !== "admin" && session.therapistId !== scope.therapistId) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "You can only document sessions assigned to you." });
+          }
+          const therapistId = scope.role === "admin" ? session.therapistId : scope.therapistId;
+          if (therapistId == null) throw new TRPCError({ code: "BAD_REQUEST", message: "This session has no assigned therapist to chart as." });
+          const result = await createTreatmentNote({
+            sessionId: input.sessionId,
+            patientId: input.patientId,
+            therapistId,
+            subjective: input.subjective || null,
+            objective: input.objective || null,
+            assessment: input.assessment || null,
+            plan: input.plan || null,
+            isAddendum: input.isAddendum ?? false,
+          });
+          await logAudit({
+            actorUserId: ctx.user.id, actorEmail: ctx.user.email,
+            action: "treatment_note.create", targetType: "patient", targetId: String(input.patientId),
+            metadata: { noteId: result.id, sessionId: input.sessionId },
+          });
+          return result;
+        }),
+      update: staffProcedure
+        .input(z.object({
+          id: z.number(),
+          subjective: z.string().trim().max(4000).optional(),
+          objective: z.string().trim().max(4000).optional(),
+          assessment: z.string().trim().max(4000).optional(),
+          plan: z.string().trim().max(4000).optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          const { id, ...data } = input;
+          const note = await getTreatmentNoteById(id);
+          if (!note) throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
+          const scope = await resolveAccessScope(ctx.user);
+          if (scope.role !== "admin" && note.therapistId !== scope.therapistId) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "You can only edit your own notes." });
+          }
+          if (note.signedAt) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "This note is signed and locked. Add an addendum instead." });
+          }
+          await updateTreatmentNote(id, data);
+          return { success: true } as const;
+        }),
+      sign: staffProcedure
+        .input(z.object({ id: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          const note = await getTreatmentNoteById(input.id);
+          if (!note) throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
+          const scope = await resolveAccessScope(ctx.user);
+          if (scope.role !== "admin" && note.therapistId !== scope.therapistId) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "You can only sign your own notes." });
+          }
+          await signTreatmentNote(input.id, ctx.user.id);
+          await logAudit({
+            actorUserId: ctx.user.id, actorEmail: ctx.user.email,
+            action: "treatment_note.sign", targetType: "patient", targetId: String(note.patientId),
+            metadata: { noteId: input.id },
+          });
+          return { success: true } as const;
+        }),
+    }),
+
+    goals: router({
+      list: protectedProcedure
+        .input(z.object({ patientId: z.number(), includeArchived: z.boolean().optional() }))
+        .query(async ({ input, ctx }) => {
+          await assertPatientInScope(await resolveAccessScope(ctx.user), input.patientId);
+          return getPatientGoals(input.patientId, input.includeArchived ?? false);
+        }),
+      create: staffProcedure
+        .input(z.object({
+          patientId: z.number(),
+          therapyType: therapyTypeEnum,
+          termType: z.enum(["long_term", "short_term"]),
+          description: z.string().trim().min(1).max(500),
+          baselineValue: z.string().trim().max(120).optional(),
+          targetValue: z.string().trim().max(120).optional(),
+          targetDate: z.string().optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          await assertPatientInScope(await resolveAccessScope(ctx.user), input.patientId);
+          const result = await createPatientGoal({
+            patientId: input.patientId,
+            therapyType: input.therapyType as "PT" | "OT" | "SLP",
+            termType: input.termType,
+            description: input.description,
+            baselineValue: input.baselineValue || null,
+            targetValue: input.targetValue || null,
+            targetDate: input.targetDate || null,
+            createdByUserId: ctx.user.id,
+          });
+          return result;
+        }),
+      update: staffProcedure
+        .input(z.object({
+          id: z.number(),
+          patientId: z.number(),
+          currentValue: z.string().trim().max(120).optional(),
+          status: z.enum(["not_started", "in_progress", "met", "discontinued"]).optional(),
+          description: z.string().trim().min(1).max(500).optional(),
+          targetValue: z.string().trim().max(120).optional(),
+          targetDate: z.string().optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          const { id, patientId, ...data } = input;
+          await assertPatientInScope(await resolveAccessScope(ctx.user), patientId);
+          await updatePatientGoal(id, data);
+          return { success: true } as const;
+        }),
+      archive: staffProcedure
+        .input(z.object({ id: z.number(), patientId: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          await assertPatientInScope(await resolveAccessScope(ctx.user), input.patientId);
+          await archivePatientGoal(input.id);
+          return { success: true } as const;
+        }),
+    }),
+
+    functionalAssessments: router({
+      list: protectedProcedure
+        .input(z.object({ patientId: z.number() }))
+        .query(async ({ input, ctx }) => {
+          await assertPatientInScope(await resolveAccessScope(ctx.user), input.patientId);
+          return getFunctionalAssessmentsForPatient(input.patientId);
+        }),
+      create: staffProcedure
+        .input(z.object({
+          patientId: z.number(),
+          assessmentType: z.enum(["admission", "interim", "discharge"]),
+          assessmentDate: z.string(),
+          itemScores: z.record(z.string(), z.number().int().min(0).max(6)),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          const scope = await resolveAccessScope(ctx.user);
+          await assertPatientInScope(scope, input.patientId);
+          const result = await createFunctionalAssessment({
+            patientId: input.patientId,
+            assessmentType: input.assessmentType,
+            assessmentDate: input.assessmentDate,
+            itemScores: input.itemScores,
+            completedByTherapistId: scope.role === "admin" ? null : scope.therapistId,
+          });
+          await logAudit({
+            actorUserId: ctx.user.id, actorEmail: ctx.user.email,
+            action: "functional_assessment.create", targetType: "patient", targetId: String(input.patientId),
+            metadata: { assessmentId: result.id, assessmentType: input.assessmentType },
+          });
+          return result;
+        }),
+      update: staffProcedure
+        .input(z.object({
+          id: z.number(),
+          patientId: z.number(),
+          itemScores: z.record(z.string(), z.number().int().min(0).max(6)).optional(),
+          assessmentDate: z.string().optional(),
+        }))
+        .mutation(async ({ input, ctx }) => {
+          const { id, patientId, ...data } = input;
+          await assertPatientInScope(await resolveAccessScope(ctx.user), patientId);
+          await updateFunctionalAssessment(id, data);
+          return { success: true } as const;
+        }),
+      sign: staffProcedure
+        .input(z.object({ id: z.number(), patientId: z.number() }))
+        .mutation(async ({ input, ctx }) => {
+          await assertPatientInScope(await resolveAccessScope(ctx.user), input.patientId);
+          await signFunctionalAssessment(input.id, ctx.user.id);
+          return { success: true } as const;
+        }),
+    }),
+  }),
+
+  /* ------------------------------------------------------------------ */
+  /* Therapist self-scheduling requests (PTO / shift swap)                */
+  /* ------------------------------------------------------------------ */
+  scheduleRequests: router({
+    /** Staff/viewer see only their own requests; a team lead sees their whole team's queue;
+     *  an admin sees everything. */
+    list: protectedProcedure
+      .input(z.object({ status: z.enum(["pending", "approved", "denied", "canceled"]).optional() }).optional())
+      .query(async ({ input, ctx }) => {
+        const scope = await resolveAccessScope(ctx.user);
+        if (scope.role === "admin") return listScheduleChangeRequests({ status: input?.status });
+        requireLinkedScope(scope);
+        if (scope.role === "team_lead") {
+          return listScheduleChangeRequests({ teamIds: scope.teamId != null ? [scope.teamId] : [], status: input?.status });
+        }
+        return listScheduleChangeRequests({ therapistId: scope.therapistId ?? undefined, status: input?.status });
+      }),
+    create: staffProcedure
+      .input(z.object({
+        requestType: z.enum(["pto", "shift_swap"]),
+        startDate: z.string(),
+        endDate: z.string(),
+        swapWithTherapistId: z.number().optional(),
+        reason: z.string().trim().max(500).optional(),
+      }))
+      .mutation(async ({ input, ctx }) => {
+        const scope = await resolveAccessScope(ctx.user);
+        requireLinkedScope(scope);
+        if (scope.therapistId == null) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Your account isn't linked to a staff profile." });
+        }
+        const result = await createScheduleChangeRequest({
+          therapistId: scope.therapistId,
+          requestType: input.requestType,
+          startDate: input.startDate,
+          endDate: input.endDate,
+          swapWithTherapistId: input.swapWithTherapistId ?? null,
+          reason: input.reason || null,
+        });
+        return result;
+      }),
+    cancel: staffProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const scope = await resolveAccessScope(ctx.user);
+        const request = await getScheduleChangeRequestById(input.id);
+        if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Request not found" });
+        if (scope.role !== "admin" && request.therapistId !== scope.therapistId) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "You can only cancel your own request." });
+        }
+        await cancelScheduleChangeRequest(input.id);
+        return { success: true } as const;
+      }),
+    /** Approving a PTO request marks the therapist absent for each day in range, reusing the
+     *  same call-off path a scheduler would use manually (so reassignment/notification logic
+     *  stays in one place). A shift-swap approval is recorded but not auto-applied -- the actual
+     *  reassignment still happens on the board. */
+    review: schedulerProcedure
+      .input(z.object({ id: z.number(), decision: z.enum(["approved", "denied"]), note: z.string().trim().max(500).optional() }))
+      .mutation(async ({ input, ctx }) => {
+        const scope = await resolveAccessScope(ctx.user);
+        const request = await getScheduleChangeRequestById(input.id);
+        if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Request not found" });
+        if (request.status !== "pending") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "This request has already been reviewed." });
+        }
+        if (scope.role !== "admin") {
+          requireLinkedScope(scope);
+          const requester = (await getTherapists()).find((t) => t.id === request.therapistId);
+          if (!requester || requester.teamId !== scope.teamId) {
+            throw new TRPCError({ code: "FORBIDDEN", message: "You can only review requests from your own team." });
+          }
+        }
+        await reviewScheduleChangeRequest(input.id, input.decision, ctx.user.id, input.note);
+
+        let callOffDays: { date: string; ok: boolean }[] | undefined;
+        if (input.decision === "approved" && request.requestType === "pto") {
+          callOffDays = [];
+          const cursor = new Date(request.startDate);
+          const end = new Date(request.endDate);
+          while (cursor <= end) {
+            try {
+              await callOffTherapist(request.therapistId, new Date(cursor), "Approved PTO");
+              callOffDays.push({ date: cursor.toISOString().slice(0, 10), ok: true });
+            } catch {
+              callOffDays.push({ date: cursor.toISOString().slice(0, 10), ok: false });
+            }
+            cursor.setDate(cursor.getDate() + 1);
+          }
+        }
+
+        await logAudit({
+          actorUserId: ctx.user.id,
+          actorEmail: ctx.user.email,
+          action: `schedule_request.${input.decision}`,
+          targetType: "therapist",
+          targetId: String(request.therapistId),
+          metadata: { requestId: input.id, callOffDays },
+        });
+        return { success: true, callOffDays } as const;
       }),
   }),
 

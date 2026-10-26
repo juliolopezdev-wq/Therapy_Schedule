@@ -7,9 +7,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { cn } from "@/lib/utils";
+import { cn, staffDisplayName } from "@/lib/utils";
 import { toast } from "sonner";
-import { DirectMessagesPanel } from "./DirectMessagesPanel";
+import { DirectConversationPane } from "./DirectConversationPane";
 import {
   Archive,
   BellRing,
@@ -19,8 +19,8 @@ import {
   HeartHandshake,
   Loader2,
   Megaphone,
+  MessageCircle,
   MessageSquareText,
-  MessagesSquare,
   Pin,
   PinOff,
   Plus,
@@ -32,6 +32,7 @@ import {
 
 type Channel = "general" | "handoff" | "coverage" | "kudos";
 type Priority = "normal" | "important" | "urgent";
+type Selection = { kind: "channel"; channel: Channel | "all" } | { kind: "person"; peerUserId: number };
 
 const CHANNELS: Record<Channel, { label: string; icon: typeof Users; className: string }> = {
   general: { label: "Team updates", icon: Megaphone, className: "bg-blue-50 text-blue-800 border-blue-200" },
@@ -52,16 +53,19 @@ export function StaffMessageBoard({ open, onOpenChange }: { open: boolean; onOpe
   const { user } = useAuth();
   const utils = trpc.useUtils();
   const query = trpc.messageBoard.list.useQuery(undefined, { refetchInterval: 30_000 });
-  const [channelFilter, setChannelFilter] = useState<Channel | "all">("all");
   const [composing, setComposing] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [channel, setChannel] = useState<Channel>("general");
   const [priority, setPriority] = useState<Priority>("normal");
   const [requiresAcknowledgement, setRequiresAcknowledgement] = useState(false);
-  const [view, setView] = useState<"board" | "direct">("board");
+  const [selection, setSelection] = useState<Selection>({ kind: "channel", channel: "all" });
+  const [newDmPeerId, setNewDmPeerId] = useState("");
+
+  const directory = trpc.directMessages.directory.useQuery();
   const directThreads = trpc.directMessages.threads.useQuery(undefined, { refetchInterval: 10_000 });
-  const directUnread = (directThreads.data ?? []).reduce((total, thread) => total + thread.unreadCount, 0);
+  const threadRows = directThreads.data ?? [];
+  const directUnread = threadRows.reduce((total, thread) => total + thread.unreadCount, 0);
 
   const refresh = () => utils.messageBoard.list.invalidate();
   const create = trpc.messageBoard.create.useMutation({
@@ -78,7 +82,8 @@ export function StaffMessageBoard({ open, onOpenChange }: { open: boolean; onOpe
   const pin = trpc.messageBoard.pin.useMutation({ onSuccess: refresh, onError: (error) => toast.error(error.message) });
 
   const messages = query.data ?? [];
-  const filtered = channelFilter === "all" ? messages : messages.filter((message) => message.channel === channelFilter);
+  const activeChannel = selection.kind === "channel" ? selection.channel : "all";
+  const filtered = activeChannel === "all" ? messages : messages.filter((message) => message.channel === activeChannel);
   const needsMyAck = messages.filter((message) => message.requiresAcknowledgement && !message.acknowledgedByMe && !message.resolvedAt).length;
   const urgent = messages.filter((message) => message.priority === "urgent" && !message.resolvedAt).length;
   const openCoverage = messages.filter((message) => message.channel === "coverage" && !message.resolvedAt).length;
@@ -87,25 +92,95 @@ export function StaffMessageBoard({ open, onOpenChange }: { open: boolean; onOpe
     (Object.keys(CHANNELS) as Channel[]).map((key) => [key, messages.filter((message) => message.channel === key).length]),
   ) as Record<Channel, number>, [messages]);
 
+  const activePeer = selection.kind === "person"
+    ? (threadRows.find((t) => t.peerUserId === selection.peerUserId) ?? directory.data?.find((p) => p.id === selection.peerUserId))
+    : undefined;
+  const activePeerName = activePeer ? ("name" in activePeer ? activePeer.name : activePeer.peerName) : null;
+  const activePeerRole = activePeer ? ("role" in activePeer ? activePeer.role : activePeer.peerRole) : null;
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full overflow-y-auto border-l-slate-200 bg-slate-50 p-0 sm:max-w-2xl">
-        <SheetHeader className="border-b border-blue-700 bg-gradient-to-r from-blue-800 to-sky-700 px-5 py-5 text-left text-white">
+      <SheetContent className="w-full gap-0 overflow-hidden border-l-slate-200 bg-slate-50 p-0 sm:max-w-3xl">
+        <SheetHeader className="shrink-0 border-b border-blue-700 bg-gradient-to-r from-blue-800 to-sky-700 px-5 py-5 text-left text-white">
           <div className="flex items-start gap-3 pr-10">
             <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/15 ring-1 ring-white/20"><MessageSquareText className="h-5 w-5" /></span>
             <div>
-              <SheetTitle className="text-xl font-black text-white">Staff Signal Board</SheetTitle>
-              <SheetDescription className="mt-1 text-sm text-blue-100">Live operational updates for techs, clinicians, leads, and admins.</SheetDescription>
+              <SheetTitle className="text-xl font-black text-white">Staff Inbox</SheetTitle>
+              <SheetDescription className="mt-1 text-sm text-blue-100">Team updates and private messages, in one place.</SheetDescription>
             </div>
           </div>
         </SheetHeader>
 
-        <div className="grid grid-cols-2 border-b border-slate-200 bg-white p-2">
-          <Button type="button" variant={view === "board" ? "default" : "ghost"} className="h-10" onClick={() => setView("board")}><Megaphone className="mr-2 h-4 w-4" />Team board</Button>
-          <Button type="button" variant={view === "direct" ? "default" : "ghost"} className="relative h-10" onClick={() => setView("direct")}><MessagesSquare className="mr-2 h-4 w-4" />Direct messages{directUnread > 0 && <span className="ml-2 rounded-full bg-rose-600 px-1.5 py-0.5 text-[10px] font-black text-white">{directUnread}</span>}</Button>
-        </div>
+        <div className="flex min-h-0 flex-1 flex-col sm:grid sm:grid-cols-[220px_minmax(0,1fr)] sm:grid-rows-[minmax(0,1fr)]">
+          <aside className="hidden overflow-y-auto border-r border-slate-200 bg-white sm:block">
+            <div className="p-2">
+              <p className="px-2 py-1.5 text-[10px] font-black uppercase tracking-wider text-slate-400">Channels</p>
+              <button
+                type="button"
+                onClick={() => setSelection({ kind: "channel", channel: "all" })}
+                className={cn("flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-sm font-semibold transition-colors hover:bg-slate-100", selection.kind === "channel" && selection.channel === "all" && "bg-blue-50 text-blue-800")}
+              >
+                All updates <span className="text-xs font-bold text-slate-400">{messages.length}</span>
+              </button>
+              {(Object.entries(CHANNELS) as [Channel, typeof CHANNELS[Channel]][]).map(([key, meta]) => {
+                const Icon = meta.icon;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setSelection({ kind: "channel", channel: key })}
+                    className={cn("flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-semibold transition-colors hover:bg-slate-100", selection.kind === "channel" && selection.channel === key && "bg-blue-50 text-blue-800")}
+                  >
+                    <span className="flex items-center gap-2 truncate"><Icon className="h-3.5 w-3.5 shrink-0" /> {meta.label}</span>
+                    <span className="shrink-0 text-xs font-bold text-slate-400">{channelCounts[key]}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="border-t border-slate-200 p-2">
+              <p className="px-2 py-1.5 text-[10px] font-black uppercase tracking-wider text-slate-400">Direct messages</p>
+              <Select value={newDmPeerId} onValueChange={(value) => { setNewDmPeerId(""); setSelection({ kind: "person", peerUserId: Number(value) }); }}>
+                <SelectTrigger className="mb-1 h-9 bg-slate-50 text-xs"><SelectValue placeholder="Start a conversation" /></SelectTrigger>
+                <SelectContent>
+                  {(directory.data ?? []).map((person) => (
+                    <SelectItem key={person.id} value={String(person.id)}>{staffDisplayName(person)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {threadRows.map((thread) => (
+                <button
+                  key={thread.peerUserId}
+                  type="button"
+                  onClick={() => setSelection({ kind: "person", peerUserId: thread.peerUserId })}
+                  className={cn("flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-sm font-semibold transition-colors hover:bg-slate-100", selection.kind === "person" && selection.peerUserId === thread.peerUserId && "bg-blue-50 text-blue-800")}
+                >
+                  <span className="min-w-0 truncate">{staffDisplayName({ name: thread.peerName, role: thread.peerRole })}</span>
+                  {thread.unreadCount > 0 && <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-rose-600 px-1 text-[10px] font-black text-white">{thread.unreadCount}</span>}
+                </button>
+              ))}
+            </div>
+          </aside>
 
-        {view === "direct" ? <DirectMessagesPanel /> : (
+          {/* Mobile: a simple channel/people switcher row replaces the sidebar below sm */}
+          <div className="flex shrink-0 gap-2 overflow-x-auto border-b border-slate-200 bg-white p-2 sm:hidden">
+            <Button size="sm" variant={selection.kind === "channel" ? "default" : "outline"} className="h-9 shrink-0" onClick={() => setSelection({ kind: "channel", channel: "all" })}>
+              <Megaphone className="mr-1.5 h-3.5 w-3.5" /> Updates
+            </Button>
+            <Select value={selection.kind === "person" ? String(selection.peerUserId) : ""} onValueChange={(v) => setSelection({ kind: "person", peerUserId: Number(v) })}>
+              <SelectTrigger className="h-9 min-w-0 flex-1 gap-1.5 border-slate-200 bg-white text-xs [&_[data-slot=select-value]]:min-w-0">
+                <MessageCircle className="h-3.5 w-3.5" /><SelectValue placeholder={`Direct messages${directUnread > 0 ? ` (${directUnread})` : ""}`} />
+              </SelectTrigger>
+              <SelectContent>
+                {threadRows.map((t) => <SelectItem key={t.peerUserId} value={String(t.peerUserId)}>{staffDisplayName({ name: t.peerName, role: t.peerRole })}{t.unreadCount > 0 ? ` (${t.unreadCount})` : ""}</SelectItem>)}
+                {(directory.data ?? []).filter((p) => !threadRows.some((t) => t.peerUserId === p.id)).map((p) => <SelectItem key={p.id} value={String(p.id)}>{staffDisplayName(p)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+            {selection.kind === "person" ? (
+              <DirectConversationPane key={selection.peerUserId} peerUserId={selection.peerUserId} peerName={activePeerName ?? null} peerRole={activePeerRole ?? null} />
+            ) : (
         <div className="space-y-4 p-4 sm:p-5">
           <div className="grid grid-cols-3 gap-2">
             {[
@@ -132,7 +207,7 @@ export function StaffMessageBoard({ open, onOpenChange }: { open: boolean; onOpe
               event.preventDefault();
               create.mutate({ title, body, channel, priority, requiresAcknowledgement });
             }}>
-              <div className="flex items-center justify-between"><h3 className="font-extrabold text-slate-950">New signal</h3><span className="text-xs font-semibold text-slate-500">Posting as {user?.name || user?.email}</span></div>
+              <div className="flex items-center justify-between"><h3 className="font-extrabold text-slate-950">New signal</h3><span className="text-xs font-semibold text-slate-500">Posting as {staffDisplayName({ name: user?.name, role: user?.role })}</span></div>
               <div><Label htmlFor="signal-title">Headline</Label><Input id="signal-title" className="mt-1 h-11" maxLength={100} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="What does the team need to know?" /></div>
               <div><Label htmlFor="signal-body">Details</Label><Textarea id="signal-body" className="mt-1 min-h-24 resize-none" maxLength={1200} value={body} onChange={(event) => setBody(event.target.value)} placeholder="Add the operational context, owner, and next step—without patient identifiers." /></div>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -144,10 +219,11 @@ export function StaffMessageBoard({ open, onOpenChange }: { open: boolean; onOpe
             </form>
           )}
 
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            <Button size="sm" variant={channelFilter === "all" ? "default" : "outline"} className="h-10 shrink-0" onClick={() => setChannelFilter("all")}>All {messages.length}</Button>
-            {(Object.entries(CHANNELS) as [Channel, typeof CHANNELS[Channel]][]).map(([key, value]) => <Button key={key} size="sm" variant={channelFilter === key ? "default" : "outline"} className="h-10 shrink-0" onClick={() => setChannelFilter(key)}>{value.label} {channelCounts[key]}</Button>)}
-          </div>
+          {selection.kind === "channel" && selection.channel === "all" && (
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {(Object.entries(CHANNELS) as [Channel, typeof CHANNELS[Channel]][]).map(([key, value]) => <Button key={key} size="sm" variant="outline" className="h-10 shrink-0" onClick={() => setSelection({ kind: "channel", channel: key })}>{value.label} {channelCounts[key]}</Button>)}
+            </div>
+          )}
 
           {query.isLoading ? <div className="h-40 animate-pulse rounded-2xl border border-slate-200 bg-white" /> : filtered.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center"><MessageSquareText className="mx-auto h-9 w-9 text-slate-300" /><p className="mt-3 font-bold text-slate-900">No signals in this channel</p><p className="mt-1 text-sm text-slate-500">Post the first update when the team needs alignment.</p></div>
@@ -160,12 +236,12 @@ export function StaffMessageBoard({ open, onOpenChange }: { open: boolean; onOpe
                 <div className={cn("h-1", message.priority === "urgent" ? "bg-rose-600" : message.priority === "important" ? "bg-amber-500" : "bg-blue-500")} />
                 <div className="space-y-3 p-4">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-bold", channelMeta.className)}><ChannelIcon className="h-3 w-3" />{channelMeta.label}</span>{message.priority !== "normal" && <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-black uppercase", message.priority === "urgent" ? "bg-rose-100 text-rose-800" : "bg-amber-100 text-amber-800")}>{message.priority}</span>}{message.pinned && <Pin className="h-4 w-4 text-blue-700" />}{message.resolvedAt && <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700"><Check className="h-3.5 w-3.5" />Resolved</span>}</div><h3 className="mt-2 text-base font-black text-slate-950">{message.title}</h3></div>
+                    <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-bold", channelMeta.className)}><ChannelIcon className="h-3 w-3" />{channelMeta.label}</span>{message.priority !== "normal" && <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-black uppercase", message.priority === "urgent" ? "bg-rose-100 text-rose-800" : "bg-amber-100 text-amber-800")}>{message.priority}</span>}{message.pinned && <Pin className="h-4 w-4 text-blue-700" />}{message.resolvedAt && <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700"><Check className="h-3.5 w-3.5" />Resolved</span>}</div><h3 className="mt-2 break-words text-base font-black text-slate-950">{message.title}</h3></div>
                     <span className="shrink-0 text-xs text-slate-400">{relativeTime(message.createdAt)}</span>
                   </div>
-                  <p className="whitespace-pre-wrap text-sm leading-6 text-slate-700">{message.body}</p>
+                  <p className="whitespace-pre-wrap [overflow-wrap:anywhere] text-sm leading-6 text-slate-700">{message.body}</p>
                   <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
-                    <div><p className="text-xs font-bold text-slate-700">{message.authorName || message.authorEmail || "Staff member"}</p><p className="text-[11px] capitalize text-slate-500">{message.authorRole?.replace("_", " ")} · {message.acknowledgementCount} acknowledged</p></div>
+                    <div><p className="text-xs font-bold text-slate-700">{staffDisplayName({ name: message.authorName, role: message.authorRole })}</p><p className="text-[11px] capitalize text-slate-500">{message.authorRole?.replace("_", " ")} · {message.acknowledgementCount} acknowledged</p></div>
                     <div className="flex flex-wrap justify-end gap-1.5">
                       {message.requiresAcknowledgement && !message.acknowledgedByMe && <Button size="sm" className="h-9 bg-emerald-700 hover:bg-emerald-800" disabled={acknowledge.isPending} onClick={() => acknowledge.mutate({ id: message.id })}><CheckCheck className="mr-1.5 h-4 w-4" />Acknowledge</Button>}
                       {message.requiresAcknowledgement && message.acknowledgedByMe && <span className="inline-flex h-9 items-center gap-1 rounded-lg bg-emerald-50 px-3 text-xs font-bold text-emerald-800"><CheckCheck className="h-4 w-4" />Acknowledged</span>}
@@ -179,7 +255,9 @@ export function StaffMessageBoard({ open, onOpenChange }: { open: boolean; onOpe
             );
           })}
         </div>
-        )}
+            )}
+          </div>
+        </div>
       </SheetContent>
     </Sheet>
   );

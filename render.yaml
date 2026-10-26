@@ -9,6 +9,11 @@ services:
         value: 20
       - key: PNPM_VERSION
         value: 10
+      # Node's local-time functions (setHours, toLocaleDateString, etc.) follow this. Without it
+      # Render defaults to UTC, so "today" at the server can roll over hours before/after it does
+      # at the facility -- change this to your facility's IANA zone if it's not US Eastern.
+      - key: TZ
+        value: America/New_York
       - key: DATABASE_URL
         sync: false
       - key: TURSO_AUTH_TOKEN

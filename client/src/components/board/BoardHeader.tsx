@@ -1,4 +1,4 @@
-import { Dispatch, SetStateAction, useCallback, useMemo, useState } from "react";
+import { Dispatch, SetStateAction, Suspense, lazy, useCallback, useMemo, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   AlertTriangle,
@@ -32,8 +32,14 @@ import { PrintSchedulesDialog } from "./PrintSchedulesDialog";
 import { StaffMessageBoard } from "./StaffMessageBoard";
 import { StaffAlertBeacon } from "./StaffAlertBeacon";
 import { AtRiskModal, type AtRiskDigestEntry, type AtRiskSlot } from "./AtRiskModal";
+import { ScheduleRequestsPanel } from "./ScheduleRequestsPanel";
 import { usePermissions } from "@/_core/hooks/usePermissions";
 import { trpc } from "@/lib/trpc";
+import { CalendarOff, ClipboardCheck } from "lucide-react";
+
+// Pulls in recharts -- lazy-loaded so it never bloats the main board bundle that every user
+// downloads, only the admins/team leads who actually open this panel.
+const GGComplianceCenter = lazy(() => import("./GGComplianceCenter").then((m) => ({ default: m.GGComplianceCenter })));
 
 export interface BoardHeaderProps {
   day: Date;
@@ -102,8 +108,14 @@ export function BoardHeader({
   const [atRiskOpen, setAtRiskOpen] = useState(false);
   const [completeAllOpen, setCompleteAllOpen] = useState(false);
   const [messageBoardOpen, setMessageBoardOpen] = useState(false);
+  const [scheduleRequestsOpen, setScheduleRequestsOpen] = useState(false);
+  const [ggComplianceOpen, setGgComplianceOpen] = useState(false);
   const [isMobileExpanded, setIsMobileExpanded] = useState(false);
   const [openDropdowns, setOpenDropdowns] = useState<Record<string, boolean>>({});
+  const pendingScheduleRequests = trpc.scheduleRequests.list.useQuery(
+    { status: "pending" },
+    { enabled: isAdmin || isTeamLead, refetchInterval: 60_000 },
+  );
   const staffSignals = trpc.messageBoard.list.useQuery(undefined, {
     refetchInterval: 15_000,
     refetchIntervalInBackground: true,
@@ -148,20 +160,28 @@ export function BoardHeader({
   const navActions = useMemo(
     () => [
       { label: "Patients", icon: COMMAND_BAR_ICONS.Users, onClick: () => setPanelOpen(true) },
-      { label: "Staff board", icon: MessageSquareText, onClick: () => setMessageBoardOpen(true), badgeCount: staffCommunicationCount },
+      { label: "Staff inbox", icon: MessageSquareText, onClick: () => setMessageBoardOpen(true), badgeCount: staffCommunicationCount },
       ...(isAdmin || isTeamLead ? [{ label: "Staff", icon: COMMAND_BAR_ICONS.UserRound, onClick: () => setStaffPanelOpen(true) }] : []),
     ],
     [staffCommunicationCount, isAdmin, isTeamLead, setPanelOpen, setStaffPanelOpen],
   );
 
+  const pendingScheduleRequestCount = pendingScheduleRequests.data?.length ?? 0;
+
   const moreActions = useMemo<MoreAction[]>(() => [
     { label: "Print schedules", icon: Printer, onClick: () => setPrintSchedulesOpen(true) },
     ...(therapistId != null ? [{ label: "My stats & productivity", icon: COMMAND_BAR_ICONS.BarChart3, onClick: () => onViewStats?.(therapistId) }] : []),
+    ...(therapistId != null || isAdmin || isTeamLead ? [{
+      label: (isAdmin || isTeamLead) && pendingScheduleRequestCount > 0 ? `Time off & swaps (${pendingScheduleRequestCount} pending)` : "Time off & swaps",
+      icon: CalendarOff,
+      onClick: () => setScheduleRequestsOpen(true),
+    }] : []),
     ...(role !== "viewer" ? [{ label: "Weekly minutes", icon: COMMAND_BAR_ICONS.Clock, onClick: () => setWeeklyMinutesPanelOpen(true) }] : []),
     ...(isAdmin || isTeamLead ? [
       { label: "Staff attendance", icon: COMMAND_BAR_ICONS.ClipboardList, onClick: () => setIsAttendanceOpen(true) },
       { label: "Call-off scheduling assistance", icon: Siren, onClick: () => onOpenSickCall?.(), destructive: true },
       { label: "Copy day to tomorrow", icon: Copy, onClick: () => setCopyConfirmOpen(true) },
+      { label: "Section GG compliance", icon: ClipboardCheck, onClick: () => setGgComplianceOpen(true) },
     ] : []),
     ...(isAdmin ? [
       { label: "Data analysis", icon: COMMAND_BAR_ICONS.BarChart3, onClick: () => setDataAnalysisOpen(true) },
@@ -174,7 +194,7 @@ export function BoardHeader({
   ], [
     handleCopyDay, handleSnapshot, onOpenComplianceSentinel,
     isAdmin, isTeamLead, onOpenPredictiveStaffing, onOpenProductivityHub, onOpenSickCall, onViewStats, role,
-    setDataAnalysisOpen, therapistId,
+    setDataAnalysisOpen, therapistId, pendingScheduleRequestCount,
     setHistoryOpen, setWeeklyMinutesPanelOpen,
   ]);
 
@@ -398,6 +418,12 @@ export function BoardHeader({
       />
 
       <StaffMessageBoard open={messageBoardOpen} onOpenChange={setMessageBoardOpen} />
+      <ScheduleRequestsPanel open={scheduleRequestsOpen} onOpenChange={setScheduleRequestsOpen} therapists={therapists} />
+      {ggComplianceOpen && (
+        <Suspense fallback={null}>
+          <GGComplianceCenter open={ggComplianceOpen} onOpenChange={setGgComplianceOpen} />
+        </Suspense>
+      )}
     </header>
   );
 }

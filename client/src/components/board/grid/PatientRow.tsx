@@ -1,6 +1,6 @@
-import { memo, useCallback, useMemo } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { usePermissions } from "@/_core/hooks/usePermissions";
-import { AlertTriangle, Copy, GripVertical } from "lucide-react";
+import { AlertTriangle, Copy, FileText, GripVertical } from "lucide-react";
 import { CSS } from "@dnd-kit/utilities";
 import { useSortable } from "@dnd-kit/sortable";
 import { cn } from "@/lib/utils";
@@ -24,6 +24,7 @@ import {
 
 import { FlagBadge, FlagToggle } from "@/components/board/StatusFlags";
 import { PatientDayQuickView } from "@/components/board/PatientDayQuickView";
+import { PatientChartModal } from "@/components/board/PatientChartModal";
 import { GridCell } from "@/components/board/GridCell";
 import { SessionTile, type SessionTileData } from "@/components/board/SessionTile";
 
@@ -90,8 +91,10 @@ function PatientRowImpl({
   therapistName,
   therapistColor,
 }: PatientRowProps) {
-  const { canEdit, isAdmin, therapistId } = usePermissions();
+  const { canEdit, isAdmin, canChart, therapistId } = usePermissions();
   const canManagePatient = isAdmin || (canEdit && patient.accessLevel === "full");
+  const canOpenChart = canChart && (isAdmin || patient.accessLevel === "full");
+  const [chartOpen, setChartOpen] = useState(false);
   const isPlaceholder = patient.isRoomPlaceholder;
   const {
     attributes,
@@ -261,12 +264,28 @@ function PatientRowImpl({
                   </AlertDialog>
                 </div>
               )}
+              {canOpenChart && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-slate-400 hover:text-blue-700 hover:bg-blue-50"
+                      onClick={() => setChartOpen(true)}
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Open chart (notes, goals, Section GG)</TooltipContent>
+                </Tooltip>
+              )}
               <PatientDayQuickView
                 patient={patient}
                 day={day}
                 sessions={tiles}
                 therapists={therapists}
               />
+              {canOpenChart && <PatientChartModal open={chartOpen} onOpenChange={setChartOpen} patient={patient} sessions={tiles} />}
             </div>}
           </div>
           {!isPlaceholder && (displayFlags.length > 0 || patient.notes) && (

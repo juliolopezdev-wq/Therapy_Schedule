@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -9,9 +10,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { ChevronDown, LogOut, Shield } from "lucide-react";
+import { ChevronDown, LogOut, Shield, UserCog } from "lucide-react";
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
+import { MyProfileDialog } from "./MyProfileDialog";
 
 const ROLE_LABEL: Record<string, string> = {
   admin: "Admin",
@@ -22,10 +24,12 @@ const ROLE_LABEL: Record<string, string> = {
 
 export default function UserMenu({ inline = false }: { inline?: boolean }) {
   const { user, logout } = useAuth();
+  const [profileOpen, setProfileOpen] = useState(false);
 
   if (!user) return null;
 
   const initial = (user.name || user.email || "?").charAt(0).toUpperCase();
+  const hasOwnProfile = user.accessScope?.therapistId != null;
 
   return (
     <div className={cn(inline ? "relative shrink-0" : "fixed top-3 right-3 z-50")}>
@@ -69,6 +73,11 @@ export default function UserMenu({ inline = false }: { inline?: boolean }) {
             <span className="text-xs text-muted-foreground font-normal">{user.email}</span>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
+          {hasOwnProfile && (
+            <DropdownMenuItem onClick={() => setProfileOpen(true)} className="flex items-center gap-2">
+              <UserCog className="h-4 w-4" /> My profile
+            </DropdownMenuItem>
+          )}
           {user.role === "admin" && (
             <DropdownMenuItem asChild>
               <Link href="/admin/users" className="flex items-center gap-2 w-full">
@@ -81,6 +90,7 @@ export default function UserMenu({ inline = false }: { inline?: boolean }) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      {hasOwnProfile && <MyProfileDialog open={profileOpen} onOpenChange={setProfileOpen} />}
     </div>
   );
 }

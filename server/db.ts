@@ -45,6 +45,15 @@ import {
   InsertStaffMessage,
   staffDirectMessages,
   InsertStaffDirectMessage,
+  scheduleChangeRequests,
+  InsertScheduleChangeRequest,
+  patientAccessLog,
+  treatmentNotes,
+  InsertTreatmentNote,
+  patientGoals,
+  InsertPatientGoal,
+  functionalAssessments,
+  InsertFunctionalAssessment,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 import { isMissedStatus, isCanceledStatus } from "../shared/weekUtils";
@@ -2748,6 +2757,35 @@ export async function listAuditLog(limit: number = 200) {
  * Staff message board
  * ------------------------------------------------------------------------ */
 
+type StoredBoardMessage = Pick<
+  typeof staffMessages.$inferSelect,
+  "authorUserId" | "title" | "body"
+>;
+type StoredDirectMessage = Pick<
+  typeof staffDirectMessages.$inferSelect,
+  "senderUserId" | "recipientUserId" | "body"
+>;
+
+function readBoardMessageContent(message: StoredBoardMessage) {
+  return {
+    title: readMessage(
+      message.title,
+      boardMessageContext(message.authorUserId, "title")
+    ),
+    body: readMessage(
+      message.body,
+      boardMessageContext(message.authorUserId, "body")
+    ),
+  };
+}
+
+function readDirectMessageBody(message: StoredDirectMessage) {
+  return readMessage(
+    message.body,
+    directMessageContext(message.senderUserId, message.recipientUserId)
+  );
+}
+
 export async function listStaffMessages(userId: number) {
   const db = await getDb();
   if (!db) return [];
@@ -2755,7 +2793,6 @@ export async function listStaffMessages(userId: number) {
     .select({
       ...getTableColumns(staffMessages),
       authorName: users.name,
-      authorEmail: users.email,
       authorRole: users.role,
     })
     .from(staffMessages)
@@ -2767,17 +2804,24 @@ export async function listStaffMessages(userId: number) {
   const acknowledgements = await db
     .select()
     .from(staffMessageAcknowledgements)
-    .where(inArray(staffMessageAcknowledgements.messageId, rows.map((row) => row.id)));
+    .where(
+      inArray(
+        staffMessageAcknowledgements.messageId,
+        rows.map(row => row.id)
+      )
+    );
   const acknowledgementCount = new Map<number, number>();
   const mine = new Set<number>();
   for (const acknowledgement of acknowledgements) {
-    acknowledgementCount.set(acknowledgement.messageId, (acknowledgementCount.get(acknowledgement.messageId) ?? 0) + 1);
+    acknowledgementCount.set(
+      acknowledgement.messageId,
+      (acknowledgementCount.get(acknowledgement.messageId) ?? 0) + 1
+    );
     if (acknowledgement.userId === userId) mine.add(acknowledgement.messageId);
   }
-  return rows.map((row) => ({
+  return rows.map(row => ({
     ...row,
-    title: readMessage(row.title, boardMessageContext(row.authorUserId, "title")),
-    body: readMessage(row.body, boardMessageContext(row.authorUserId, "body")),
+    ...readBoardMessageContent(row),
     acknowledgementCount: acknowledgementCount.get(row.id) ?? 0,
     acknowledgedByMe: mine.has(row.id),
   }));
@@ -2786,102 +2830,160 @@ export async function listStaffMessages(userId: number) {
 export async function getStaffMessage(id: number) {
   const db = await getDb();
   if (!db) return undefined;
-  const [row] = await db.select().from(staffMessages).where(eq(staffMessages.id, id)).limit(1);
-  return row ? { ...row,
-    title: readMessage(row.title, boardMessageContext(row.authorUserId, "title")),
-    body: readMessage(row.body, boardMessageContext(row.authorUserId, "body")),
-  } : undefined;
+  const [row] = await db
+    .select()
+    .from(staffMessages)
+    .where(eq(staffMessages.id, id))
+    .limit(1);
+  return row ? { ...row, ...readBoardMessageContent(row) } : undefined;
 }
 
-export async function createStaffMessage(data: Omit<InsertStaffMessage, "id" | "createdAt" | "updatedAt" | "archivedAt" | "resolvedAt" | "resolvedByUserId" | "pinned">) {
+export async function createStaffMessage(
+  data: Omit<
+    InsertStaffMessage,
+    | "id"
+    | "createdAt"
+    | "updatedAt"
+    | "archivedAt"
+    | "resolvedAt"
+    | "resolvedByUserId"
+    | "pinned"
+  >
+) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(staffMessages).values({ ...data,
-    title: storeMessage(data.title, boardMessageContext(data.authorUserId, "title")),
-    body: storeMessage(data.body, boardMessageContext(data.authorUserId, "body")),
+  const result = await db.insert(staffMessages).values({
+    ...data,
+    title: storeMessage(
+      data.title,
+      boardMessageContext(data.authorUserId, "title")
+    ),
+    body: storeMessage(
+      data.body,
+      boardMessageContext(data.authorUserId, "body")
+    ),
   });
   const id = extractInsertId(result);
   return getStaffMessage(id);
 }
 
-export async function acknowledgeStaffMessage(messageId: number, userId: number) {
+export async function acknowledgeStaffMessage(
+  messageId: number,
+  userId: number
+) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const [existing] = await db.select({ id: staffMessageAcknowledgements.id })
+  const [existing] = await db
+    .select({ id: staffMessageAcknowledgements.id })
     .from(staffMessageAcknowledgements)
-    .where(and(eq(staffMessageAcknowledgements.messageId, messageId), eq(staffMessageAcknowledgements.userId, userId)))
+    .where(
+      and(
+        eq(staffMessageAcknowledgements.messageId, messageId),
+        eq(staffMessageAcknowledgements.userId, userId)
+      )
+    )
     .limit(1);
-  if (!existing) await db.insert(staffMessageAcknowledgements).values({ messageId, userId });
+  if (!existing)
+    await db.insert(staffMessageAcknowledgements).values({ messageId, userId });
 }
 
-export async function resolveStaffMessage(id: number, userId: number, resolved: boolean) {
+export async function resolveStaffMessage(
+  id: number,
+  userId: number,
+  resolved: boolean
+) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(staffMessages).set({
-    resolvedAt: resolved ? new Date() : null,
-    resolvedByUserId: resolved ? userId : null,
-    updatedAt: new Date(),
-  }).where(eq(staffMessages.id, id));
+  await db
+    .update(staffMessages)
+    .set({
+      resolvedAt: resolved ? new Date() : null,
+      resolvedByUserId: resolved ? userId : null,
+      updatedAt: new Date(),
+    })
+    .where(eq(staffMessages.id, id));
 }
 
 export async function archiveStaffMessage(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(staffMessages).set({ archivedAt: new Date(), updatedAt: new Date() }).where(eq(staffMessages.id, id));
+  await db
+    .update(staffMessages)
+    .set({ archivedAt: new Date(), updatedAt: new Date() })
+    .where(eq(staffMessages.id, id));
 }
 
 export async function pinStaffMessage(id: number, pinned: boolean) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(staffMessages).set({ pinned, updatedAt: new Date() }).where(eq(staffMessages.id, id));
+  await db
+    .update(staffMessages)
+    .set({ pinned, updatedAt: new Date() })
+    .where(eq(staffMessages.id, id));
 }
 
 export async function listDirectMessageDirectory(currentUserId: number) {
   const db = await getDb();
   if (!db) return [];
   return db
-    .select({ id: users.id, name: users.name, email: users.email, role: users.role })
+    .select({ id: users.id, name: users.name, role: users.role })
     .from(users)
     .where(and(ne(users.id, currentUserId), isNull(users.deactivatedAt)))
-    .orderBy(users.name, users.email);
+    .orderBy(users.name, users.id);
 }
 
 export async function listDirectMessageThreads(currentUserId: number) {
   const db = await getDb();
   if (!db) return [];
   const [messages, directory] = await Promise.all([
-    db.select().from(staffDirectMessages)
-      .where(or(eq(staffDirectMessages.senderUserId, currentUserId), eq(staffDirectMessages.recipientUserId, currentUserId)))
-      .orderBy(desc(staffDirectMessages.createdAt), desc(staffDirectMessages.id))
+    db
+      .select()
+      .from(staffDirectMessages)
+      .where(
+        or(
+          eq(staffDirectMessages.senderUserId, currentUserId),
+          eq(staffDirectMessages.recipientUserId, currentUserId)
+        )
+      )
+      .orderBy(
+        desc(staffDirectMessages.createdAt),
+        desc(staffDirectMessages.id)
+      )
       .limit(500),
-    db.select({ id: users.id, name: users.name, email: users.email, role: users.role })
+    db
+      .select({ id: users.id, name: users.name, role: users.role })
       .from(users)
       .where(isNull(users.deactivatedAt)),
   ]);
-  const people = new Map(directory.map((person) => [person.id, person]));
-  const threads = new Map<number, {
-    peerUserId: number;
-    peerName: string | null;
-    peerEmail: string | null;
-    peerRole: typeof users.$inferSelect.role;
-    lastMessage: string;
-    lastMessageAt: Date;
-    sentByMe: boolean;
-    unreadCount: number;
-  }>();
+  const people = new Map(directory.map(person => [person.id, person]));
+  const threads = new Map<
+    number,
+    {
+      peerUserId: number;
+      peerName: string | null;
+      peerRole: typeof users.$inferSelect.role;
+      lastMessage: string;
+      lastMessageAt: Date;
+      sentByMe: boolean;
+      unreadCount: number;
+    }
+  >();
   for (const message of messages) {
-    const peerUserId = message.senderUserId === currentUserId ? message.recipientUserId : message.senderUserId;
+    const peerUserId =
+      message.senderUserId === currentUserId
+        ? message.recipientUserId
+        : message.senderUserId;
     const person = people.get(peerUserId);
     if (!person) continue;
     const existing = threads.get(peerUserId);
-    const unread = message.recipientUserId === currentUserId && !message.readAt ? 1 : 0;
+    const unread =
+      message.recipientUserId === currentUserId && !message.readAt ? 1 : 0;
     if (!existing) {
       threads.set(peerUserId, {
         peerUserId,
         peerName: person.name,
-        peerEmail: person.email,
         peerRole: person.role,
-        lastMessage: readMessage(message.body, directMessageContext(message.senderUserId, message.recipientUserId)),
+        lastMessage: readDirectMessageBody(message),
         lastMessageAt: message.createdAt,
         sentByMe: message.senderUserId === currentUserId,
         unreadCount: unread,
@@ -2893,38 +2995,287 @@ export async function listDirectMessageThreads(currentUserId: number) {
   return Array.from(threads.values());
 }
 
-export async function listDirectConversation(currentUserId: number, peerUserId: number) {
+export async function listDirectConversation(
+  currentUserId: number,
+  peerUserId: number
+) {
   const db = await getDb();
   if (!db) return [];
-  const rows = await db.select().from(staffDirectMessages)
-    .where(or(
-      and(eq(staffDirectMessages.senderUserId, currentUserId), eq(staffDirectMessages.recipientUserId, peerUserId)),
-      and(eq(staffDirectMessages.senderUserId, peerUserId), eq(staffDirectMessages.recipientUserId, currentUserId)),
-    ))
+  const rows = await db
+    .select()
+    .from(staffDirectMessages)
+    .where(
+      or(
+        and(
+          eq(staffDirectMessages.senderUserId, currentUserId),
+          eq(staffDirectMessages.recipientUserId, peerUserId)
+        ),
+        and(
+          eq(staffDirectMessages.senderUserId, peerUserId),
+          eq(staffDirectMessages.recipientUserId, currentUserId)
+        )
+      )
+    )
     .orderBy(asc(staffDirectMessages.createdAt), asc(staffDirectMessages.id))
     .limit(200);
-  return rows.map(row => ({ ...row, body: readMessage(row.body, directMessageContext(row.senderUserId, row.recipientUserId)) }));
+  return rows.map(row => ({ ...row, body: readDirectMessageBody(row) }));
 }
 
 export async function createDirectMessage(data: InsertStaffDirectMessage) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const [recipient] = await db.select({ id: users.id }).from(users)
+  const [recipient] = await db
+    .select({ id: users.id })
+    .from(users)
     .where(and(eq(users.id, data.recipientUserId), isNull(users.deactivatedAt)))
     .limit(1);
   if (!recipient) throw new Error("Recipient account is unavailable");
-  const result = await db.insert(staffDirectMessages).values({ ...data,
-    body: storeMessage(data.body, directMessageContext(data.senderUserId, data.recipientUserId)),
+  const result = await db.insert(staffDirectMessages).values({
+    ...data,
+    body: storeMessage(
+      data.body,
+      directMessageContext(data.senderUserId, data.recipientUserId)
+    ),
   });
   return { id: extractInsertId(result) };
 }
 
-export async function markDirectConversationRead(currentUserId: number, peerUserId: number) {
+export async function markDirectConversationRead(
+  currentUserId: number,
+  peerUserId: number
+) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(staffDirectMessages).set({ readAt: new Date() }).where(and(
-    eq(staffDirectMessages.senderUserId, peerUserId),
-    eq(staffDirectMessages.recipientUserId, currentUserId),
-    isNull(staffDirectMessages.readAt),
-  ));
+  await db
+    .update(staffDirectMessages)
+    .set({ readAt: new Date() })
+    .where(
+      and(
+        eq(staffDirectMessages.senderUserId, peerUserId),
+        eq(staffDirectMessages.recipientUserId, currentUserId),
+        isNull(staffDirectMessages.readAt)
+      )
+    );
+}
+
+/* ---------------------------------------------------------------------------
+ * Patient chart access log (HIPAA-style "who viewed this" trail)
+ * ------------------------------------------------------------------------ */
+
+export async function logPatientChartAccess(patientId: number, userId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.insert(patientAccessLog).values({ patientId, userId });
+}
+
+export async function getPatientChartAccessLog(patientId: number, limit: number = 20) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      id: patientAccessLog.id,
+      accessedAt: patientAccessLog.accessedAt,
+      userId: patientAccessLog.userId,
+      userName: users.name,
+      userRole: users.role,
+    })
+    .from(patientAccessLog)
+    .innerJoin(users, eq(patientAccessLog.userId, users.id))
+    .where(eq(patientAccessLog.patientId, patientId))
+    .orderBy(desc(patientAccessLog.accessedAt))
+    .limit(limit);
+}
+
+/* ---------------------------------------------------------------------------
+ * Clinical documentation -- treatment notes, goals, functional (Section GG) assessments
+ * ------------------------------------------------------------------------ */
+
+export async function getTreatmentNotesForPatient(patientId: number, limit: number = 100) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      ...getTableColumns(treatmentNotes),
+      therapistName: therapists.name,
+      therapyType: therapists.therapyType,
+      signedByName: users.name,
+    })
+    .from(treatmentNotes)
+    .leftJoin(therapists, eq(treatmentNotes.therapistId, therapists.id))
+    .leftJoin(users, eq(treatmentNotes.signedByUserId, users.id))
+    .where(eq(treatmentNotes.patientId, patientId))
+    .orderBy(desc(treatmentNotes.createdAt))
+    .limit(limit);
+}
+
+export async function getTreatmentNoteById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db.select().from(treatmentNotes).where(eq(treatmentNotes.id, id)).limit(1);
+  return row;
+}
+
+export async function createTreatmentNote(data: InsertTreatmentNote) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(treatmentNotes).values(data);
+  return { id: extractInsertId(result) };
+}
+
+/** Unsigned notes only -- a signed note is locked; corrections go through createTreatmentNote
+ *  with isAddendum: true instead of editing history. */
+export async function updateTreatmentNote(id: number, data: Partial<InsertTreatmentNote>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(treatmentNotes).set({ ...data, updatedAt: new Date() })
+    .where(and(eq(treatmentNotes.id, id), isNull(treatmentNotes.signedAt)));
+}
+
+export async function signTreatmentNote(id: number, signedByUserId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(treatmentNotes).set({ signedAt: new Date(), signedByUserId, updatedAt: new Date() })
+    .where(and(eq(treatmentNotes.id, id), isNull(treatmentNotes.signedAt)));
+}
+
+export async function getPatientGoals(patientId: number, includeArchived: boolean = false) {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions = [eq(patientGoals.patientId, patientId)];
+  if (!includeArchived) conditions.push(isNull(patientGoals.archivedAt));
+  return db.select().from(patientGoals).where(and(...conditions)).orderBy(desc(patientGoals.createdAt));
+}
+
+export async function createPatientGoal(data: InsertPatientGoal) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(patientGoals).values(data);
+  return { id: extractInsertId(result) };
+}
+
+export async function updatePatientGoal(id: number, data: Partial<InsertPatientGoal>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(patientGoals).set({ ...data, updatedAt: new Date() }).where(eq(patientGoals.id, id));
+}
+
+export async function archivePatientGoal(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(patientGoals).set({ archivedAt: new Date(), updatedAt: new Date() }).where(eq(patientGoals.id, id));
+}
+
+export async function getFunctionalAssessmentsForPatient(patientId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      ...getTableColumns(functionalAssessments),
+      therapistName: therapists.name,
+      signedByName: users.name,
+    })
+    .from(functionalAssessments)
+    .leftJoin(therapists, eq(functionalAssessments.completedByTherapistId, therapists.id))
+    .leftJoin(users, eq(functionalAssessments.signedByUserId, users.id))
+    .where(eq(functionalAssessments.patientId, patientId))
+    .orderBy(desc(functionalAssessments.assessmentDate));
+}
+
+/** Facility-wide, not patient-scoped -- feeds the GG completeness/trend/consistency reports.
+ *  Admin-only call site; not redacted per-patient since it's an aggregate operational view. */
+export async function getAllFunctionalAssessments() {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select({
+      ...getTableColumns(functionalAssessments),
+      patientName: patients.name,
+      roomNumber: patients.roomNumber,
+      therapistName: therapists.name,
+      therapyType: therapists.therapyType,
+    })
+    .from(functionalAssessments)
+    .innerJoin(patients, eq(functionalAssessments.patientId, patients.id))
+    .leftJoin(therapists, eq(functionalAssessments.completedByTherapistId, therapists.id))
+    .orderBy(desc(functionalAssessments.assessmentDate));
+}
+
+export async function createFunctionalAssessment(data: InsertFunctionalAssessment) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(functionalAssessments).values(data);
+  return { id: extractInsertId(result) };
+}
+
+export async function updateFunctionalAssessment(id: number, data: Partial<InsertFunctionalAssessment>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(functionalAssessments).set({ ...data, updatedAt: new Date() })
+    .where(and(eq(functionalAssessments.id, id), isNull(functionalAssessments.signedAt)));
+}
+
+export async function signFunctionalAssessment(id: number, signedByUserId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(functionalAssessments).set({ signedAt: new Date(), signedByUserId, updatedAt: new Date() })
+    .where(and(eq(functionalAssessments.id, id), isNull(functionalAssessments.signedAt)));
+}
+
+/* ---------------------------------------------------------------------------
+ * Therapist self-scheduling requests (PTO / shift swap)
+ * ------------------------------------------------------------------------ */
+
+export async function listScheduleChangeRequests(filter: { therapistId?: number; teamIds?: number[]; status?: "pending" | "approved" | "denied" | "canceled" } = {}) {
+  const db = await getDb();
+  if (!db) return [];
+  const conditions = [];
+  if (filter.therapistId != null) conditions.push(eq(scheduleChangeRequests.therapistId, filter.therapistId));
+  if (filter.status) conditions.push(eq(scheduleChangeRequests.status, filter.status));
+  const rows = await db
+    .select({
+      ...getTableColumns(scheduleChangeRequests),
+      therapistName: therapists.name,
+      therapistTeamId: therapists.teamId,
+    })
+    .from(scheduleChangeRequests)
+    .innerJoin(therapists, eq(scheduleChangeRequests.therapistId, therapists.id))
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(desc(scheduleChangeRequests.createdAt));
+  if (!filter.teamIds) return rows;
+  const teamSet = new Set(filter.teamIds);
+  return rows.filter((row) => row.therapistTeamId != null && teamSet.has(row.therapistTeamId));
+}
+
+export async function getScheduleChangeRequestById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const [row] = await db.select().from(scheduleChangeRequests).where(eq(scheduleChangeRequests.id, id)).limit(1);
+  return row;
+}
+
+export async function createScheduleChangeRequest(data: InsertScheduleChangeRequest) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(scheduleChangeRequests).values(data);
+  return { id: extractInsertId(result) };
+}
+
+export async function cancelScheduleChangeRequest(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(scheduleChangeRequests).set({ status: "canceled", updatedAt: new Date() })
+    .where(and(eq(scheduleChangeRequests.id, id), eq(scheduleChangeRequests.status, "pending")));
+}
+
+export async function reviewScheduleChangeRequest(
+  id: number,
+  status: "approved" | "denied",
+  reviewedByUserId: number,
+  reviewNote?: string,
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(scheduleChangeRequests).set({
+    status, reviewedByUserId, reviewedAt: new Date(), reviewNote: reviewNote ?? null, updatedAt: new Date(),
+  }).where(and(eq(scheduleChangeRequests.id, id), eq(scheduleChangeRequests.status, "pending")));
 }

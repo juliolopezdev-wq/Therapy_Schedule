@@ -1,7 +1,7 @@
 import { BellRing, CheckCheck, MessageSquareText, Radio } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { cn, staffDisplayName } from "@/lib/utils";
 import { toast } from "sonner";
 
 export function StaffAlertBeacon({ onOpenBoard }: { onOpenBoard: () => void }) {
@@ -57,7 +57,7 @@ export function StaffAlertBeacon({ onOpenBoard }: { onOpenBoard: () => void }) {
             <h2 className="mt-1 text-base font-black leading-5 text-slate-950">{alert.title}</h2>
             <p className="mt-1 line-clamp-2 text-sm leading-5 text-slate-700">{alert.body}</p>
             <p className="mt-2 text-[11px] font-semibold text-slate-500">
-              From {alert.authorName || alert.authorEmail || "Staff member"} · Acknowledge to clear this alert
+              From {staffDisplayName({ name: alert.authorName, role: alert.authorRole })} · Acknowledge to clear this alert
             </p>
           </div>
         </div>

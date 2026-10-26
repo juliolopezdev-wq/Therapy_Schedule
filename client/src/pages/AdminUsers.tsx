@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { trpc } from "@/lib/trpc";
-import { ArrowLeft, Check, Loader2, MailX, Send, UserRound } from "lucide-react";
+import { ArrowLeft, Check, Loader2, MailX, Send, Trash2, UserRound } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
@@ -131,6 +131,8 @@ export default function AdminUsers() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<Role>("staff");
   const [inviteToRevoke, setInviteToRevoke] = useState<{ id: number; email: string } | null>(null);
+  const [accountToDelete, setAccountToDelete] = useState<{ id: number; label: string } | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [nameDrafts, setNameDrafts] = useState<Record<number, string>>({});
 
   const invalidateAll = () => {
@@ -161,6 +163,18 @@ export default function AdminUsers() {
       invalidateAll();
     },
     onError: (e) => toast.error(e.message),
+  });
+
+  const deleteUser = trpc.admin.deleteUser.useMutation({
+    onSuccess: () => {
+      toast.success("Account permanently deleted");
+      setAccountToDelete(null);
+      setDeleteConfirmation("");
+      invalidateAll();
+      utils.directMessages.invalidate();
+      utils.messageBoard.invalidate();
+    },
+    onError: (error) => toast.error(error.message),
   });
 
   const updateUserRole = trpc.admin.updateUserRole.useMutation({
@@ -368,9 +382,14 @@ export default function AdminUsers() {
               {usersQuery.isError ? <ErrorRow columns={6} message="Team members could not be loaded." /> : usersQuery.isLoading ? <LoadingRows columns={6} /> : users.length === 0 ? (
                 <EmptyRow columns={6} message="No users have joined yet." />
               ) : users.map((user) => {
-                const identity = user.email || user.name || user.openId;
                 const isCurrentUser = user.id === currentUser?.id;
+                const isOtherAdmin = user.role === "admin" && !isCurrentUser;
+                const identity = isOtherAdmin ? "Admin" : (user.email || user.name || user.openId);
                 const accessNeedsSetup = user.role !== "admin" && user.therapistId == null;
+                const draftName = nameDrafts[user.id] ?? user.name ?? "";
+                const trimmedName = draftName.trim();
+                const canSaveName = trimmedName.length > 0 && trimmedName !== (user.name ?? "").trim();
+                const isSavingName = updateUserName.isPending && updateUserName.variables?.userId === user.id;
                 return (
                   <TableRow key={user.id} className="border-slate-100 hover:bg-sky-50/35">
                     <TableCell className="px-5 py-3.5">
@@ -379,27 +398,36 @@ export default function AdminUsers() {
                           <UserRound className="h-4.5 w-4.5" strokeWidth={1.8} />
                         </div>
                         <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <Input
-                              value={nameDrafts[user.id] ?? user.name ?? ""}
-                              maxLength={80}
-                              onChange={(event) => setNameDrafts((current) => ({ ...current, [user.id]: event.target.value }))}
-                              aria-label={`Account holder name for ${identity}`}
-                              placeholder="Account holder name"
-                              className="h-8 min-w-[150px] border-slate-200 bg-white px-2 text-sm font-semibold"
-                            />
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="h-8 w-8 shrink-0 text-emerald-700"
-                              aria-label={`Save account holder name for ${identity}`}
-                              disabled={updateUserName.isPending || !(nameDrafts[user.id] ?? "").trim() || (nameDrafts[user.id] ?? user.name ?? "").trim() === (user.name ?? "").trim()}
-                              onClick={() => updateUserName.mutate({ userId: user.id, name: (nameDrafts[user.id] ?? user.name ?? "").trim() })}
-                            >
-                              {updateUserName.isPending && updateUserName.variables?.userId === user.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                            </Button>
-                          </div>
-                          {user.email && <p className="mt-1 truncate text-xs text-slate-500">{user.email}</p>}
+                          {isOtherAdmin ? (
+                            <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+                              Admin
+                              <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">Identity hidden</span>
+                            </p>
+                          ) : (
+                            <>
+                              <div className="flex items-center gap-1.5">
+                                <Input
+                                  value={draftName}
+                                  maxLength={80}
+                                  onChange={(event) => setNameDrafts((current) => ({ ...current, [user.id]: event.target.value }))}
+                                  aria-label={`Account holder name for ${identity}`}
+                                  placeholder="Account holder name"
+                                  className="h-8 min-w-[150px] border-slate-200 bg-white px-2 text-sm font-semibold"
+                                />
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-8 w-8 shrink-0 text-emerald-700"
+                                  aria-label={`Save account holder name for ${identity}`}
+                                  disabled={updateUserName.isPending || !canSaveName}
+                                  onClick={() => updateUserName.mutate({ userId: user.id, name: trimmedName })}
+                                >
+                                  {isSavingName ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                                </Button>
+                              </div>
+                              {user.email && <p className="mt-1 truncate text-xs text-slate-500">{user.email}</p>}
+                            </>
+                          )}
                         </div>
                       </div>
                     </TableCell>
@@ -456,7 +484,7 @@ export default function AdminUsers() {
                         </Badge>
                       )}
                     </TableCell>
-                    <TableCell className="px-4 py-3.5 text-sm text-slate-500">{formatDate(user.lastSignedIn)}</TableCell>
+                    <TableCell className="px-4 py-3.5 text-sm text-slate-500">{isOtherAdmin ? "Hidden" : formatDate(user.lastSignedIn)}</TableCell>
                     <TableCell className="px-5 py-3.5 text-right">
                       <Button
                         size="sm"
@@ -468,6 +496,22 @@ export default function AdminUsers() {
                       >
                         {isCurrentUser ? "Current account" : user.deactivatedAt ? "Reactivate" : "Deactivate"}
                       </Button>
+                      {!isCurrentUser && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={deleteUser.isPending}
+                          className="gap-1.5 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
+                          aria-label={`Permanently delete ${identity || "account"} (account ${user.id})`}
+                          onClick={() => {
+                            setDeleteConfirmation("");
+                            setAccountToDelete({ id: user.id, label: `${identity || "Account"} (account ${user.id})` });
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Delete permanently
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 );
@@ -627,6 +671,54 @@ export default function AdminUsers() {
           </Table>
         </SectionCard>
       </div>
+
+      <AlertDialog
+        open={accountToDelete !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleteUser.isPending) {
+            setAccountToDelete(null);
+            setDeleteConfirmation("");
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Permanently delete this account?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently removes {accountToDelete?.label} and signs them out.
+              Their invitations and sign-in links will stop working. This cannot be undone;
+              returning users will need a new invitation. Their staff profile, schedules,
+              message history, and audit records will remain.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <label htmlFor="delete-account-confirmation" className="text-sm font-medium">
+            Type DELETE to confirm
+          </label>
+          <Input
+            id="delete-account-confirmation"
+            value={deleteConfirmation}
+            onChange={(event) => setDeleteConfirmation(event.target.value)}
+            disabled={deleteUser.isPending}
+            autoComplete="off"
+          />
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteUser.isPending}>Keep account</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-rose-700 text-white hover:bg-rose-800"
+              disabled={deleteUser.isPending || deleteConfirmation !== "DELETE" || !accountToDelete}
+              onClick={(event) => {
+                event.preventDefault();
+                if (accountToDelete && deleteConfirmation === "DELETE") {
+                  deleteUser.mutate({ userId: accountToDelete.id, confirmation: "DELETE" });
+                }
+              }}
+            >
+              {deleteUser.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Delete permanently
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={inviteToRevoke !== null}

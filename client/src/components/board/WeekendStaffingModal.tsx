@@ -72,9 +72,9 @@ export function WeekendStaffingModal({ open, onOpenChange, referenceDate }: Week
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl glass-panel p-6 rounded-2xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader className="mb-2 text-left">
-          <div className="flex items-center justify-between gap-3">
+      <DialogContent className="sm:max-w-2xl glass-panel p-6 rounded-2xl max-h-[90dvh] overflow-y-auto">
+        <DialogHeader className="mb-2 pr-10 text-left">
+          <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
             <div>
               <DialogTitle className="text-xl font-black text-slate-900 tracking-tight flex items-center gap-2">
                 <Calendar className="h-5 w-5 text-sky-600" /> Weekend Staffing
