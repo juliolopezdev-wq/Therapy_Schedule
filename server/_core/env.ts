@@ -2,7 +2,7 @@ export const ENV = {
   databaseUrl: process.env.DATABASE_URL ?? "",
   // Base URL used to build magic-link login links in emails (e.g. https://pam.example.com).
   // Falls back to the request's own protocol+host when unset (fine for single-origin deploys).
-  appUrl: process.env.APP_URL ?? "",
+  appUrl: (process.env.APP_URL ?? "").trim().replace(/\/+$/, ""),
   // Bootstrap admin: the only email allowed to request a login link before any invite exists.
   // Needed to break the chicken-and-egg problem of an admin-invite-only system having no admins
   // yet. Once this email logs in once it becomes a normal admin row like any other.
