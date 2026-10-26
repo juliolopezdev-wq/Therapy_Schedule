@@ -22,7 +22,39 @@ function getTransporter() {
 
 /** Fast, synchronous, no-I/O check -- safe to await/check inline before deciding whether to queue a send. */
 export function isEmailConfigured(): boolean {
-  return !!ENV.resendApiKey || !!(ENV.smtpHost && ENV.smtpUser && ENV.smtpPass);
+  return !!ENV.gmailRelayUrl || !!ENV.resendApiKey || !!(ENV.smtpHost && ENV.smtpUser && ENV.smtpPass);
+}
+
+/**
+ * Sends via a Google Apps Script web app (see scripts/gmail-relay.gs) that calls GmailApp from the
+ * owner's Google account. HTTPS-only, so it works on hosts that block SMTP, and needs no domain.
+ */
+async function sendViaGmailRelay(params: { to: string[]; subject: string; html: string; text: string }): Promise<boolean> {
+  try {
+    // Apps Script answers POST with a 302 to googleusercontent.com; fetch follows it automatically.
+    const res = await fetch(ENV.gmailRelayUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ secret: ENV.gmailRelaySecret, ...params }),
+      redirect: "follow",
+      signal: AbortSignal.timeout(30_000),
+    });
+    const body = await res.text();
+    let ok = false;
+    try {
+      ok = JSON.parse(body).ok === true;
+    } catch {
+      /* non-JSON = Google error page */
+    }
+    if (!ok) {
+      console.warn(`[email] Gmail relay failed (${res.status}):`, body.slice(0, 500));
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.warn("[email] Gmail relay failed to send:", error);
+    return false;
+  }
 }
 
 /**
@@ -66,6 +98,7 @@ export async function sendEmail(params: { to: string[]; subject: string; html: s
     console.warn("[email] No recipients configured (DIGEST_NOTIFICATION_EMAILS) -- skipping send.");
     return false;
   }
+  if (ENV.gmailRelayUrl) return sendViaGmailRelay(params);
   if (ENV.resendApiKey) return sendViaResend(params);
   const transporter = getTransporter();
   if (!transporter) {

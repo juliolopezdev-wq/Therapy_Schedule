@@ -22,6 +22,9 @@ export const ENV = {
   smtpFrom: process.env.SMTP_FROM ?? "",
   // Resend HTTPS API key -- takes priority over SMTP when set (works on hosts that block SMTP ports).
   resendApiKey: process.env.RESEND_API_KEY ?? "",
+  // Google Apps Script Gmail relay (scripts/gmail-relay.gs) -- highest priority when set.
+  gmailRelayUrl: process.env.GMAIL_RELAY_URL ?? "",
+  gmailRelaySecret: process.env.GMAIL_RELAY_SECRET ?? "",
   // Comma-separated recipient list -- explicit rather than derived from user accounts, since not
   // every staff member who should see this digest necessarily has a login.
   digestNotificationEmails: (process.env.DIGEST_NOTIFICATION_EMAILS ?? "")
