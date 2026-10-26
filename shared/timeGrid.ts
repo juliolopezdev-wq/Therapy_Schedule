@@ -25,7 +25,8 @@ export function slotIndexToDate(baseDay: Date, slotIndex: number): Date {
 }
 
 export function durationToSlots(durationMinutes: number): number {
-  return Math.max(1, Math.round(durationMinutes / SLOT_MINUTES));
+  // A partial slot still occupies the entire grid cell for collision/availability purposes.
+  return Math.max(1, Math.ceil(durationMinutes / SLOT_MINUTES));
 }
 
 export function formatDateKey(date: Date): string {

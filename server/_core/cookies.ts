@@ -1,12 +1,4 @@
-import type { CookieOptions, Request } from "express";
-
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
-
-function isIpAddress(host: string) {
-  // Basic IPv4 check and IPv6 presence detection.
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return true;
-  return host.includes(":");
-}
+import type { CookieOptions } from "express";
 
 function isSecureRequest(req: any) {
   if (req.protocol === "https") return true;
@@ -24,10 +16,13 @@ function isSecureRequest(req: any) {
 export function getSessionCookieOptions(
   req: any
 ): CookieOptions {
+  const secure = isSecureRequest(req);
   return {
     httpOnly: true,
     path: "/",
-    sameSite: "none",
-    secure: isSecureRequest(req),
+    // Login and API traffic are same-origin. Lax still permits the emailed top-level login link
+    // while withholding the session cookie from cross-site subrequests.
+    sameSite: "lax",
+    secure,
   } as CookieOptions;
 }

@@ -1,9 +1,12 @@
 export const ENV = {
-  appId: process.env.VITE_APP_ID ?? "",
-  cookieSecret: process.env.JWT_SECRET ?? "",
   databaseUrl: process.env.DATABASE_URL ?? "",
-  oAuthServerUrl: process.env.OAUTH_SERVER_URL ?? "",
-  ownerOpenId: process.env.OWNER_OPEN_ID ?? "",
+  // Base URL used to build magic-link login links in emails (e.g. https://pam.example.com).
+  // Falls back to the request's own protocol+host when unset (fine for single-origin deploys).
+  appUrl: process.env.APP_URL ?? "",
+  // Bootstrap admin: the only email allowed to request a login link before any invite exists.
+  // Needed to break the chicken-and-egg problem of an admin-invite-only system having no admins
+  // yet. Once this email logs in once it becomes a normal admin row like any other.
+  ownerEmail: (process.env.OWNER_EMAIL ?? "").toLowerCase(),
   isProduction: process.env.NODE_ENV === "production",
   forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",

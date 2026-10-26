@@ -1,8 +1,12 @@
-import { startOfWeek, startOfDay, differenceInDays, addDays } from "date-fns";
+import { startOfDay, differenceInDays, addDays } from "date-fns";
 
-export type SessionStatus = "scheduled" | "completed" | "missed_refusal" | "missed_clinical_hold" | "missed_staffing" | "missed_other";
+export type SessionStatus = "scheduled" | "completed" | "canceled_discharge" | "missed_refusal" | "missed_clinical_hold" | "missed_staffing" | "missed_other";
 export function isMissedStatus(status: string): boolean {
   return status.startsWith("missed_");
+}
+
+export function isCanceledStatus(status: string): boolean {
+  return status === "canceled_discharge";
 }
 
 export interface WeeklyMinutesSummary {
@@ -25,37 +29,61 @@ export interface WeeklyMinutesSummary {
 }
 
 /**
- * A patient's personalized week does NOT start on their admission day itself -- it starts the
- * day after admission (their first full day on the unit), and that day resets every 7 days from
- * then on. E.g. admitted Monday -> week 1 runs Tuesday-Monday, week 2 starts the following Tuesday.
+ * IRF therapy-intensity weeks are consecutive 7-day periods beginning on the admission date.
+ * E.g. admitted Monday -> week 1 runs Monday-Sunday, week 2 starts the following Monday.
  */
-function patientWeekEpoch(admissionDateStr: string): Date {
-  const adminStart = startOfDay(new Date(`${admissionDateStr}T12:00:00`));
-  return addDays(adminStart, 1);
+function validDate(date: Date): boolean {
+  return Number.isFinite(date.getTime());
+}
+
+function safeViewedDate(referenceDate: Date): Date {
+  const viewed = new Date(referenceDate);
+  return startOfDay(validDate(viewed) ? viewed : new Date());
+}
+
+function calendarWeekStart(referenceDate: Date): Date {
+  const d = safeViewedDate(referenceDate);
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day; // Monday-based week
+  d.setDate(d.getDate() + diff);
+  return d;
+}
+
+/** Parse both current YYYY-MM-DD values and older timestamp/date-string values without ever
+ * returning Invalid Date. Invalid legacy values fall back to a normal calendar week. */
+function patientWeekEpoch(admissionDateStr: string): Date | null {
+  const value = admissionDateStr.trim();
+  if (!value) return null;
+
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (dateOnly) {
+    const year = Number(dateOnly[1]);
+    const month = Number(dateOnly[2]);
+    const day = Number(dateOnly[3]);
+    const parsed = new Date(year, month - 1, day, 12, 0, 0, 0);
+    if (parsed.getFullYear() !== year || parsed.getMonth() !== month - 1 || parsed.getDate() !== day) {
+      return null;
+    }
+    return startOfDay(parsed);
+  }
+
+  const parsed = new Date(value);
+  return validDate(parsed) ? startOfDay(parsed) : null;
 }
 
 export function patientWeekStart(admissionDateStr: string | null | undefined, referenceDate: Date): Date {
-  const viewed = startOfDay(referenceDate);
+  const viewed = safeViewedDate(referenceDate);
   if (!admissionDateStr) {
-    const d = new Date(viewed);
-    d.setHours(0, 0, 0, 0);
-    const day = d.getDay();
-    const diff = day === 0 ? -6 : 1 - day; // Monday-based week
-    d.setDate(d.getDate() + diff);
-    return d;
+    return calendarWeekStart(viewed);
   }
 
   const weekEpoch = patientWeekEpoch(admissionDateStr);
+  if (!weekEpoch) return calendarWeekStart(viewed);
   const diff = differenceInDays(viewed, weekEpoch);
 
   if (diff < 0) {
-    // Viewing the admission day itself (or earlier) -- their personalized week hasn't started yet.
-    const d = new Date(viewed);
-    d.setHours(0, 0, 0, 0);
-    const day = d.getDay();
-    const dif = day === 0 ? -6 : 1 - day; // Monday-based week
-    d.setDate(d.getDate() + dif);
-    return d;
+    // Viewing before admission -- fall back to a calendar week until the IRF stay starts.
+    return calendarWeekStart(viewed);
   }
 
   const weeksPassed = Math.floor(diff / 7);
@@ -63,14 +91,15 @@ export function patientWeekStart(admissionDateStr: string | null | undefined, re
 }
 
 export function patientWeekEnd(weekStart: Date): Date {
-  const end = new Date(weekStart);
-  end.setDate(weekStart.getDate() + 6);
+  const safeStart = validDate(weekStart) ? new Date(weekStart) : calendarWeekStart(new Date());
+  const end = new Date(safeStart);
+  end.setDate(safeStart.getDate() + 6);
   end.setHours(23, 59, 59, 999);
   return end;
 }
 
 export function daysRemainingInWeek(weekStart: Date, referenceDate: Date): number {
-  const viewed = startOfDay(referenceDate);
+  const viewed = safeViewedDate(referenceDate);
   const end = patientWeekEnd(weekStart);
   const endStartOfDay = startOfDay(end);
   const diff = differenceInDays(endStartOfDay, viewed);
@@ -91,9 +120,9 @@ export function getPatientWeekBounds(admissionDateStr: string | null | undefined
   
   if (admissionDateStr) {
     const weekEpoch = patientWeekEpoch(admissionDateStr);
-    const viewed = startOfDay(viewedDate);
-    const diff = differenceInDays(viewed, weekEpoch);
-    if (diff >= 0) {
+    const viewed = safeViewedDate(viewedDate);
+    const diff = weekEpoch ? differenceInDays(viewed, weekEpoch) : -1;
+    if (weekEpoch && diff >= 0) {
       weekNumber = Math.floor(diff / 7) + 1;
     }
   }

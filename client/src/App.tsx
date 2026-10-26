@@ -1,17 +1,43 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import NotFound from "@/pages/NotFound";
+import { lazy, Suspense } from "react";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
+import ProtectedRoute from "./components/ProtectedRoute";
 import { ThemeProvider } from "./contexts/ThemeContext";
-import TherapyBoard from "./pages/TherapyBoard";
+
+const AdminUsers = lazy(() => import("./pages/AdminUsers"));
+const Login = lazy(() => import("./pages/Login"));
+const NotFound = lazy(() => import("./pages/NotFound"));
+const TherapyBoard = lazy(() => import("./pages/TherapyBoard"));
+
+function PageFallback() {
+  return (
+    <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
+      Loading…
+    </div>
+  );
+}
 
 function Router() {
-  // make sure to consider if you need authentication for certain routes
   return (
     <Switch>
-      <Route path={"/"} component={TherapyBoard} />
-      <Route path={"/board"} component={TherapyBoard} />
+      <Route path={"/login"} component={Login} />
+      <Route path={"/"}>
+        <ProtectedRoute>
+          <TherapyBoard />
+        </ProtectedRoute>
+      </Route>
+      <Route path={"/board"}>
+        <ProtectedRoute>
+          <TherapyBoard />
+        </ProtectedRoute>
+      </Route>
+      <Route path={"/admin/users"}>
+        <ProtectedRoute roles={["admin"]}>
+          <AdminUsers />
+        </ProtectedRoute>
+      </Route>
       <Route path={"/404"} component={NotFound} />
       {/* Final fallback route */}
       <Route component={NotFound} />
@@ -33,7 +59,9 @@ function App() {
       >
         <TooltipProvider>
           <Toaster />
-          <Router />
+          <Suspense fallback={<PageFallback />}>
+            <Router />
+          </Suspense>
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>

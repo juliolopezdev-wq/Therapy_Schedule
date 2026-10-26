@@ -49,7 +49,7 @@ function FilterGroupImpl<T extends string | number>({
 
   return (
     <div className="flex items-center gap-3">
-      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{label}</span>
+      <span className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</span>
 
       <DropdownMenu open={compactOpen} onOpenChange={handleOpenChange}>
         <DropdownMenuTrigger asChild>
@@ -59,7 +59,7 @@ function FilterGroupImpl<T extends string | number>({
             aria-haspopup="menu"
             aria-expanded={compactOpen}
             className={cn(
-              "flex items-center gap-2 h-8 rounded-full px-3 text-xs font-semibold bg-white border border-slate-200 shadow-sm",
+              "flex h-10 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold shadow-sm",
               "transition-colors duration-150 hover:border-slate-300 hover:bg-slate-50",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-1",
             )}
@@ -86,14 +86,14 @@ function FilterGroupImpl<T extends string | number>({
           align="start"
           className={cn(
             dropdownWidthClass,
-            "rounded-xl p-1.5 shadow-xl shadow-slate-200/50 border-slate-100 glass-panel z-50",
+            "z-50 rounded-xl border-slate-200 bg-white p-1.5 shadow-xl",
           )}
         >
           <DropdownMenuItem
             onClick={() => onChange("all")}
             aria-selected={value === "all"}
             className={cn(
-              "flex items-center justify-between rounded-lg px-3 py-2 text-xs font-semibold cursor-pointer mb-1",
+              "mb-1 flex min-h-10 cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-sm font-semibold",
               value === "all" ? "bg-slate-100 text-slate-800" : "text-slate-600",
             )}
           >
@@ -109,7 +109,7 @@ function FilterGroupImpl<T extends string | number>({
               onClick={() => onChange(opt.value)}
               aria-selected={value === opt.value}
               className={cn(
-                "flex items-center justify-between rounded-lg px-3 py-2 text-xs font-semibold cursor-pointer",
+                "flex min-h-10 cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-sm font-semibold",
                 value === opt.value && "bg-slate-50",
               )}
               style={{ color: value === opt.value ? opt.activeFg : undefined }}
@@ -128,4 +128,3 @@ function FilterGroupImpl<T extends string | number>({
 }
 
 export const FilterGroup = memo(FilterGroupImpl) as typeof FilterGroupImpl;
-

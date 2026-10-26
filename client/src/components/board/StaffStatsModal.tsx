@@ -18,6 +18,9 @@ import {
   CheckCircle2,
   ShieldCheck,
   Loader2,
+  TrendingUp,
+  Target,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -81,18 +84,29 @@ export function StaffStatsModal({
   therapistId,
   date,
 }: StaffStatsModalProps) {
-  const [activeTab, setActiveTab] = useState<"schedule" | "absences" | "details">("schedule");
+  const [activeTab, setActiveTab] = useState<"schedule" | "productivity" | "absences" | "details">("schedule");
 
   const { data: stats, isLoading } = trpc.therapists.getStats.useQuery(
     { therapistId: therapistId!, date },
     { enabled: open && therapistId !== null }
   );
 
+  const { data: productivity, isLoading: isProductivityLoading, error: productivityError } = trpc.therapists.getProductivityForTherapist.useQuery(
+    { therapistId: therapistId!, date },
+    { enabled: open && therapistId !== null }
+  );
+
+  const STATUS_META = {
+    exceeding: { label: "At or above target", className: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+    near_target: { label: "Near target", className: "bg-amber-50 text-amber-700 border-amber-200" },
+    under_target: { label: "Below target", className: "bg-rose-50 text-rose-700 border-rose-200" },
+  } as const;
+
   if (!open) return null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="sm:max-w-2xl glass-panel p-6 rounded-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-2xl glass-panel p-6 rounded-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader className="mb-2 text-left">
           {isLoading || !stats ? (
             <div className="flex flex-col items-center justify-center py-12 text-slate-400">
@@ -104,7 +118,7 @@ export function StaffStatsModal({
               <div className="flex items-center gap-3.5">
                 <div
                   className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-white font-black text-sm shadow-md border border-white/20"
-                  style={{ backgroundColor: stats.therapist.color }}
+                  style={{ backgroundColor: `hsl(${stats.therapist.color}, 80%, 45%)` }}
                 >
                   {stats.therapist.therapyType}
                 </div>
@@ -169,7 +183,7 @@ export function StaffStatsModal({
                     <div className="w-full h-1.5 rounded-full bg-sky-200/60 mt-1.5 overflow-hidden">
                       <div
                         className="h-full bg-sky-600 rounded-full transition-all"
-                        style={{ width: `${stats.week.productivityPct}%` }}
+                        style={{ width: `${Math.min(100, stats.week.productivityPct)}%` }}
                       />
                     </div>
                   </div>
@@ -177,7 +191,7 @@ export function StaffStatsModal({
 
                 <div className="p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200/60 flex flex-col justify-between shadow-2xs hover:shadow-xs transition-all">
                   <div className="flex items-center justify-between text-emerald-800 text-xs font-bold">
-                    <span>Attendance Rate</span>
+                    <span>90-Day Attendance</span>
                     <UserCheck className="h-4 w-4 text-emerald-500" />
                   </div>
                   <div className="mt-2.5">
@@ -213,6 +227,17 @@ export function StaffStatsModal({
                   )}
                 >
                   Today&apos;s Schedule ({stats.today.sessionCount})
+                </button>
+                <button
+                  onClick={() => setActiveTab("productivity")}
+                  className={cn(
+                    "px-3.5 py-1.5 text-xs font-extrabold rounded-xl transition-all cursor-pointer",
+                    activeTab === "productivity"
+                      ? "bg-sky-600 text-white shadow-md shadow-sky-500/20"
+                      : "bg-slate-100/80 text-slate-600 hover:bg-slate-200/60"
+                  )}
+                >
+                  Productivity
                 </button>
                 <button
                   onClick={() => setActiveTab("absences")}
@@ -277,6 +302,79 @@ export function StaffStatsModal({
                       </div>
                     ))
                   )}
+                </div>
+              )}
+
+              {/* Tab: Productivity -- own numbers plus anonymous department context, never named peers */}
+              {activeTab === "productivity" && (
+                <div className="mt-3 space-y-3">
+                  {isProductivityLoading ? (
+                    <div className="flex flex-col items-center justify-center py-10 text-slate-400">
+                      <Loader2 className="h-6 w-6 animate-spin text-sky-500 mb-2" />
+                      <span className="text-xs font-semibold">Loading productivity…</span>
+                    </div>
+                  ) : productivityError ? (
+                    <div className="flex flex-col items-center justify-center py-10 text-center bg-slate-50 rounded-xl border border-slate-100">
+                      <AlertTriangle className="h-6 w-6 text-amber-500 mb-2" />
+                      <p className="text-xs font-semibold text-slate-600">{productivityError.message}</p>
+                    </div>
+                  ) : productivity ? (
+                    <>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                          {productivity.reportingState === "final" ? "Final" : productivity.reportingState === "future" ? "Future date" : "In progress"}
+                        </span>
+                        <span className={cn(
+                          "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-bold border",
+                          STATUS_META[productivity.me.status].className,
+                        )}>
+                          {STATUS_META[productivity.me.status].label}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="p-3.5 rounded-xl bg-sky-50/70 border border-sky-200/60">
+                          <div className="flex items-center justify-between text-sky-800 text-xs font-bold">
+                            <span>Your Productivity</span>
+                            <TrendingUp className="h-4 w-4 text-sky-500" />
+                          </div>
+                          <div className="mt-2">
+                            <span className="text-2xl font-black text-slate-900 tabular-nums">{productivity.me.productivityRate}%</span>
+                            <p className="text-[11px] font-semibold text-slate-500 mt-0.5">
+                              Projected: {productivity.me.projectedProductivityRate}%
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200/60">
+                          <div className="flex items-center justify-between text-emerald-800 text-xs font-bold">
+                            <span>Billable Minutes</span>
+                            <Target className="h-4 w-4 text-emerald-500" />
+                          </div>
+                          <div className="mt-2">
+                            <span className="text-2xl font-black text-slate-900 tabular-nums">{productivity.me.capturedBillableMinutes}</span>
+                            <span className="text-xs font-bold text-slate-500 ml-1">/ {productivity.me.targetBillableMinutes}m target</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 text-xs space-y-2">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">How you compare (anonymous, department-wide)</p>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-500 font-semibold">Benchmark target</span>
+                          <span className="font-extrabold text-slate-800">{productivity.benchmarkPercent}%</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-500 font-semibold">Department average</span>
+                          <span className="font-extrabold text-slate-800">{productivity.department.averageProductivityRate}%</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-500 font-semibold">{productivity.me.therapyType} discipline average</span>
+                          <span className="font-extrabold text-slate-800">{productivity.disciplineAverage.averageProductivityRate}%</span>
+                        </div>
+                      </div>
+                    </>
+                  ) : null}
                 </div>
               )}
 

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { usePermissions } from "@/_core/hooks/usePermissions";
 import { format } from "date-fns";
 import { trpc } from "@/lib/trpc";
 import {
@@ -30,6 +31,7 @@ const SOURCE_META: Record<string, { label: string; icon: typeof Repeat; classNam
 };
 
 export function WeekendStaffingModal({ open, onOpenChange, referenceDate }: WeekendStaffingModalProps) {
+  const { canEdit } = usePermissions();
   const [activeDayIndex, setActiveDayIndex] = useState(0);
 
   const utils = trpc.useUtils();
@@ -70,7 +72,7 @@ export function WeekendStaffingModal({ open, onOpenChange, referenceDate }: Week
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="sm:max-w-2xl glass-panel p-6 rounded-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-2xl glass-panel p-6 rounded-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader className="mb-2 text-left">
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -84,7 +86,7 @@ export function WeekendStaffingModal({ open, onOpenChange, referenceDate }: Week
             <Button
               size="sm"
               className="h-8 shrink-0 bg-sky-600 text-white font-bold hover:bg-sky-700"
-              disabled={autoAssign.isPending || isLoading}
+              disabled={!canEdit || autoAssign.isPending || isLoading}
               onClick={() => autoAssign.mutate({ referenceDate })}
             >
               {autoAssign.isPending ? (
@@ -158,6 +160,7 @@ export function WeekendStaffingModal({ open, onOpenChange, referenceDate }: Week
                               ) : (
                                 <Checkbox
                                   checked={entry.working}
+                                  disabled={!canEdit}
                                   onCheckedChange={(checked) =>
                                     setOverride.mutate({ therapistId: entry.therapistId, date: new Date(day!.date), working: !!checked })
                                   }
@@ -174,7 +177,7 @@ export function WeekendStaffingModal({ open, onOpenChange, referenceDate }: Week
                               <span className={cn("inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-micro font-bold", meta.className)}>
                                 <Icon className="h-2.5 w-2.5" /> {entry.rotationLabel && entry.source === "rotation" ? entry.rotationLabel : meta.label}
                               </span>
-                              {entry.source === "override" && (
+                              {entry.source === "override" && canEdit && (
                                 <button
                                   type="button"
                                   title="Reset to computed default"

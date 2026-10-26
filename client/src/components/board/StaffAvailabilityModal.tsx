@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { usePermissions } from "@/_core/hooks/usePermissions";
 import {
   Dialog,
   DialogContent,
@@ -120,8 +121,11 @@ export function StaffAvailabilityModal({
   initialDayIndex = 1, // Mon default
   onSuccess,
 }: StaffAvailabilityModalProps) {
+  const { isAdmin, isTeamLead } = usePermissions();
+  const canSave = isAdmin || isTeamLead;
   const [selectedDay, setSelectedDay] = useState<number>(initialDayIndex);
   const [schedule, setSchedule] = useState<WeeklyAvailability>(() => buildDefaultSchedule(therapist));
+  const [email, setEmail] = useState(therapist?.email ?? "");
 
   const utils = trpc.useUtils();
 
@@ -129,6 +133,7 @@ export function StaffAvailabilityModal({
     if (therapist && open) {
       setSchedule(buildDefaultSchedule(therapist));
       setSelectedDay(initialDayIndex);
+      setEmail(therapist.email ?? "");
     }
   }, [therapist, open, initialDayIndex]);
 
@@ -242,6 +247,7 @@ export function StaffAvailabilityModal({
 
     updateTherapist.mutate({
       id: therapist.id,
+      email: email.trim() || null,
       workDays: activeDayIndices,
       workStartTime: activeDayIndices.length > 0 ? minStart : null,
       workEndTime: activeDayIndices.length > 0 ? maxEnd : null,
@@ -251,12 +257,12 @@ export function StaffAvailabilityModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="sm:max-w-xl glass-panel p-6 rounded-2xl max-h-[92vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-xl glass-panel p-6 rounded-2xl max-h-[92vh] overflow-y-auto">
         <DialogHeader className="mb-4 text-left">
           <div className="flex items-center gap-3">
             <div
               className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-white font-black text-sm shadow-md border border-white/20"
-              style={{ backgroundColor: therapist.color || "#0ea5e9" }}
+              style={{ backgroundColor: therapist.color ? `hsl(${therapist.color}, 80%, 45%)` : "#0ea5e9" }}
             >
               {therapist.therapyType}
             </div>
@@ -273,6 +279,18 @@ export function StaffAvailabilityModal({
         </DialogHeader>
 
         <div className="space-y-5">
+          {/* Email */}
+          <div className="space-y-1.5">
+            <Label className="text-xs font-bold text-slate-600">Email</Label>
+            <Input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@example.com"
+              className="h-10 rounded-xl text-sm bg-slate-50/80 border-slate-200"
+            />
+          </div>
+
           {/* Day Selector Header Bar */}
           <div>
             <Label className="text-xs font-extrabold uppercase tracking-wider text-slate-400 mb-2 block">
@@ -482,14 +500,16 @@ export function StaffAvailabilityModal({
           >
             Cancel
           </Button>
-          <Button
-            type="button"
-            disabled={updateTherapist.isPending}
-            onClick={handleSave}
-            className="bg-sky-600 hover:bg-sky-700 text-white font-extrabold rounded-xl px-6 shadow-sm"
-          >
-            {updateTherapist.isPending ? "Saving..." : "Save Availability"}
-          </Button>
+          {canSave && (
+            <Button
+              type="button"
+              disabled={updateTherapist.isPending}
+              onClick={handleSave}
+              className="bg-sky-600 hover:bg-sky-700 text-white font-extrabold rounded-xl px-6 shadow-sm"
+            >
+              {updateTherapist.isPending ? "Saving..." : "Save Availability"}
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>

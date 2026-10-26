@@ -1,11 +1,24 @@
 import { memo } from "react";
 import { Button } from "@/components/ui/button";
-import { Users, UserRound, ClipboardList, Clock, BarChart3, Bot, Sparkles } from "lucide-react";
+import { Users, UserRound, ClipboardList, Clock, BarChart3, Sparkles, MoreHorizontal } from "lucide-react";
+import { BrandLogo } from "@/components/BrandLogo";
+import UserMenu from "@/components/UserMenu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface NavAction {
   label: string;
   icon: typeof Users;
   onClick: () => void;
+  badgeCount?: number;
+}
+
+export interface MoreAction extends NavAction {
+  destructive?: boolean;
 }
 
 /**
@@ -13,62 +26,89 @@ interface NavAction {
  * Mins/Data) and the "Ask PAMi" CTA. Split out of BoardHeader -- this part of the header never
  * reads filter/date/status state, so it doesn't need to re-render when any of that changes.
  */
-function CommandBarImpl({ actions, onAskPami }: { actions: NavAction[]; onAskPami: () => void }) {
+function CommandBarImpl({
+  actions,
+  moreActions,
+  onAskPami,
+}: {
+  actions: NavAction[];
+  moreActions: MoreAction[];
+  onAskPami?: () => void;
+}) {
   return (
-    <div className="relative flex flex-wrap items-center justify-between px-4 py-3 sm:px-6 bg-gradient-to-r from-blue-800 via-sky-600 to-blue-800 text-blue-50 min-h-[88px] shadow-md border-b border-blue-700/50">
+    <div className="relative flex min-h-[68px] items-center justify-between gap-3 border-b border-blue-700 bg-gradient-to-r from-blue-800 via-blue-700 to-sky-600 px-3 py-2 text-blue-50 shadow-md sm:px-6">
       {/* Left: Logo */}
-      <div className="flex shrink-0 items-center gap-4 w-1/3 group cursor-default">
-        <div className="relative flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-400 via-blue-600 to-sky-600 shadow-glow-lg border border-white/20 overflow-hidden transition-all duration-500 group-hover:shadow-glow-lg-hover group-hover:-translate-y-0.5">
-          <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent mix-blend-overlay" />
-          <div className="absolute top-0 left-0 w-full h-1/2 bg-gradient-to-b from-white/30 to-transparent" />
-          <svg viewBox="0 0 24 24" className="relative z-10 h-7 w-7 text-white drop-shadow-[0_2px_5px_rgba(0,0,0,0.4)] transform transition-transform duration-500 group-hover:scale-110 group-hover:rotate-3" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <polygon points="12 3 3 8 12 13 21 8 12 3" fill="currentColor" fillOpacity="0.25" />
-            <polyline points="3 13 12 18 21 13" />
-            <polyline points="3 18 12 23 21 18" />
-          </svg>
+      <div className="flex min-w-0 shrink-0 items-center gap-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600">
+          <BrandLogo className="h-6 w-6 text-white" />
         </div>
         <div className="hidden flex-col leading-none sm:flex">
-          <span className="text-[20px] font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-blue-200 drop-shadow-sm">PAM</span>
-          <span className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-blue-300 mt-1 opacity-90">Rehab Scheduler</span>
+          <span className="text-lg font-bold tracking-tight text-white">MinuteMinder</span>
+          <span className="mt-1 text-xs font-semibold text-slate-300">Rehab scheduling</span>
         </div>
       </div>
 
       {/* Right: Global Actions */}
-      <div className="flex items-center justify-end gap-2.5 w-1/3 ml-auto">
-        {actions.map(({ label, icon: Icon, onClick }) => (
+      <div className="ml-auto flex min-w-0 items-center justify-end gap-1 sm:gap-2">
+        {actions.map(({ label, icon: Icon, onClick, badgeCount }) => (
           <Button
             key={label}
             variant="ghost"
             size="sm"
             aria-label={label}
-            className="h-10 rounded-full px-3 xl:px-4 font-medium text-blue-100 hover:bg-blue-500/20 hover:text-white transition-all"
+            className="relative h-11 shrink-0 rounded-lg px-2.5 font-semibold text-blue-50 hover:bg-blue-500/30 hover:text-white sm:px-3"
             onClick={onClick}
           >
-            <Icon className="xl:mr-2 h-4.5 w-4.5" />
-            <span className="hidden xl:inline text-sm">{label}</span>
+            <Icon className="h-5 w-5 lg:mr-2" />
+            <span className="hidden text-sm lg:inline">{label}</span>
+            {!!badgeCount && (
+              <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-blue-700 bg-rose-500 px-1 text-[10px] font-black leading-none text-white shadow-sm" aria-label={`${badgeCount} unread staff items`}>
+                {badgeCount > 9 ? "9+" : badgeCount}
+              </span>
+            )}
           </Button>
         ))}
 
-        <div className="mx-1.5 h-6 w-[1px] bg-blue-500/20" />
-
-        <Button
+        {onAskPami && <Button
           variant="ghost"
           size="sm"
           aria-label="Ask PAMi"
-          className="group relative h-10 overflow-hidden rounded-full px-3 xl:px-6 font-extrabold text-white transition-all duration-500 hover:scale-105 hover:shadow-glow-md"
+          className="h-11 shrink-0 rounded-lg border border-white/70 bg-white px-2.5 font-bold text-blue-800 shadow-sm hover:bg-blue-50 hover:text-blue-950 sm:px-3"
           onClick={onAskPami}
         >
-          {/* Animated Gradient Background */}
-          <div className="absolute inset-0 bg-gradient-to-r from-sky-500 via-blue-600 to-blue-700 bg-[length:200%_auto] animate-[gradient_3s_ease_infinite]" />
-          
-          {/* Glow overlay on hover */}
-          <div className="absolute inset-0 opacity-0 group-hover:opacity-100 bg-white/20 transition-opacity duration-300" />
-          
-          <div className="relative flex items-center z-10">
-            <Sparkles className="xl:mr-2 h-4 w-4 text-white drop-shadow-sm animate-pulse" />
-            <span className="hidden xl:inline text-sm tracking-wide drop-shadow-sm">Ask PAMi</span>
+          <div className="flex items-center">
+            <Sparkles className="h-5 w-5 text-blue-600 lg:mr-2" />
+            <span className="hidden text-sm lg:inline">Ask PAMi</span>
           </div>
-        </Button>
+        </Button>}
+
+        {moreActions.length > 0 && <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="More tools"
+              className="h-11 shrink-0 rounded-lg px-2.5 font-semibold text-blue-50 hover:bg-blue-500/30 hover:text-white sm:px-3"
+            >
+              <MoreHorizontal className="h-5 w-5 lg:mr-2" />
+              <span className="hidden text-sm lg:inline">More</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-64 border-slate-200 bg-white p-1.5 shadow-xl">
+            {moreActions.map(({ label, icon: Icon, onClick, destructive }) => (
+              <DropdownMenuItem
+                key={label}
+                onClick={onClick}
+                className={destructive ? "min-h-10 cursor-pointer text-rose-700" : "min-h-10 cursor-pointer text-slate-700"}
+              >
+                <Icon className="mr-3 h-4 w-4" />
+                <span className="text-sm font-medium">{label}</span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>}
+
+        <UserMenu inline />
       </div>
     </div>
   );

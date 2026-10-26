@@ -2,6 +2,7 @@ import { ChevronRight, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TIME_SLOTS } from "@/lib/board";
 import type { Patient } from "../../../../../drizzle/schema";
+import { usePermissions } from "@/_core/hooks/usePermissions";
 
 const SLOT_WIDTH = 72;
 
@@ -25,16 +26,17 @@ export function TeamHeaderRow({
   onToggle,
   onAddPatient,
 }: TeamHeaderRowProps) {
+  const { isAdmin } = usePermissions();
   return (
     <div 
-      className="sticky top-[44px] z-25 flex h-10 items-stretch border-b border-slate-200 bg-slate-100/90 text-slate-800 backdrop-blur-sm"
+      className="sticky top-0 z-20 flex h-10 items-stretch border-b border-slate-200 bg-slate-100/95 text-slate-800 shadow-sm backdrop-blur-sm"
       style={{ 
         borderTop: `3px solid ${section.color}`,
       }}
     >
-      {/* 1. Primary Sticky Team Label (matching PATIENT / ROOM column, width 288px = w-72) */}
+      {/* 1. Primary Sticky Team Label */}
       <div
-        className="sticky left-0 z-30 flex h-full w-72 shrink-0 items-center justify-between gap-2 border-r border-slate-200 px-3.5 bg-slate-100 shadow-[2px_0_10px_-3px_rgba(0,0,0,0.04)]"
+        className="sticky left-0 z-30 flex h-full w-52 shrink-0 items-center justify-between gap-2 border-r border-slate-200 bg-slate-100 px-2.5 shadow-[2px_0_10px_-3px_rgba(0,0,0,0.04)] sm:w-72 sm:px-3.5"
       >
         <button
           onClick={() => onToggle(section.id)}
@@ -44,10 +46,10 @@ export function TeamHeaderRow({
             className="h-3.5 w-1.5 shrink-0 rounded-full"
             style={{ backgroundColor: section.color }}
           />
-          <span className="text-xs font-extrabold text-slate-900 tracking-tight truncate">{section.name}</span>
+          <span className="min-w-0 text-xs font-extrabold text-slate-900 tracking-tight truncate">{section.name}</span>
           <span className="rounded-full px-2 py-0.5 text-[10px] font-extrabold text-white shadow-xs shrink-0"
             style={{ backgroundColor: section.color }}>
-            {section.patients.length}
+            {section.patients.filter((patient) => !patient.isRoomPlaceholder).length}
           </span>
           {sectionSessionCount > 0 && (
             <span className="text-[10px] text-slate-500 font-semibold truncate">{sectionSessionCount} session{sectionSessionCount !== 1 ? "s" : ""} today</span>
@@ -58,18 +60,19 @@ export function TeamHeaderRow({
         </button>
       </div>
 
-      {/* 2. Secondary Sticky EOW Button Cell (matching EOW column, width 44px = w-11, left: 288px) */}
+      {/* 2. Secondary Sticky EOW Button Cell */}
       <div
-        className="sticky z-30 flex h-full w-11 shrink-0 items-center justify-center border-r border-slate-200 bg-slate-100 shadow-[2px_0_10px_-3px_rgba(0,0,0,0.04)]"
-        style={{ left: 288 }}
+        className="sticky left-52 z-30 flex h-full w-9 shrink-0 items-center justify-center border-r border-slate-200 bg-slate-100 shadow-[2px_0_10px_-3px_rgba(0,0,0,0.04)] sm:left-72 sm:w-11"
       >
-        <button
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md hover:bg-slate-200 transition-colors text-slate-500 hover:text-slate-700"
-          title={`Add patient to ${section.name}`}
-          onClick={() => onAddPatient(section.id)}
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
+        {isAdmin && (
+          <button
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md hover:bg-slate-200 transition-colors text-slate-500 hover:text-slate-700"
+            title={`Add patient to ${section.name}`}
+            onClick={() => onAddPatient(section.id)}
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
 
       {/* 3. Scrollable Time Slots Track */}

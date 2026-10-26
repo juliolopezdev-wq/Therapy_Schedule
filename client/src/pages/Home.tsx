@@ -20,7 +20,7 @@ const FEATURES = [
   {
     icon: LayoutGrid,
     title: "Clinical Time-Grid",
-    body: "A structured 7 AM – 5 PM workspace in 30-minute intervals. Track patients, room numbers, and clinicians instantly.",
+    body: "A structured 7 AM – 6 PM workspace in 30-minute intervals. Track patients, room numbers, and clinicians instantly.",
   },
   {
     icon: Move,
@@ -49,8 +49,8 @@ const FEATURES = [
   },
   {
     icon: History,
-    title: "Daily Audit Ledger",
-    body: "Take snapshot backups of the board. Browse complete historical logs for progress auditing.",
+    title: "Saved Board Records",
+    body: "Capture point-in-time schedule records, preserve revisions, and review or print them later.",
   },
   {
     icon: Smartphone,
@@ -72,7 +72,7 @@ export default function Home() {
               </svg>
             </div>
             <div className="flex flex-col leading-none">
-              <span className="text-base font-extrabold tracking-tight text-slate-900">PAM Rehabilitation Scheduling</span>
+              <span className="text-base font-extrabold tracking-tight text-slate-900">MinuteMinder</span>
               <span className="text-[9px] font-bold uppercase tracking-[0.16em] text-blue-700">Rehabilitation Scheduling</span>
             </div>
           </div>
@@ -244,7 +244,7 @@ export default function Home() {
         {/* CTA */}
         <div className="mt-16 overflow-hidden rounded-xl bg-gradient-to-br from-blue-800 to-blue-950 px-8 py-14 text-center shadow-lg">
           <h2 className="text-3xl font-extrabold tracking-tight text-white">
-            Ready to transition to PAM Rehabilitation Scheduling?
+            Ready to transition to MinuteMinder?
           </h2>
           <p className="mx-auto mt-4 max-w-lg text-blue-100/90 text-sm leading-relaxed">
             Open the scheduling dashboard now. We have pre-populated a suite of sample patient profiles, care plans, and sessions to let you explore the flow.
@@ -258,7 +258,7 @@ export default function Home() {
       </section>
 
       <footer className="border-t border-slate-200 py-10 text-center text-xs font-semibold text-slate-400">
-        PAM Rehabilitation Scheduling Operations Management System · Secure Rehabilitation Scheduling
+        MinuteMinder · Rehabilitation Scheduling Operations Management System · Secure Rehabilitation Scheduling
       </footer>
     </div>
   );

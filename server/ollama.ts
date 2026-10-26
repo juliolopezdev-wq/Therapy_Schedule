@@ -31,6 +31,9 @@ import {
 import { formatWeekRangeLabel, isMissedStatus, WeeklyMinutesSummary } from "../shared/weekUtils";
 import { assessActionRisk, isTeamShortStaffed, type RiskContext } from "./riskAssessment";
 import { getLearnedPreferencesContext } from "./preferenceLearning";
+import type { TherapyType } from "../shared/therapyTypes";
+
+type SchedulableTherapyType = Exclude<TherapyType, "Block">;
 
 /* ========================================================================== */
 /* THE PROMPT                                                                  */
@@ -54,15 +57,15 @@ A patient on Medical Hold cannot receive therapy right now -- never suggest sche
 WHO CAN SEE WHOM
 Therapists are grouped into teams, and each patient belongs to one team. A therapist can technically treat anyone, but normally only treats patients on their own team -- that's the coverage rule staff care about. When asked who can see or cover a patient, answer with therapists on that patient's team first. Only suggest an off-team therapist if the roster shows nobody on-team is free, and say so explicitly when you do (e.g. "nobody on Team 2 is open Thursday, but Alex from Team 1 is free at 10am").
 
-CONCURRENT / GROUP MINUTE CAP
-PDPM caps combined concurrent + group minutes at 25% of a patient's total minutes per discipline per week. When booking or moving a session with delivery mode "concurrent" or "group", the tool result will tell you if that patient's discipline is now over the cap -- if so, warn the user plainly (don't silently place it, and don't refuse to place it either; it's a warning, not a block).
+CONCURRENT / GROUP MIX REVIEW
+This is an IRF. Treatment should be predominantly individual. When booking or moving a concurrent/group session, the tool result warns if non-individual minutes reach 50% of that discipline's weekly minutes. Surface the warning plainly, but do not block the booking.
 
 DOUBLE-BOOKING IS BLOCKED, NOT JUST WARNED
 The system will not let you create or move a session on top of another session for the same patient, or the same therapist (unless every overlapping session involved is concurrent/group -- that's a legitimate shared slot, not a conflict). If a write tool fails for this reason, its error will name exactly who's double-booked and with what; read it and offer the closest real open alternative instead of retrying the same time. Bulk tools (auto_schedule_all_gaps, auto_schedule_patient_gaps, copy_day_to_next_day, copy_patient_sessions_to_next_day, transfer_patient_sessions_to_next_day) skip individual conflicts rather than failing the whole batch -- their result includes a skippedConflicts count; if it's non-zero, tell the user plainly how many were skipped and that those specific gaps still need a manual look, don't just report the successful count.
 
 YOUR JOB, IN ORDER OF PRIORITY
 1. Surface what needs attention first, even if not asked directly: patients behind on minutes -- especially anyone "at risk" -- any Joint Commission care gaps (0 minutes in the last 48 hours, excluding Medical Hold; each gap lists exactly how many days it's actually been, so treat a 2-day gap and a 9-day gap with different urgency, don't flatten them into one bucket), any concentration of missed sessions by reason (a staffing-driven pattern is different from a refusal pattern), and any day a team has nobody free. Also lead with these when present, unprompted, the same way: a REFUSAL PATTERN (a specific, data-backed suggestion -- pass it along, don't just say "this patient refuses sometimes"), any session in NEEDS A STATUS UPDATE (it already happened -- staff should mark it completed/missed so the numbers above stay accurate), and a therapist whose productivity is notably low (lots of open capacity, worth reassigning gap-fill toward them) or notably high (over ~95%, at risk of being overloaded).
-2. Recommend specific, concrete fixes: which patient, which therapist, what time, how many minutes. Never give vague advice like "schedule more sessions." If a GROUP THERAPY OPPORTUNITY is listed and relevant, suggest it by name (which patients, which discipline) instead of only individual slots -- it's real therapist-time savings within PDPM's 25% concurrent/group allowance.
+2. Recommend specific, concrete fixes: which patient, which therapist, what time, how many minutes. Never give vague advice like "schedule more sessions." If a GROUP THERAPY OPPORTUNITY is listed and relevant, suggest it by name (which patients, which discipline) instead of only individual slots, while keeping treatment predominantly individual.
 3. When asked to actually do something (add, move, cancel a session, or auto-fill every gap), use your tools to make the real change, then confirm exactly what changed.
 4. Stay grounded in this unit's actual numbers. Cite room numbers/names, exact times, and minutes whenever you reference a patient or slot.
 
@@ -197,13 +200,13 @@ const TOOLS = [
         properties: {
           patientId: { type: "integer" },
           therapistId: { type: "integer" },
-          therapyType: { type: "string", enum: ["PT", "OT", "SLP", "Eval"] },
+          therapyType: { type: "string", enum: ["PT", "OT", "SLP", "PT Eval", "OT Eval", "SLP Eval"] },
           startTime: { type: "string", description: "ISO 8601 datetime, e.g. 2026-06-18T09:00:00" },
           durationMinutes: { type: "integer" },
           deliveryMode: {
             type: "string",
             enum: ["individual", "concurrent", "group"],
-            description: "Defaults to individual. If concurrent or group, the result will flag whether this pushes the patient's discipline over the 25% PDPM cap.",
+            description: "Defaults to individual. If concurrent or group, the result will flag when non-individual care reaches 50% of the discipline's weekly minutes for IRF review.",
           },
           confirmed: { type: "boolean", description: "Set true only after the user has explicitly confirmed a needsConfirmation response from a prior call with the same arguments." },
         },
@@ -252,12 +255,12 @@ const TOOLS = [
     function: {
       name: "get_delivery_mode_mix",
       description:
-        "Check what percentage of a patient's minutes in a given discipline this week were delivered concurrently or in a group, against the 25% PDPM cap. Use before recommending or booking a concurrent/group session, or when asked about mix/cap compliance.",
+        "Check what percentage of a patient's weekly discipline minutes are concurrent or group. In this IRF, warn when non-individual care reaches 50% because treatment should remain predominantly individual.",
       parameters: {
         type: "object",
         properties: {
           patientId: { type: "integer" },
-          therapyType: { type: "string", enum: ["PT", "OT", "SLP", "Eval"] },
+          therapyType: { type: "string", enum: ["PT", "OT", "SLP", "PT Eval", "OT Eval", "SLP Eval"] },
         },
         required: ["patientId", "therapyType"],
       },
@@ -424,10 +427,10 @@ export async function buildSchedulerContext(referenceDate: Date = new Date()): P
   lines.push(
     `Therapy Breakdown: PT: ${analytics.therapyBreakdown.PT} min, OT: ${analytics.therapyBreakdown.OT} min, SLP: ${analytics.therapyBreakdown.SLP} min, Eval: ${analytics.therapyBreakdown.Eval} min`,
   );
-  lines.push("Therapist Utilization & Productivity (scheduled min / available shift min, past 7 days; SNF rehab typically targets ~90-95%):");
+  lines.push("IRF Therapist Productivity (completed min / available shift min, past 7 days; unit target: 81%):");
   analytics.therapistUtilization.forEach((t) =>
     lines.push(
-      `- ${t.name}: ${t.scheduledMinutes} min scheduled / ${t.availableMinutes} min available` +
+      `- ${t.name}: ${t.capturedMinutes} min completed / ${t.availableMinutes} min available` +
         (t.productivityPct == null ? " (no shift hours in this window)" : ` — ${t.productivityPct}% productivity`),
     ),
   );
@@ -570,17 +573,17 @@ interface ToolCall {
   function: { name: string; arguments: Record<string, unknown> };
 }
 
-/** Warn (never block) when a just-booked concurrent/group session pushes a discipline over the 25% PDPM cap. */
+/** Warn (never block) when non-individual IRF treatment is no longer the minority. */
 async function checkConcurrentGroupCap(
   patientId: number,
-  therapyType: "PT" | "OT" | "SLP" | "Eval",
+  therapyType: SchedulableTherapyType,
   deliveryMode: "individual" | "concurrent" | "group",
   referenceDate: Date,
 ): Promise<string | null> {
   if (deliveryMode === "individual") return null;
   const mix = await getDeliveryModeMix(patientId, therapyType, referenceDate);
   if (!mix.overCap) return null;
-  return `Warning: patient ${patientId}'s ${therapyType} minutes are now ${mix.pct}% concurrent/group this week, over the 25% PDPM cap (${mix.concurrentGroupMinutes}/${mix.totalMinutes} min).`;
+  return `Warning: patient ${patientId}'s ${therapyType} minutes are now ${mix.pct}% concurrent/group this week (${mix.concurrentGroupMinutes}/${mix.totalMinutes} min). Review the IRF plan because treatment should remain predominantly individual.`;
 }
 
 /**
@@ -820,7 +823,7 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
         const durationMinutes = Number(args.durationMinutes);
         const endTime = new Date(startTime.getTime() + durationMinutes * 60_000);
         const patientId = Number(args.patientId);
-        const therapyType = String(args.therapyType) as "PT" | "OT" | "SLP" | "Eval";
+        const therapyType = String(args.therapyType) as SchedulableTherapyType;
         const deliveryMode = (args.deliveryMode ? String(args.deliveryMode) : "individual") as
           | "individual"
           | "concurrent"
@@ -1043,7 +1046,7 @@ async function executeTool(call: ToolCall, referenceDate: Date): Promise<string>
       case "get_delivery_mode_mix": {
         const mix = await getDeliveryModeMix(
           Number(args.patientId),
-          String(args.therapyType) as "PT" | "OT" | "SLP" | "Eval",
+          String(args.therapyType) as SchedulableTherapyType,
           referenceDate,
         );
         return JSON.stringify(mix);
@@ -1195,15 +1198,15 @@ async function runToolLoop(
     };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
+    console.error(`[PAMi] Scheduling assistant unavailable: ${reason}`);
+    const completedChanges = actionsTaken.length > 0;
     return {
-      answer:
-        `Couldn't reach Ollama at ${OLLAMA_BASE_URL} (${reason}). ` +
-        `Run "ollama serve" and "ollama pull ${OLLAMA_MODEL}" on this machine, then try again. ` +
-        `(Use a tool-calling model -- llama3.1 or qwen2.5 -- so the assistant can actually look things up and make changes.)\n\n` +
-        `In the meantime, here's the raw scheduling data:\n\n${fallbackContext}`,
+      answer: completedChanges
+        ? "PAMi lost its connection after completing the changes listed below. Review them on the board before sending another request."
+        : "PAMi is temporarily unavailable, so I couldn't safely review or change the schedule. No changes were made. Try again in a moment, or continue using the board manually.",
       model: OLLAMA_MODEL,
       usedFallback: true,
-      actionsTaken: [],
+      actionsTaken,
     };
   }
 }

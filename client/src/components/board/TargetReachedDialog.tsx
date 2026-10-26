@@ -24,6 +24,7 @@ interface TargetReachedDialogProps {
   patientName: string;
   target: number;
   totalMinutes: number;
+  completedMinutes: number;
   weekSessions: WeekSessionRow[];
 }
 
@@ -77,6 +78,7 @@ export function TargetReachedDialog({
   patientName,
   target,
   totalMinutes,
+  completedMinutes,
   weekSessions,
 }: TargetReachedDialogProps) {
   const overBy = totalMinutes - target;
@@ -98,10 +100,10 @@ export function TargetReachedDialog({
             </div>
             <div>
               <DialogTitle className="text-base leading-snug">
-                {patientName} reached their weekly target
+                {patientName}&apos;s weekly plan reaches target
               </DialogTitle>
               <p className="mt-1 text-sm text-slate-500">
-                Review the schedule below to correct any over-scheduling.
+                Completed and upcoming minutes are separated below. Only future scheduled sessions are suggested for adjustment.
               </p>
             </div>
           </div>
@@ -114,16 +116,16 @@ export function TargetReachedDialog({
             <p className="mt-0.5 text-lg font-bold tabular-nums text-slate-700">{fmtHours(target)}</p>
           </div>
           <div className="text-center">
-            <p className="text-micro font-semibold uppercase tracking-widest text-slate-400">Scheduled</p>
-            <p className="mt-0.5 text-lg font-bold tabular-nums text-emerald-700">{fmtHours(totalMinutes)}</p>
+            <p className="text-micro font-semibold uppercase tracking-widest text-slate-400">Completed</p>
+            <p className="mt-0.5 text-lg font-bold tabular-nums text-emerald-700">{fmtHours(completedMinutes)}</p>
           </div>
           <div className="text-center">
-            <p className="text-micro font-semibold uppercase tracking-widest text-slate-400">Over by</p>
+            <p className="text-micro font-semibold uppercase tracking-widest text-slate-400">Projected</p>
             <p className={cn(
               "mt-0.5 text-lg font-bold tabular-nums",
               overBy > 0 ? "text-amber-600" : "text-emerald-600"
             )}>
-              {overBy > 0 ? `+${fmtHours(overBy)}` : "On target"}
+              {fmtHours(totalMinutes)}
             </p>
           </div>
         </div>
@@ -131,7 +133,7 @@ export function TargetReachedDialog({
         {/* Session list */}
         <div className="space-y-1.5">
           <p className="text-micro font-semibold uppercase tracking-widest text-slate-400">
-            Sessions this week ({patientSessions.length})
+            Adjustable scheduled sessions ({patientSessions.length})
           </p>
           <div className="max-h-48 space-y-1 overflow-y-auto rounded-lg border border-slate-200 p-1">
             {patientSessions.length === 0 ? (

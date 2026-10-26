@@ -8,12 +8,12 @@ import { cn } from "@/lib/utils";
 // structure with a different color swapped in.
 const VARIANTS = {
   amber: {
-    trigger: "text-amber-700 bg-gradient-to-br from-amber-50 to-amber-100 hover:from-amber-100 hover:to-amber-200 border-amber-200/50",
+    trigger: "text-amber-900 bg-amber-100 hover:bg-amber-200 border-amber-300",
     countBubble: "bg-amber-500",
     pulse: "",
   },
   rose: {
-    trigger: "text-rose-700 bg-gradient-to-br from-rose-50 to-rose-100 hover:from-rose-100 hover:to-rose-200 border-rose-200/50",
+    trigger: "text-rose-900 bg-rose-100 hover:bg-rose-200 border-rose-300",
     countBubble: "bg-rose-500",
     pulse: "animate-pulse",
   },
@@ -32,6 +32,7 @@ function StatusBadgeImpl({
   zeroLabel,
   popoverWidthClass = "w-80",
   popoverAlign = "end",
+  onClick,
   children,
 }: {
   count: number;
@@ -40,11 +41,12 @@ function StatusBadgeImpl({
   zeroLabel: string;
   popoverWidthClass?: string;
   popoverAlign?: "start" | "center" | "end";
-  children: ReactNode;
+  onClick?: () => void;
+  children?: ReactNode;
 }) {
   if (count === 0) {
     return (
-      <div className="flex items-center gap-1.5 text-[11px] font-bold tracking-wide text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-100 shadow-sm">
+      <div className="flex min-h-10 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-xs font-bold tracking-wide text-emerald-800">
         <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
         {zeroLabel}
       </div>
@@ -52,22 +54,34 @@ function StatusBadgeImpl({
   }
 
   const v = VARIANTS[variant];
+  const trigger = (
+    <button
+      aria-label={`${label}: ${count}. Open details.`}
+      onClick={onClick}
+      className={cn(
+        "group flex min-h-10 items-center gap-2 whitespace-nowrap rounded-lg border px-3 text-xs font-bold tracking-wide transition-colors",
+        v.trigger,
+        v.pulse,
+      )}
+    >
+      <span
+        className={cn(
+          "inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full px-1.5 text-[11px] font-black leading-none tabular-nums text-white shadow-inner",
+          v.countBubble,
+        )}
+      >
+        <span>{count}</span>
+      </span>
+      {label}
+    </button>
+  );
+
+  if (onClick) return trigger;
+
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button
-          aria-label={`${label}: ${count}. Open details.`}
-          className={cn(
-            "group flex items-center gap-1.5 text-[11px] font-bold tracking-wide px-3 py-1.5 rounded-full shadow-sm border transition-all hover:shadow-md",
-            v.trigger,
-            v.pulse,
-          )}
-        >
-          <span className={cn("flex h-4 w-4 items-center justify-center rounded-full text-white shadow-inner", v.countBubble)}>
-            <span className="text-[10px] font-black">{count}</span>
-          </span>
-          {label}
-        </button>
+        {trigger}
       </PopoverTrigger>
       <PopoverContent className={cn(popoverWidthClass, "p-0")} align={popoverAlign} sideOffset={8}>
         {children}

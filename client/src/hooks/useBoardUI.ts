@@ -21,6 +21,7 @@ export function useBoardUI() {
     patientName: string;
     target: number;
     totalMinutes: number;
+    completedMinutes: number;
     weekSessions: WeekSessionRow[];
   } | null>(null);
 

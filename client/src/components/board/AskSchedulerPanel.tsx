@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { usePermissions } from "@/_core/hooks/usePermissions";
 import {
   Sheet,
   SheetContent,
@@ -9,15 +10,28 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { trpc } from "@/lib/trpc";
-import { Bot, Send, Sparkles, CheckCircle2, Copy, Check, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Bot,
+  Check,
+  CheckCircle2,
+  ClipboardList,
+  Clock3,
+  Copy,
+  RefreshCw,
+  Send,
+  Sparkles,
+  Trash2,
+  Users,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { toast } from "sonner";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 interface AskSchedulerPanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  referenceDate: Date;
 }
 
 interface ChatEntry {
@@ -27,70 +41,122 @@ interface ChatEntry {
   actionsTaken: string[];
 }
 
+const MAX_QUESTION_LENGTH = 2_000;
+
 const SUGGESTED_PROMPTS = [
-  "Give me a full shift-start briefing.",
-  "Any refusal patterns or group therapy opportunities I should know about?",
-  "Which patients are at risk of missing target this week, and why?",
-  "Undo that.",
+  {
+    title: "Shift briefing",
+    description: "Risks, gaps, status updates, and priorities",
+    prompt: "Give me a concise shift-start briefing. Lead with anything that needs action today.",
+    icon: ClipboardList,
+  },
+  {
+    title: "Patients at risk",
+    description: "Weekly targets and specific shortfalls",
+    prompt: "Which patients are at risk of missing their weekly targets, why, and what specific openings could help?",
+    icon: AlertTriangle,
+  },
+  {
+    title: "Coverage review",
+    description: "Team capacity and overloaded staff",
+    prompt: "Review coverage for this board date. Which teams are thin, and who has capacity to help?",
+    icon: Users,
+  },
+  {
+    title: "Status cleanup",
+    description: "Sessions that still need documentation",
+    prompt: "Which past sessions still need a completed or missed status, and what should staff review first?",
+    icon: Clock3,
+  },
 ];
 
 function CopyAnswerButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  };
+
   return (
     <button
       type="button"
-      title="Copy answer"
-      onClick={async () => {
-        await navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      }}
-      className="shrink-0 rounded p-1 text-slate-300 opacity-0 transition-opacity hover:bg-slate-100 hover:text-slate-500 group-hover:opacity-100"
+      aria-label="Copy PAMi response"
+      title="Copy response"
+      onClick={copy}
+      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
     >
-      {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+      {copied ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
     </button>
   );
 }
 
-export function AskSchedulerPanel({ open, onOpenChange }: AskSchedulerPanelProps) {
+export function AskSchedulerPanel({ open, onOpenChange, referenceDate }: AskSchedulerPanelProps) {
+  const { canEdit } = usePermissions();
   const [question, setQuestion] = useState("");
   const [history, setHistory] = useState<ChatEntry[]>([]);
-  // Echoed the instant a question is sent, before the response lands -- otherwise the user has
-  // zero confirmation of what they asked while waiting (this can now take 10-20+ seconds).
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [lastFailedQuestion, setLastFailedQuestion] = useState<string | null>(null);
   const utils = trpc.useUtils();
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Bumped on every submit and on cancel, so a response that lands after the user gave up
-  // waiting on it doesn't silently append to history out of nowhere.
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const requestIdRef = useRef(0);
+  const ask = trpc.ai.ask.useMutation({
+    onSuccess: (result) => {
+      if ((result.actionsTaken ?? []).length === 0) return;
+      void utils.sessions.list.invalidate();
+      void utils.sessions.listForDateRange.invalidate();
+      void utils.weeklyMinutes.summary.invalidate();
+      void utils.gapFill.suggestions.invalidate();
+      void utils.digest.today.invalidate();
+    },
+  });
 
-  // Bare hook: all business logic lives in per-call options below (not the hook-level
-  // onSuccess/onError), so a cancelled/superseded request's eventual response can be told apart
-  // from the current one and discarded instead of unconditionally appending to history.
-  const ask = trpc.ai.ask.useMutation();
+  const dateLabel = useMemo(
+    () => referenceDate.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }),
+    [referenceDate],
+  );
+  const actionCount = history.reduce((total, entry) => total + entry.actionsTaken.length, 0);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [history.length, pendingQuestion]);
+  }, [history.length, pendingQuestion, errorMessage]);
 
-  const submit = (q: string) => {
-    const trimmed = q.trim();
-    if (!trimmed || pendingQuestion !== null) return;
+  useEffect(() => {
+    if (open && pendingQuestion === null) {
+      const timeout = window.setTimeout(() => textareaRef.current?.focus(), 150);
+      return () => window.clearTimeout(timeout);
+    }
+  }, [open, pendingQuestion]);
+
+  const submit = (value: string) => {
+    const trimmed = value.trim();
+    if (!canEdit || !trimmed || pendingQuestion !== null || trimmed.length > MAX_QUESTION_LENGTH) return;
+
     setQuestion("");
+    setErrorMessage(null);
+    setLastFailedQuestion(null);
     setPendingQuestion(trimmed);
-    const chatHistory = history.flatMap((h) => [
-      { role: "user" as const, content: h.question },
-      { role: "assistant" as const, content: h.answer },
+    const chatHistory = history.slice(-6).flatMap((entry) => [
+      { role: "user" as const, content: entry.question },
+      { role: "assistant" as const, content: entry.answer },
     ]);
-    const myRequestId = ++requestIdRef.current;
+    const requestId = ++requestIdRef.current;
+
     ask.mutate(
-      { question: trimmed, history: chatHistory },
+      { question: trimmed, referenceDate, history: chatHistory },
       {
         onSuccess: (result) => {
-          if (myRequestId !== requestIdRef.current) return; // cancelled or superseded -- discard
+          if (requestId !== requestIdRef.current) return;
           setPendingQuestion(null);
-          setHistory((h) => [
-            ...h,
+          setHistory((current) => [
+            ...current,
             {
               question: trimmed,
               answer: result.answer,
@@ -98,160 +164,224 @@ export function AskSchedulerPanel({ open, onOpenChange }: AskSchedulerPanelProps
               actionsTaken: result.actionsTaken ?? [],
             },
           ]);
-          if ((result.actionsTaken ?? []).length > 0) {
-            // The AI created/moved/cancelled/auto-scheduled real sessions -- refresh the board.
-            utils.sessions.list.invalidate();
-            utils.sessions.listForWeek.invalidate();
-            utils.weeklyMinutes.summary.invalidate();
-            utils.gapFill.suggestions.invalidate();
-          }
         },
         onError: (error) => {
-          if (myRequestId !== requestIdRef.current) return;
+          if (requestId !== requestIdRef.current) return;
           setPendingQuestion(null);
-          toast.error("PAMi couldn't respond", { description: error.message });
+          setErrorMessage(error.message || "PAMi couldn't complete that request.");
+          setLastFailedQuestion(trimmed);
         },
       },
     );
   };
 
-  const cancelPending = () => {
-    // The in-flight server request keeps running (there's no cheap way to abort an
-    // already-dispatched Ollama tool-calling loop) -- this bumps requestIdRef so that request's
-    // eventual response gets discarded above, and immediately frees the UI to send another.
-    requestIdRef.current += 1;
-    setPendingQuestion(null);
+  const clearConversation = () => {
+    setHistory([]);
+    setQuestion("");
+    setErrorMessage(null);
+    setLastFailedQuestion(null);
   };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-md glass-panel border-r-0 rounded-l-2xl">
-        <SheetHeader className="glass-header p-5">
-          <SheetTitle className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 text-white shadow-sm">
-              <Bot className="h-4 w-4" />
+      <SheetContent className="flex w-full flex-col gap-0 overflow-hidden border-l border-slate-200 bg-slate-50 p-0 sm:max-w-xl lg:max-w-2xl [&>[data-slot=sheet-close]]:flex [&>[data-slot=sheet-close]]:h-10 [&>[data-slot=sheet-close]]:w-10 [&>[data-slot=sheet-close]]:items-center [&>[data-slot=sheet-close]]:justify-center [&>[data-slot=sheet-close]]:rounded-xl [&>[data-slot=sheet-close]]:border [&>[data-slot=sheet-close]]:border-white/30 [&>[data-slot=sheet-close]]:bg-white/15 [&>[data-slot=sheet-close]]:text-white [&>[data-slot=sheet-close]]:opacity-100 [&>[data-slot=sheet-close]]:shadow-sm [&>[data-slot=sheet-close]]:hover:bg-white/25 [&>[data-slot=sheet-close]]:focus:ring-white [&>[data-slot=sheet-close]>svg]:size-5">
+        <SheetHeader className="border-b border-blue-700 bg-gradient-to-r from-blue-800 via-blue-700 to-sky-600 p-5 pr-16 text-white">
+          <div className="flex items-start gap-3 text-left">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/10 ring-1 ring-white/20">
+              <Bot className="h-6 w-6 text-blue-100" />
             </div>
-            PAMi
-          </SheetTitle>
-          <SheetDescription>
-            Ask about gaps, coverage, or compliance — or tell it to book, move, or cancel a session and it'll do it for real.
-          </SheetDescription>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <SheetTitle className="text-xl font-bold text-white">Ask PAMi</SheetTitle>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/30 bg-emerald-400/15 px-2.5 py-1 text-xs font-semibold text-emerald-100">
+                  <span className="h-2 w-2 rounded-full bg-emerald-300" /> Live board
+                </span>
+              </div>
+              <SheetDescription className="mt-1 text-sm text-blue-100">
+                Scheduling guidance and controlled board changes for {dateLabel}.
+              </SheetDescription>
+            </div>
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-blue-100">
+            <span className="rounded-lg border border-white/15 bg-white/10 px-3 py-2">
+              {history.length} response{history.length === 1 ? "" : "s"}
+            </span>
+            <span className="rounded-lg border border-white/15 bg-white/10 px-3 py-2">
+              {actionCount} board change{actionCount === 1 ? "" : "s"}
+            </span>
+            {history.length > 0 && pendingQuestion === null && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="ml-auto h-10 text-blue-100 hover:bg-white/10 hover:text-white"
+                onClick={clearConversation}
+              >
+                <Trash2 className="mr-2 h-4 w-4" /> New conversation
+              </Button>
+            )}
+          </div>
         </SheetHeader>
 
-        <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto bg-transparent p-4 pb-8">
-          {history.length === 0 && (
-            <div className="space-y-2">
-              <p className="pl-1 text-xs font-bold uppercase tracking-wider text-slate-400">
-                Suggested questions
-              </p>
-              {SUGGESTED_PROMPTS.map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => submit(p)}
-                  className="group flex w-full items-start gap-3 rounded-xl border border-white/40 glass-surface p-3 text-left text-sm text-slate-600 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-md"
-                >
-                  <div className="mt-0.5 rounded-full bg-blue-50 p-1 text-blue-500 group-hover:bg-blue-100 group-hover:text-blue-600 transition-colors">
-                    <Sparkles className="h-3.5 w-3.5" />
+        <div ref={scrollRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto bg-slate-50 p-4 sm:p-5">
+          {history.length === 0 && pendingQuestion === null && (
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                <div className="flex items-start gap-3">
+                  <div className="rounded-lg bg-blue-100 p-2 text-blue-700"><Sparkles className="h-5 w-5" /></div>
+                  <div>
+                    <h2 className="text-sm font-bold text-blue-950">Start with a board review</h2>
+                    <p className="mt-1 text-sm leading-relaxed text-blue-900/80">
+                      PAMi reads the selected board date and can explain risks or recommend exact slots. It only changes the schedule when you explicitly ask it to.
+                    </p>
                   </div>
-                  <span className="leading-snug pt-0.5">{p}</span>
-                </button>
-              ))}
+                </div>
+              </div>
+
+              <div>
+                <p className="mb-2 px-1 text-xs font-bold uppercase tracking-wide text-slate-500">Helpful starting points</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {SUGGESTED_PROMPTS.map(({ title, description, prompt, icon: Icon }) => (
+                    <button
+                      key={title}
+                      type="button"
+                      onClick={() => submit(prompt)}
+                      disabled={!canEdit}
+                      className="group flex min-h-[92px] w-full items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-colors hover:border-blue-300 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <div className="rounded-lg bg-slate-100 p-2 text-slate-600 transition-colors group-hover:bg-blue-100 group-hover:text-blue-700">
+                        <Icon className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-bold text-slate-900">{title}</div>
+                        <div className="mt-1 text-xs leading-relaxed text-slate-600">{description}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 
-          {history.map((entry, i) => (
-            <div key={i} className="space-y-2">
-              {/* User Bubble */}
-              <div className="ml-auto w-fit max-w-[85%] rounded-2xl rounded-tr-sm bg-primary px-4 py-2.5 text-sm text-white shadow-md">
+          {history.map((entry, index) => (
+            <div key={`${index}-${entry.question}`} className="space-y-3">
+              <div className="ml-auto max-w-[88%] rounded-2xl rounded-br-md bg-blue-700 px-4 py-3 text-sm leading-relaxed text-white shadow-sm">
                 {entry.question}
               </div>
-              
-              {/* AI Bubble */}
-              <div
-                className={cn(
-                  "group relative w-fit max-w-[95%] rounded-2xl rounded-tl-sm border px-4 py-3 text-sm shadow-sm",
-                  entry.usedFallback
-                    ? "border-amber-300/60 bg-amber-50/80 text-amber-900"
-                    : "border-white/40 glass-surface text-slate-700",
-                  "[&>p]:mb-2 [&>p:last-child]:mb-0 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-4 [&_ul:last-child]:mb-0 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-4 [&_ol:last-child]:mb-0 [&_strong]:font-semibold"
-                )}
-              >
-                <div className="absolute right-1.5 top-1.5">
-                  <CopyAnswerButton text={entry.answer} />
+
+              <div className="flex items-start gap-2.5">
+                <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-100 text-blue-700">
+                  <Bot className="h-4 w-4" />
                 </div>
-                <div className="pr-4">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.answer}</ReactMarkdown>
+                <div className={cn(
+                  "min-w-0 flex-1 rounded-2xl rounded-tl-md border bg-white px-4 py-3 text-sm leading-relaxed text-slate-700 shadow-sm",
+                  entry.usedFallback ? "border-amber-300 bg-amber-50 text-amber-950" : "border-slate-200",
+                )}>
+                  {entry.usedFallback && (
+                    <div className="mb-3 flex items-center gap-2 border-b border-amber-200 pb-2 text-xs font-bold text-amber-900">
+                      <AlertTriangle className="h-4 w-4" />
+                      {entry.actionsTaken.length > 0
+                        ? "PAMi service interrupted — verify the completed changes below"
+                        : "PAMi service unavailable — no changes were made"}
+                    </div>
+                  )}
+                  <div className="flex items-start gap-2">
+                    <div className="min-w-0 flex-1 [&>p]:mb-2 [&>p:last-child]:mb-0 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_strong]:font-bold [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.answer}</ReactMarkdown>
+                    </div>
+                    <CopyAnswerButton text={entry.answer} />
+                  </div>
                 </div>
               </div>
+
               {entry.actionsTaken.length > 0 && (
-                <div className="flex flex-wrap gap-2 pt-1">
-                  {entry.actionsTaken.map((a, j) => (
-                    <span
-                      key={j}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200/60 bg-emerald-50 px-3 py-1 text-micro font-bold uppercase tracking-wider text-emerald-700 shadow-sm"
-                    >
-                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> {a}
-                    </span>
-                  ))}
+                <div className="ml-10 rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+                  <p className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-emerald-900">
+                    <CheckCircle2 className="h-4 w-4" /> Changes completed
+                  </p>
+                  <ul className="space-y-1.5">
+                    {entry.actionsTaken.map((action, actionIndex) => (
+                      <li key={actionIndex} className="flex items-start gap-2 text-sm text-emerald-900">
+                        <Check className="mt-0.5 h-4 w-4 shrink-0" /> {action}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
             </div>
           ))}
 
           {pendingQuestion !== null && (
-            <div className="space-y-2">
-              {/* Echo the question immediately -- otherwise there's no confirmation of what was
-                  asked while waiting, which can now take 10-20+ seconds. */}
-              <div className="ml-auto w-fit max-w-[85%] rounded-2xl rounded-tr-sm bg-primary px-4 py-2.5 text-sm text-white shadow-md">
+            <div className="space-y-3">
+              <div className="ml-auto max-w-[88%] rounded-2xl rounded-br-md bg-blue-700 px-4 py-3 text-sm text-white shadow-sm">
                 {pendingQuestion}
               </div>
-              <div className="flex items-center gap-2 pl-2 pt-2">
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 text-white shadow-sm">
-                  <Bot className="h-3.5 w-3.5" />
+              <div className="flex items-start gap-2.5">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-100 text-blue-700"><Bot className="h-4 w-4" /></div>
+                <div className="rounded-2xl rounded-tl-md border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                    <RefreshCw className="h-4 w-4 animate-spin text-blue-600" /> Reviewing the live schedule…
+                  </div>
+                  <p className="mt-1 text-xs text-slate-500">Complex scheduling checks can take several seconds. Requested changes may complete even if this panel is closed.</p>
                 </div>
-                <div className="flex items-center gap-1 rounded-2xl rounded-tl-sm bg-white border border-slate-100 px-3 py-2 shadow-sm">
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.3s]"></span>
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.15s]"></span>
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-400"></span>
+              </div>
+            </div>
+          )}
+
+          {errorMessage && (
+            <div role="alert" className="rounded-xl border border-rose-300 bg-rose-50 p-4 text-rose-950">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold">PAMi couldn't complete that request</p>
+                  <p className="mt-1 break-words text-xs text-rose-800">{errorMessage}</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={cancelPending}
-                  className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold text-slate-400 shadow-sm transition-colors hover:border-red-200 hover:text-red-500"
-                >
-                  <X className="h-3 w-3" /> Cancel
-                </button>
+                {lastFailedQuestion && (
+                  <Button variant="outline" size="sm" className="h-10 border-rose-300 bg-white" onClick={() => submit(lastFailedQuestion)}>
+                    <RefreshCw className="mr-2 h-4 w-4" /> Retry
+                  </Button>
+                )}
               </div>
             </div>
           )}
         </div>
 
-        <div className="bg-white border-t border-slate-200 p-4 z-10 shadow-xs">
-          <div className="flex items-center gap-2 rounded-xl bg-slate-50 border border-slate-200 p-2 focus-within:bg-white focus-within:border-sky-500 focus-within:ring-2 focus-within:ring-sky-500/20 transition-all">
+        <div className="border-t border-slate-200 bg-white p-4 shadow-[0_-8px_24px_rgba(15,23,42,0.05)]">
+          {!canEdit && (
+            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+              Staff or admin access is required to ask PAMi questions.
+            </div>
+          )}
+          <div className="rounded-xl border border-slate-300 bg-white p-2 shadow-sm transition-shadow focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100">
             <Textarea
+              ref={textareaRef}
               value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
+              maxLength={MAX_QUESTION_LENGTH}
+              onChange={(event) => setQuestion(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
                   submit(question);
                 }
               }}
-              placeholder="Ask PAMi e.g., 'Who had the most minutes this week?'..."
-              className="min-h-[40px] flex-1 resize-none border-0 bg-transparent text-sm focus-visible:ring-0 focus-visible:ring-offset-0 px-2 py-1.5 shadow-none font-medium text-slate-800 placeholder:text-slate-400"
+              placeholder="Ask about risks, coverage, open slots, or request a specific schedule change…"
+              disabled={!canEdit || pendingQuestion !== null}
+              className="min-h-[64px] resize-none border-0 bg-transparent px-2 py-2 text-sm leading-relaxed text-slate-900 shadow-none placeholder:text-slate-400 focus-visible:ring-0 focus-visible:ring-offset-0"
             />
-            <Button
-              size="icon"
-              className={cn(
-                "h-9 w-9 shrink-0 rounded-lg transition-all shadow-none",
-                question.trim() ? "bg-sky-500 hover:bg-sky-600 text-white" : "bg-slate-200 text-slate-400 hover:bg-slate-300"
-              )}
-              onClick={() => submit(question)}
-              disabled={pendingQuestion !== null || !question.trim()}
-            >
-              <Send className="h-4 w-4" />
-            </Button>
+            <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-2 pt-2">
+              <div className="text-xs text-slate-500">
+                <span className="hidden sm:inline">Enter to send · Shift+Enter for a new line · </span>
+                {question.length}/{MAX_QUESTION_LENGTH}
+              </div>
+              <Button
+                className="h-10 rounded-lg bg-blue-600 px-4 font-bold text-white hover:bg-blue-700"
+                onClick={() => submit(question)}
+                disabled={!canEdit || pendingQuestion !== null || !question.trim()}
+              >
+                <Send className="mr-2 h-4 w-4" /> Ask PAMi
+              </Button>
+            </div>
           </div>
         </div>
       </SheetContent>

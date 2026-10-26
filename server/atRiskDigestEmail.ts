@@ -13,7 +13,7 @@ function formatSlotTime(iso: string): string {
 }
 
 function buildEmailContent(atRisk: MorningDigestPatientEntry[], dateLabel: string): { subject: string; html: string; text: string } {
-  const subject = `PAM: ${atRisk.length} patient(s) at risk of missing weekly minutes -- ${dateLabel}`;
+  const subject = `${atRisk.length} patient(s) at risk of missing weekly minutes -- ${dateLabel}`;
 
   const textLines = atRisk.map((p) => {
     const slot = p.proposedSlots[0];
@@ -39,7 +39,7 @@ function buildEmailContent(atRisk: MorningDigestPatientEntry[], dateLabel: strin
 
   const html = `
     <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:640px;">
-      <h2 style="color:#1e293b;">PAM morning digest -- ${escapeHtml(dateLabel)}</h2>
+      <h2 style="color:#1e293b;">Morning digest -- ${escapeHtml(dateLabel)}</h2>
       <p style="color:#334155;">${atRisk.length} patient(s) are projected to miss their weekly therapy-minute target unless something changes today. PAMi has already proposed an open slot for each where one exists -- these are proposals only, nothing has been booked.</p>
       <table style="border-collapse:collapse;width:100%;font-size:14px;">
         <thead>
@@ -55,7 +55,7 @@ function buildEmailContent(atRisk: MorningDigestPatientEntry[], dateLabel: strin
     </div>
   `;
 
-  const text = `PAM morning digest -- ${dateLabel}\n\n${atRisk.length} patient(s) at risk of missing their weekly target:\n\n${textLines.join("\n")}\n\nOpen the board or ask PAMi to book any of these.`;
+  const text = `Morning digest -- ${dateLabel}\n\n${atRisk.length} patient(s) at risk of missing their weekly target:\n\n${textLines.join("\n")}\n\nOpen the board or ask PAMi to book any of these.`;
 
   return { subject, html, text };
 }

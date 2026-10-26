@@ -2,7 +2,7 @@ services:
   - type: web
     name: therapy-board
     env: node
-    buildCommand: pnpm install && pnpm run build
+    buildCommand: pnpm install --frozen-lockfile && pnpm run build
     startCommand: pnpm run start
     envVars:
       - key: NODE_VERSION
@@ -18,4 +18,20 @@ services:
       - key: OLLAMA_MODEL
         sync: false
       - key: OLLAMA_API_KEY
+        sync: false
+      - key: OWNER_EMAIL
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: DIGEST_NOTIFICATION_EMAILS
         sync: false

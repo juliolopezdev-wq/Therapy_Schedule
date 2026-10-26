@@ -1,7 +1,7 @@
 import React, { memo, useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import { AlertTriangle, Lock, CheckCircle2, XCircle, Users } from "lucide-react";
+import { AlertTriangle, Lock, CheckCircle2, History, LogOut, XCircle, Users } from "lucide-react";
 import { THERAPY_META, isMissedStatus, type TherapyType, type SessionStatus, type DeliveryMode } from "@/lib/board";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -20,6 +20,7 @@ export interface SessionTileData {
   missedReason?: string | null;
   notes?: string | null;
   hasConflict?: boolean;
+  previousTherapistName?: string;
 }
 
 interface SessionTileProps {
@@ -30,6 +31,9 @@ interface SessionTileProps {
   slotWidth: number;
   isOverlay?: boolean;
   onResize?: (id: number, newDurationMinutes: number) => void;
+  draggable?: boolean;
+  isAfterPlannedDischarge?: boolean;
+  crossesPlannedDischarge?: boolean;
 }
 
 function SessionTileImpl({
@@ -40,8 +44,13 @@ function SessionTileImpl({
   slotWidth,
   isOverlay = false,
   onResize,
+  draggable = true,
+  isAfterPlannedDischarge = false,
+  crossesPlannedDischarge = false,
 }: SessionTileProps) {
   const meta = THERAPY_META[session.therapyType];
+  const isPendingAfterDischarge = isAfterPlannedDischarge && session.status === "scheduled";
+  const needsDischargeOverlapReview = crossesPlannedDischarge && session.status === "scheduled";
 
   const [resizeDeltaSlots, setResizeDeltaSlots] = useState(0);
 
@@ -85,7 +94,7 @@ function SessionTileImpl({
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `session-${session.id}`,
     data: { session },
-    disabled: isOverlay,
+    disabled: isOverlay || !draggable || session.status === "canceled_discharge",
   });
 
   const width = session.slotSpan * slotWidth - 6;
@@ -107,12 +116,13 @@ function SessionTileImpl({
   // Completed sessions get grayed out (on top of the green checkmark below) so a glance at
   // the board shows what's still outstanding vs. already delivered.
   const isCompleted = session.status === "completed";
+  const isCanceledDischarge = session.status === "canceled_discharge";
   
-  let bgColor = isCompleted ? "#e2e8f0" : meta.bg; // slate-200
-  let textColor = isCompleted ? "#64748b" : meta.fg; // slate-500
-  let accentColor = isCompleted ? "#94a3b8" : meta.accent; // slate-400
+  let bgColor = isCompleted || isCanceledDischarge ? "#e2e8f0" : meta.bg; // slate-200
+  let textColor = isCompleted || isCanceledDischarge ? "#64748b" : meta.fg; // slate-500
+  let accentColor = isCompleted || isCanceledDischarge ? "#94a3b8" : meta.accent; // slate-400
 
-  if (!isCompleted && therapistColor && !isNaN(Number(therapistColor))) {
+  if (!isCompleted && !isCanceledDischarge && therapistColor && !isNaN(Number(therapistColor))) {
     const hue = Number(therapistColor);
     bgColor = `hsl(${hue}, 80%, 85%)`;
     textColor = `hsl(${hue}, 80%, 25%)`;
@@ -124,7 +134,8 @@ function SessionTileImpl({
     color: textColor,
     width: isOverlay ? width : (resizeDeltaSlots !== 0 ? tileWidth : "100%"),
     transform: CSS.Translate.toString(transform),
-    opacity: isDragging && !isOverlay ? 0.3 : (isMissed ? 0.6 : isCompleted ? 0.75 : 1),
+    opacity: isDragging && !isOverlay ? 0.3 : (isMissed ? 0.6 : isCompleted ? 0.75 : isCanceledDischarge || isPendingAfterDischarge ? 0.62 : 1),
+    filter: isCanceledDischarge || isPendingAfterDischarge ? "grayscale(1)" : undefined,
     boxShadow: isOverlay
       ? "0 12px 28px -4px rgba(15,23,42,0.3)"
       : "0 1px 3px 0 rgba(0, 0, 0, 0.05), inset 0 1px 0 0 rgba(255, 255, 255, 0.4)",
@@ -133,18 +144,21 @@ function SessionTileImpl({
 
   const tileContent = (
     <button
+      type="button"
       ref={setNodeRef}
       style={style}
       {...listeners}
       {...attributes}
-      onDoubleClick={(e) => {
+      onClick={(e) => {
         e.stopPropagation();
         onClick?.(session);
       }}
+      aria-label={`Edit ${meta.label} session${therapistName ? ` with ${therapistName}` : ""}`}
+      title={isCanceledDischarge ? "Canceled — patient discharged" : isPendingAfterDischarge ? "Scheduled after planned discharge" : needsDischargeOverlapReview ? "Session overlaps planned discharge time — review required" : "Click to edit · drag to move"}
       className={cn(
         "group relative flex h-full items-center justify-between gap-1 overflow-hidden rounded px-1.5 text-left",
         session.therapyType === "Block" ? "border-2 border-dashed border-slate-400/50 bg-[repeating-linear-gradient(-45deg,rgba(0,0,0,0.05),rgba(0,0,0,0.05)_6px,transparent_6px,transparent_12px)]" : "border border-black/[0.05]",
-        "cursor-grab touch-none select-none",
+        "cursor-pointer touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-1",
         // Only ease hover/status color changes -- never the drag transform or the live resize
         // width. Both update on every pointer-move tick during an active drag/resize, so easing
         // them makes the tile visibly lag a beat behind the cursor instead of tracking it 1:1.
@@ -152,6 +166,7 @@ function SessionTileImpl({
         "hover:shadow-md hover:border-black/[0.15] hover:-translate-y-[1px] hover:scale-[1.02]",
         "active:cursor-grabbing",
         session.hasConflict && "ring-2 ring-red-500 animate-pulse-soft",
+        needsDischargeOverlapReview && "ring-2 ring-amber-500",
         isOverlay && "cursor-grabbing ring-2 ring-primary/80 shadow-lg",
       )}
     >
@@ -181,6 +196,14 @@ function SessionTileImpl({
           <XCircle className="h-3.5 w-3.5 text-red-600" strokeWidth={2.5} fill="white" />
         </span>
       )}
+      {(isCanceledDischarge || isPendingAfterDischarge) && (
+        <span
+          aria-hidden
+          className="absolute right-1 top-1 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-slate-700 text-white shadow-sm ring-1 ring-white"
+        >
+          <LogOut className="h-2.5 w-2.5" strokeWidth={2.5} />
+        </span>
+      )}
 
       <div className="flex min-w-0 flex-1 items-center gap-1.5 pl-1">
         <div className="flex min-w-0 flex-1 flex-col leading-none">
@@ -188,6 +211,9 @@ function SessionTileImpl({
             {session.therapyType === "Block" && <Lock className="h-2.5 w-2.5" style={{ color: textColor }} strokeWidth={3} />}
             {(session.deliveryMode === "group" || session.deliveryMode === "concurrent") && (
               <Users className="h-2.5 w-2.5" style={{ color: textColor }} strokeWidth={2.5} />
+            )}
+            {session.previousTherapistName && (
+              <History className="h-2.5 w-2.5 shrink-0" style={{ color: textColor }} strokeWidth={2.5} aria-label="Reassigned after call-off" />
             )}
             {isMissed && <XCircle className="h-2.5 w-2.5" style={{ color: textColor }} strokeWidth={2.5} />}
             <span className={cn("text-[10px] font-bold uppercase tracking-wide", isMissed && "line-through")} style={{ color: textColor }}>
@@ -224,7 +250,7 @@ function SessionTileImpl({
       </div>
 
       {/* Right resize handle */}
-      {!isOverlay && onResize && (
+      {!isOverlay && onResize && !isCanceledDischarge && (
         <div
           className="absolute inset-y-0 right-0 w-3 cursor-ew-resize hover:bg-black/10 z-10 touch-none"
           onMouseDown={(e) => {
@@ -249,6 +275,19 @@ function SessionTileImpl({
   if (session.hasConflict) {
     const conflictMsg = "⚠️ Scheduling Conflict: Overlapping sessions detected for this patient or therapist.";
     tooltipText = tooltipText ? `${conflictMsg}\n\nNotes: ${tooltipText}` : conflictMsg;
+  }
+  if (isCanceledDischarge || isPendingAfterDischarge) {
+    const dischargeMessage = isCanceledDischarge
+      ? "Canceled — patient discharged before this session."
+      : "This session begins at or after the planned discharge time.";
+    tooltipText = tooltipText ? `${dischargeMessage}\n\nNotes: ${tooltipText}` : dischargeMessage;
+  } else if (needsDischargeOverlapReview) {
+    const overlapMessage = "This session overlaps the planned discharge time and needs manual review.";
+    tooltipText = tooltipText ? `${overlapMessage}\n\nNotes: ${tooltipText}` : overlapMessage;
+  }
+  if (session.previousTherapistName) {
+    const reassignedMessage = `Before call-off: ${session.previousTherapistName}`;
+    tooltipText = tooltipText ? `${reassignedMessage}\n\n${tooltipText}` : reassignedMessage;
   }
 
   if (tooltipText && !isDragging && !isOverlay) {

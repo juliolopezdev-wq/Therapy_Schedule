@@ -10,7 +10,7 @@
 - [x] Write vitest tests for board logic and conflict detection (12 passing)
 
 ## Core Board UI
-- [x] Build time-grid layout component (7 AM - 5 PM, 30-min increments)
+- [x] Build time-grid layout component (7 AM - 6 PM, 30-min increments)
 - [x] Create patient row component with room number, name, and status flags
 - [x] Implement color-coded therapy session tiles (PT=yellow, OT=purple, SLP=blue, Eval=green)
 - [x] Build drag-and-drop functionality for rescheduling sessions (dnd-kit)

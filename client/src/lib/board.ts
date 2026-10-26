@@ -1,18 +1,29 @@
 // Board-wide constants and helpers
 
-import { type SessionStatus, isMissedStatus } from "../../../shared/weekUtils";
-export { type SessionStatus, isMissedStatus };
+import { type SessionStatus, isMissedStatus, isCanceledStatus } from "../../../shared/weekUtils";
+export { type SessionStatus, isMissedStatus, isCanceledStatus };
+import {
+  THERAPY_TYPES,
+  type TherapyType,
+  isEvaluationTherapyType,
+  therapyDiscipline,
+} from "../../../shared/therapyTypes";
+export {
+  THERAPY_TYPES,
+  type TherapyType,
+  isEvaluationTherapyType,
+  therapyDiscipline,
+};
 
-export type TherapyType = "PT" | "OT" | "SLP" | "Eval" | "Block";
 export type FlagType = "DC" | "Name Alert" | "Weekend" | "In-Service" | "Appointment" | "Stroke Program" | "Shower" | "Medical Hold" | "Dialysis" | "Block Time" | "Group Appropriate" | "Male Therapist Only" | "Female Therapist Only" | "Home Eval" | "Family Training" | "LOA" | "15/7";
 
-export const THERAPY_TYPES: TherapyType[] = ["PT", "OT", "SLP", "Eval", "Block"];
 export const FLAG_TYPES: FlagType[] = ["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program", "Shower", "Medical Hold", "Dialysis", "Block Time", "Group Appropriate", "Male Therapist Only", "Female Therapist Only", "Home Eval", "Family Training", "LOA", "15/7"];
 
-export const SESSION_STATUSES: SessionStatus[] = ["scheduled", "completed", "missed_refusal", "missed_clinical_hold", "missed_staffing", "missed_other"];
+export const SESSION_STATUSES: SessionStatus[] = ["scheduled", "completed", "canceled_discharge", "missed_refusal", "missed_clinical_hold", "missed_staffing", "missed_other"];
 export const SESSION_STATUS_META: Record<SessionStatus, { label: string; bg: string; fg: string }> = {
   scheduled: { label: "Scheduled", bg: "#e0e7ff", fg: "#3730a3" },
   completed: { label: "Completed", bg: "#dcfce7", fg: "#166534" },
+  canceled_discharge: { label: "Canceled — Discharged", bg: "#e2e8f0", fg: "#475569" },
   missed_refusal: { label: "Missed — Refusal", bg: "#fee2e2", fg: "#991b1b" },
   missed_clinical_hold: { label: "Missed — Clinical Hold", bg: "#fee2e2", fg: "#991b1b" },
   missed_staffing: { label: "Missed — Staffing", bg: "#fee2e2", fg: "#991b1b" },
@@ -35,6 +46,9 @@ export const THERAPY_META: Record<
   PT: { label: "PT", full: "Physical Therapy", bg: "#fef08a", fg: "#713f12", accent: "#ca8a04", soft: "#fef9c3" },
   OT: { label: "OT", full: "Occupational Therapy", bg: "#f3e8ff", fg: "#581c87", accent: "#a855f7", soft: "#faf5ff" },
   SLP: { label: "SLP", full: "Speech Therapy", bg: "#e0f2fe", fg: "#0c4a6e", accent: "#0ea5e9", soft: "#f0f9ff" },
+  "PT Eval": { label: "PT Eval", full: "Physical Therapy Evaluation", bg: "#fef3c7", fg: "#78350f", accent: "#d97706", soft: "#fffbeb" },
+  "OT Eval": { label: "OT Eval", full: "Occupational Therapy Evaluation", bg: "#ede9fe", fg: "#4c1d95", accent: "#7c3aed", soft: "#f5f3ff" },
+  "SLP Eval": { label: "SLP Eval", full: "Speech Therapy Evaluation", bg: "#dbeafe", fg: "#1e3a8a", accent: "#2563eb", soft: "#eff6ff" },
   Eval: { label: "Eval", full: "Evaluation", bg: "#d1fae5", fg: "#064e3b", accent: "#10b981", soft: "#f0fdf4" },
   Block: { label: "Block", full: "Block Time", bg: "#e2e8f0", fg: "#475569", accent: "#94a3b8", soft: "#f1f5f9" },
 };
@@ -49,7 +63,7 @@ export const FLAG_META: Record<
   FlagType,
   { label: string; bg: string; fg: string; description: string }
 > = {
-  DC: { label: "DC", bg: "#fee2e2", fg: "#991b1b", description: "Discharge Scheduled" },
+  DC: { label: "DC", bg: "#fee2e2", fg: "#991b1b", description: "Planned discharge date" },
   "Name Alert": { label: "Name Alert", bg: "#ffedd5", fg: "#9a3412", description: "Name Alert (Verify Identity)" },
   Weekend: { label: "Weekend", bg: "#e0f2fe", fg: "#0369a1", description: "Weekend therapy order" },
   "In-Service": { label: "In-Service", bg: "#f3e8ff", fg: "#6b21a8", description: "In-Service training session" },

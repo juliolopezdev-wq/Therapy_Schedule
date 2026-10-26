@@ -34,12 +34,12 @@ function GridCellImpl({ patientId, slotIndex, onAdd, children, isAlternate, isLu
       }}
     >
       {children}
-      {!children ? (
+      {!children && onAdd ? (
         <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
-            onAdd?.(patientId, slotIndex);
+            onAdd(patientId, slotIndex);
           }}
           className="absolute inset-1 flex items-center justify-center rounded opacity-0 transition-all duration-150 hover:bg-slate-100/60 group-hover:opacity-100"
           aria-label="Add session"

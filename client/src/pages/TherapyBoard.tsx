@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -14,34 +14,19 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import {
-  ChevronLeft,
-  ChevronRight,
   Plus,
   Users,
   UserRound,
   AlertTriangle,
-  Calendar as CalendarIcon,
-  History,
-  LayoutGrid,
-  Smartphone,
-  Clock,
-  Bot,
-  Copy,
   CalendarClock,
-  Sunset,
-  BicepsFlexed,
   CheckCircle2,
   XCircle,
   UserCircle2,
+  LogOut,
 } from "lucide-react";
-import { SickCallModal } from "@/components/board/SickCallModal";
-import { StaffStatsModal } from "@/components/board/StaffStatsModal";
-import { WeekendStaffingModal } from "@/components/board/WeekendStaffingModal";
-import { ComplianceSentinelModal } from "@/components/board/ComplianceSentinelModal";
-import { PredictiveStaffingPanel } from "@/components/board/PredictiveStaffingPanel";
-import { ProductivityHubModal } from "@/components/board/ProductivityHubModal";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { usePermissions } from "@/_core/hooks/usePermissions";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -55,12 +40,12 @@ import {
 } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
-  THERAPY_TYPES,
-  THERAPY_META,
   TIME_SLOTS,
   type TherapyType,
   type FlagType,
   isMissedStatus,
+  isCanceledStatus,
+  isEvaluationTherapyType,
   dateToSlotIndex,
   slotIndexToDate,
   durationToSlots,
@@ -72,20 +57,20 @@ import {
   sessionsOverlap,
   startOfWeek,
   weekRangeLabel,
+  formatDateKey,
   DEFAULT_WEEKLY_MINUTE_TARGET,
 } from "@/lib/board";
 import { SessionTile, type SessionTileData } from "@/components/board/SessionTile";
 import { GridCell } from "@/components/board/GridCell";
 import { FlagBadge, FlagToggle } from "@/components/board/StatusFlags";
-import { PatientDayQuickView, printAllPatientSchedules } from "@/components/board/PatientDayQuickView";
+import { PatientDayQuickView } from "@/components/board/PatientDayQuickView";
 import { BoardHeader } from "@/components/board/BoardHeader";
-import { SessionDialog, type SessionFormValue } from "@/components/board/SessionDialog";
-import { PatientDialog, type PatientFormValue } from "@/components/board/PatientDialog";
-import { PatientPanel } from "@/components/board/PatientPanel";
-import { TherapistPanel } from "@/components/board/TherapistPanel";
-import { MySchedule } from "@/components/board/MySchedule";
-import { BoardHistoryDialog } from "@/components/board/BoardHistoryDialog";
-import { TargetReachedDialog, type WeekSessionRow } from "@/components/board/TargetReachedDialog";
+import { BoardStatusSummary } from "@/components/board/BoardStatusSummary";
+import { TeamHuddle } from "@/components/board/TeamHuddle";
+import { MobileTodayList } from "@/components/board/MobileTodayList";
+import type { SessionFormValue } from "@/components/board/SessionDialog";
+import type { PatientFormValue } from "@/components/board/PatientDialog";
+import type { WeekSessionRow } from "@/components/board/TargetReachedDialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -97,11 +82,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { WeeklyMinutesPanel } from "@/components/board/WeeklyMinutesPanel";
-import { DataAnalysisModal } from "@/components/board/DataAnalysisModal";
-import { AskSchedulerPanel } from "@/components/board/AskSchedulerPanel";
 import { cn } from "@/lib/utils";
-import { PatientDraggable } from "@/components/board/PatientDraggable";
 import { TeamDroppable } from "@/components/board/TeamDroppable";
 import { TimeHeaderRow } from "@/components/board/grid/TimeHeaderRow";
 import { TeamHeaderRow } from "@/components/board/grid/TeamHeaderRow";
@@ -109,9 +90,26 @@ import { PatientRow } from "@/components/board/grid/PatientRow";
 import { useBoardUI } from "@/hooks/useBoardUI";
 import { useBoardDnd } from "@/hooks/useBoardDnd";
 
+const AskSchedulerPanel = lazy(() => import("@/components/board/AskSchedulerPanel").then((module) => ({ default: module.AskSchedulerPanel })));
+const BoardHistoryDialog = lazy(() => import("@/components/board/BoardHistoryDialog").then((module) => ({ default: module.BoardHistoryDialog })));
+const ComplianceSentinelModal = lazy(() => import("@/components/board/ComplianceSentinelModal").then((module) => ({ default: module.ComplianceSentinelModal })));
+const DataAnalysisModal = lazy(() => import("@/components/board/DataAnalysisModal").then((module) => ({ default: module.DataAnalysisModal })));
+const PatientDialog = lazy(() => import("@/components/board/PatientDialog").then((module) => ({ default: module.PatientDialog })));
+const PatientPanel = lazy(() => import("@/components/board/PatientPanel").then((module) => ({ default: module.PatientPanel })));
+const PredictiveStaffingPanel = lazy(() => import("@/components/board/PredictiveStaffingPanel").then((module) => ({ default: module.PredictiveStaffingPanel })));
+const ProductivityHubModal = lazy(() => import("@/components/board/ProductivityHubModal").then((module) => ({ default: module.ProductivityHubModal })));
+const SessionDialog = lazy(() => import("@/components/board/SessionDialog").then((module) => ({ default: module.SessionDialog })));
+const SickCallModal = lazy(() => import("@/components/board/SickCallModal").then((module) => ({ default: module.SickCallModal })));
+const StaffStatsModal = lazy(() => import("@/components/board/StaffStatsModal").then((module) => ({ default: module.StaffStatsModal })));
+const TargetReachedDialog = lazy(() => import("@/components/board/TargetReachedDialog").then((module) => ({ default: module.TargetReachedDialog })));
+const TherapistPanel = lazy(() => import("@/components/board/TherapistPanel").then((module) => ({ default: module.TherapistPanel })));
+const WeekendStaffingModal = lazy(() => import("@/components/board/WeekendStaffingModal").then((module) => ({ default: module.WeekendStaffingModal })));
+const WeeklyMinutesPanel = lazy(() => import("@/components/board/WeeklyMinutesPanel").then((module) => ({ default: module.WeeklyMinutesPanel })));
+
 const SLOT_WIDTH = 72; // px per 30-min slot
 
 import { getPatientWeekBounds } from "@/../../shared/weekUtils";
+import { isActiveAdmission } from "@/../../shared/patientLifecycle";
 import type { Patient } from "../../../drizzle/schema";
 
 const BOARD_SECTIONS = [
@@ -125,6 +123,7 @@ const EOW_DAY_LETTERS = ["S", "M", "T", "W", "TH", "F", "S"];
 const EOW_DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 const EMPTY_PATIENT: PatientFormValue = {
+  mrn: "",
   roomNumber: "",
   name: "",
   notes: "",
@@ -166,14 +165,32 @@ function checkLunchOverlapPure(startTime: Date, endTime: Date): string | null {
 }
 
 export default function TherapyBoard() {
+  const { canEdit, canChart, therapistId: currentTherapistId, role, isAdmin, isLinked, hasBoardAccess } = usePermissions();
+  // The backend already blocks these for viewer/staff -- these guards exist so clicking an
+  // action surfaces a clear message instead of a raw FORBIDDEN toast from the failed mutation.
+  const requireEdit = useCallback(() => {
+    if (!canEdit) {
+      toast.error("You have view-only access and can't make changes.");
+      return false;
+    }
+    return true;
+  }, [canEdit]);
+  const requireAdmin = useCallback(() => {
+    if (!isAdmin) {
+      toast.error("This action requires admin access.");
+      return false;
+    }
+    return true;
+  }, [isAdmin]);
   const utils = trpc.useUtils();
   const [day, setDay] = useState(() => startOfDay(new Date()));
   const [filter, setFilter] = useState<ViewFilter>("all");
-  const [teamFilter, setTeamFilter] = useState<number | "all">(1); // Default to Team One on load
+  const [teamFilter, setTeamFilter] = useState<number | "all">(() => isAdmin ? 1 : "all");
   const [mySchedTherapist, setMySchedTherapist] = useState<number | null>(null);
 
   const [activeDrag, setActiveDrag] = useState<SessionTileData | null>(null);
   const [activeDragPatient, setActiveDragPatient] = useState<Patient | null>(null);
+  const timeHeaderScrollRef = useRef<HTMLDivElement>(null);
   
   const {
     sessionDialogOpen,
@@ -245,35 +262,45 @@ export default function TherapyBoard() {
     }
   };
 
-  // Seed teams once on mount
+  // Seed teams once on mount -- admin-only on the backend, so staff/viewer must not fire this
+  // (they'd get a FORBIDDEN toast on every page load otherwise).
   const seedTeams = trpc.teams.seed.useMutation();
   useEffect(() => {
+    if (!isAdmin) return;
     seedTeams.mutate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isAdmin]);
 
   // Queries
-  const patientsQuery = trpc.patients.list.useQuery();
-  const therapistsQuery = trpc.therapists.list.useQuery();
-  const teamsQuery = trpc.teams.list.useQuery();
-  const sessionsQuery = trpc.sessions.list.useQuery({ date: day });
+  const patientsQuery = trpc.patients.list.useQuery({ date: day }, { enabled: hasBoardAccess });
+  const archivedPatientsQuery = trpc.patients.listArchived.useQuery(undefined, { enabled: isAdmin });
+  const therapistsQuery = trpc.therapists.list.useQuery(undefined, { enabled: hasBoardAccess });
+  const teamsQuery = trpc.teams.list.useQuery(undefined, { enabled: hasBoardAccess });
+  const sessionsQuery = trpc.sessions.list.useQuery({ date: day }, { enabled: hasBoardAccess });
+  const assignmentHistoryQuery = trpc.attendance.assignmentHistory.useQuery({ date: day }, { enabled: hasBoardAccess });
   const weekSessionsQuery = trpc.sessions.listForDateRange.useQuery({ 
     startDate: subDays(day, 7),
     endDate: addDays(day, 7)
-  });
-  const flagsQuery = trpc.statusFlags.listForDate.useQuery({ date: day });
-  const digestQuery = trpc.digest.today.useQuery();
+  }, { enabled: hasBoardAccess });
+  const flagsQuery = trpc.statusFlags.listForDate.useQuery({ date: day }, { enabled: hasBoardAccess });
+  const digestQuery = trpc.digest.today.useQuery(undefined, { enabled: hasBoardAccess });
 
   // Fetch sessions for the next 2 days to check for exit evals
   const upcomingSessionsQuery = trpc.sessions.listForDateRange.useQuery({
     startDate: day,
     endDate: addDays(day, 2),
-  });
+  }, { enabled: hasBoardAccess });
 
   const patients = patientsQuery.data ?? [];
+  const activePatientCount = patients.filter(isActiveAdmission).length;
   const therapists = therapistsQuery.data ?? [];
   const teams = teamsQuery.data ?? [];
   const rawSessions = sessionsQuery.data ?? [];
+  const assignmentHistoryBySessionId = useMemo(() => {
+    const map = new Map<number, NonNullable<typeof assignmentHistoryQuery.data>[number]>();
+    (assignmentHistoryQuery.data ?? []).forEach((entry) => map.set(entry.sessionId, entry));
+    return map;
+  }, [assignmentHistoryQuery.data]);
   const weekSessions = weekSessionsQuery.data ?? [];
   const upcomingSessions = upcomingSessionsQuery.data ?? [];
   const digestByPatientId = useMemo(() => {
@@ -290,8 +317,20 @@ export default function TherapyBoard() {
     // above), not listForWeek -- invalidating listForWeek here was a no-op for this page, so the
     // weekly-minutes badge only ever refreshed on an unrelated trigger (e.g. a full reload).
     utils.sessions.listForDateRange.invalidate();
+    utils.attendance.assignmentHistory.invalidate();
     utils.patients.list.invalidate();
+    utils.patients.listArchived.invalidate();
     utils.statusFlags.listForDate.invalidate();
+    // Session status/minutes feed every clinical and operational rollup below. Invalidate them
+    // together so bulk or individual completion is immediately reflected everywhere, including
+    // panels that were already open when the change was made.
+    utils.weeklyMinutes.summary.invalidate();
+    utils.gapFill.suggestions.invalidate();
+    utils.therapists.getStats.invalidate();
+    utils.therapists.getProductivity.invalidate();
+    utils.aiAgents.getComplianceReport.invalidate();
+    utils.aiAgents.getPredictiveForecast.invalidate();
+    utils.forecast.invalidate();
   };
 
   const createSession = trpc.sessions.create.useMutation({
@@ -315,7 +354,54 @@ export default function TherapyBoard() {
       if (ctx?.previous) utils.sessions.list.setData({ date: day }, ctx.previous);
       toast.error(err.message);
     },
-    onSuccess: () => { toast.success("Session updated"); },
+    onSuccess: () => toast.success("Session updated"),
+    onSettled: () => invalidateBoard(),
+  });
+  const undoOwnCompletion = trpc.sessions.undoOwnCompletion.useMutation({
+    onSuccess: () => {
+      toast.success("Completion undone — session returned to Scheduled");
+      setSessionDialogOpen(false);
+    },
+    onError: (error) => toast.error(error.message),
+    onSettled: () => invalidateBoard(),
+  });
+  const completeOwnSession = trpc.sessions.completeOwn.useMutation({
+    onSuccess: (_result, variables) => {
+      toast.success("Session completed", {
+        action: {
+          label: "Undo",
+          onClick: () => undoOwnCompletion.mutate({ id: variables.id }),
+        },
+      });
+      setSessionDialogOpen(false);
+    },
+    onError: (error) => toast.error(error.message),
+    onSettled: () => invalidateBoard(),
+  });
+  const completeAllSessions = trpc.sessions.completeAllForDate.useMutation({
+    onMutate: async ({ date }) => {
+      const queryInput = { date };
+      await utils.sessions.list.cancel(queryInput);
+      const previous = utils.sessions.list.getData(queryInput);
+      utils.sessions.list.setData(queryInput, (current) => current?.map((session) =>
+        session.therapyType !== "Block" && session.status === "scheduled"
+          ? {
+              ...session,
+              status: "completed" as const,
+              actualDurationMinutes: session.durationMinutes,
+              missedReason: null,
+            }
+          : session,
+      ));
+      return { previous, queryInput };
+    },
+    onError: (err, _variables, context) => {
+      if (context?.previous) utils.sessions.list.setData(context.queryInput, context.previous);
+      toast.error(`Could not complete sessions: ${err.message}`);
+    },
+    onSuccess: ({ count }) => {
+      toast.success(count === 0 ? "No scheduled sessions needed completion." : `${count} session${count === 1 ? "" : "s"} completed.`);
+    },
     onSettled: () => invalidateBoard(),
   });
   const deleteSession = trpc.sessions.delete.useMutation({ 
@@ -330,50 +416,144 @@ export default function TherapyBoard() {
     onSuccess: () => { invalidateBoard(); toast.success("Patient updated"); }, 
     onError: (err) => toast.error(err.message) 
   });
-  const deletePatient = trpc.patients.delete.useMutation({ 
-    onSuccess: () => { invalidateBoard(); toast.success("Patient removed"); }, 
-    onError: (err) => toast.error(err.message) 
+  const reorderPatient = trpc.patients.reorder.useMutation({
+    onMutate: async (variables) => {
+      await utils.patients.list.cancel();
+      const previous = utils.patients.list.getData();
+
+      utils.patients.list.setData(undefined, (current) => {
+        if (!current) return current;
+        const moving = current.find((patient) => patient.id === variables.patientId);
+        if (!moving) return current;
+
+        const sameTeam = (left: number | null, right: number | null) => left === right;
+        const targetTeamId = variables.targetTeamId;
+        const sourceTeamId = moving.teamId;
+        const active = current.filter((patient) => !patient.isDischarged);
+        const destination = active.filter(
+          (patient) => patient.id !== moving.id && sameTeam(patient.teamId, targetTeamId),
+        );
+        let insertAt = destination.length;
+        if (variables.targetPatientId != null) {
+          const targetIndex = destination.findIndex((patient) => patient.id === variables.targetPatientId);
+          if (targetIndex === -1) return current;
+          insertAt = targetIndex + (variables.placeAfter ? 1 : 0);
+        }
+        destination.splice(insertAt, 0, { ...moving, teamId: targetTeamId });
+
+        const ranks = new Map<number, number>();
+        destination.forEach((patient, index) => ranks.set(patient.id, (index + 1) * 100));
+        if (!sameTeam(sourceTeamId, targetTeamId)) {
+          active
+            .filter((patient) => patient.id !== moving.id && sameTeam(patient.teamId, sourceTeamId))
+            .forEach((patient, index) => ranks.set(patient.id, (index + 1) * 100));
+        }
+
+        return current
+          .map((patient) => patient.id === moving.id
+            ? { ...patient, teamId: targetTeamId, orderIndex: ranks.get(patient.id) ?? patient.orderIndex }
+            : ranks.has(patient.id)
+              ? { ...patient, orderIndex: ranks.get(patient.id)! }
+              : patient)
+          .sort((left, right) =>
+            (left.orderIndex ?? 0) - (right.orderIndex ?? 0)
+              || left.roomNumber.localeCompare(right.roomNumber),
+          );
+      });
+
+      return { previous };
+    },
+    onError: (err, _variables, context) => {
+      if (context?.previous) utils.patients.list.setData(undefined, context.previous);
+      toast.error(`Could not move patient: ${err.message}`);
+    },
+    onSettled: () => { void utils.patients.list.invalidate(); },
+  });
+  const archivePatient = trpc.patients.archive.useMutation({
+    onSuccess: () => { invalidateBoard(); toast.success("Admission archived"); },
+    onError: (err) => toast.error(err.message),
+  });
+  const restorePatient = trpc.patients.restore.useMutation({
+    onSuccess: () => { invalidateBoard(); toast.success("Admission restored to discharged history"); },
+    onError: (err) => toast.error(err.message),
   });
   const toggleFlag = trpc.statusFlags.toggle.useMutation({
-    onSuccess: (data, variables) => {
-      invalidateBoard();
-      // Taking a patient off DC status (readmission) but their old room is now occupied by
-      // whoever's using it now -- the server left them on DC status rather than silently
-      // duplicating the room. Open the edit dialog straight to this patient so staff can pick a
-      // real open room right away instead of hunting for why the toggle didn't seem to take.
-      if (data.roomConflict) {
-        const patient = patients.find((p) => p.id === variables.patientId);
-        toast.error(`Room ${data.roomConflict.roomNumber} is occupied by ${data.roomConflict.occupiedByName} -- assign a new room to complete this readmission.`);
-        if (patient) {
-          setPatientDraft({
-            id: patient.id,
-            roomNumber: "",
-            name: patient.name,
-            notes: patient.notes ?? "",
-            isDischarged: false,
-            admissionDate: patient.admissionDate ?? "",
-            estimatedDischargeDate: patient.estimatedDischargeDate ?? "",
-            weeklyMinuteTarget: patient.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
-            teamId: patient.teamId ?? null,
-          });
-          setPatientDialogOpen(true);
-        }
-      }
+    onMutate: async (variables) => {
+      const queryInput = { date: day };
+      await utils.statusFlags.listForDate.cancel(queryInput);
+      const previous = utils.statusFlags.listForDate.getData(queryInput);
+
+      utils.statusFlags.listForDate.setData(queryInput, (current) => {
+        const flagsForDay = current ?? [];
+        const withoutFlag = flagsForDay.filter(
+          (flag) => !(flag.patientId === variables.patientId && flag.flagType === variables.flagType),
+        );
+
+        if (!variables.active) return withoutFlag;
+
+        return [
+          ...withoutFlag,
+          {
+            id: -Date.now(),
+            patientId: variables.patientId,
+            flagType: variables.flagType,
+            date: variables.date,
+            active: true,
+            createdAt: new Date(),
+          },
+        ];
+      });
+
+      return { previous, queryInput };
     },
-    onError: (err) => toast.error(err.message)
+    onError: (err, _variables, context) => {
+      if (context?.previous) {
+        utils.statusFlags.listForDate.setData(context.queryInput, context.previous);
+      }
+      toast.error(err.message);
+    },
+    onSettled: () => invalidateBoard(),
   });
-  const saveSnapshot = trpc.history.save.useMutation({ 
-    onSuccess: () => toast.success("Board snapshot saved"),
-    onError: (err) => toast.error(err.message) 
+  const saveSnapshot = trpc.history.save.useMutation({
+    onSuccess: () => {
+      void utils.history.list.invalidate();
+      void utils.history.getForDate.invalidate();
+    },
   });
+  const invalidateStaff = () => {
+    utils.therapists.list.invalidate();
+    utils.therapists.listArchived.invalidate();
+  };
   const createTherapist = trpc.therapists.create.useMutation({
-    onSuccess: () => utils.therapists.list.invalidate(),
+    onSuccess: () => { invalidateStaff(); toast.success("Staff member added"); },
+    onError: (err) => toast.error(err.message),
   });
   const updateTherapist = trpc.therapists.update.useMutation({
-    onSuccess: () => utils.therapists.list.invalidate(),
+    onSuccess: () => { invalidateStaff(); toast.success("Staff member updated"); },
+    onError: (err) => toast.error(err.message),
   });
-  const deleteTherapist = trpc.therapists.delete.useMutation({
-    onSuccess: () => utils.therapists.list.invalidate(),
+  const archiveTherapist = trpc.therapists.archive.useMutation({
+    onSuccess: () => { invalidateStaff(); toast.success("Staff member archived"); },
+    onError: (err) => toast.error(err.message),
+  });
+  const restoreTherapist = trpc.therapists.restore.useMutation({
+    onSuccess: () => { invalidateStaff(); toast.success("Staff member restored"); },
+    onError: (err) => toast.error(err.message),
+  });
+  const archivedTherapistsQuery = trpc.therapists.listArchived.useQuery();
+  const inviteUser = trpc.admin.invite.useMutation({
+    onSuccess: (result, variables) => {
+      if (result.emailDelivery === "sent") {
+        toast.success(`Invitation sent to ${variables.email}`);
+      } else if (result.emailDelivery === "not_configured") {
+        toast.warning(`Access was created for ${variables.email}, but server email is not configured.`);
+      } else if (result.emailDelivery === "rate_limited") {
+        toast.warning("Access was created, but too many sign-in links were requested. Try resending in 15 minutes.");
+      } else {
+        toast.error(`Access was created for ${variables.email}, but the invitation email could not be delivered.`);
+      }
+    },
+    onError: (err) => toast.error(err.message),
   });
   const sendTomorrowAssignments = trpc.therapists.sendTomorrowAssignments.useMutation({
     onSuccess: (result) => {
@@ -426,6 +606,7 @@ export default function TherapyBoard() {
       const start = new Date(s.startTime);
       const slotIndex = dateToSlotIndex(start);
       const slotSpan = durationToSlots(s.durationMinutes);
+      const assignmentHistory = assignmentHistoryBySessionId.get(s.id);
       const computed: SessionTileData = {
         id: s.id,
         patientId: s.patientId,
@@ -439,6 +620,7 @@ export default function TherapyBoard() {
         deliveryMode: s.deliveryMode || "individual",
         missedReason: s.missedReason,
         notes: s.notes,
+        previousTherapistName: assignmentHistory?.previousTherapistName,
       };
       const cached = cache.get(s.id);
       const unchanged =
@@ -450,7 +632,7 @@ export default function TherapyBoard() {
     });
     tileCacheRef.current = nextCache;
     return result;
-  }, [rawSessions]);
+  }, [assignmentHistoryBySessionId, rawSessions]);
 
 
   // Conflict detection: same therapist overlapping in time, or same patient overlapping
@@ -462,6 +644,7 @@ export default function TherapyBoard() {
     // tiles that could never conflict. Only pairs within the same bucket need checking.
     const byTherapist = new Map<number, SessionTileData[]>();
     tiles.forEach((t) => {
+      if (isCanceledStatus(t.status)) return;
       if (t.therapistId == null) return;
       const arr = byTherapist.get(t.therapistId) ?? [];
       arr.push(t);
@@ -490,6 +673,7 @@ export default function TherapyBoard() {
     });
     const byPatient = new Map<number, SessionTileData[]>();
     tiles.forEach((t) => {
+      if (isCanceledStatus(t.status)) return;
       const arr = byPatient.get(t.patientId) ?? [];
       arr.push(t);
       byPatient.set(t.patientId, arr);
@@ -513,42 +697,45 @@ export default function TherapyBoard() {
     return { conflictIds: ids, conflictPairs: pairs };
   }, [tiles]);
 
-  // Weekly minutes per patient (their own admission-anchored week, not a shared Mon-Sun). Must
-  // count the same way dailyMinutesByPatient and the server's getWeeklyMinutesSummary do -- skip
-  // missed sessions (isMissedStatus) and Block time (not real therapy), and use
-  // actualDurationMinutes over durationMinutes once a session is completed. Previously this summed
-  // raw durationMinutes for every row in range regardless of status/type, so a missed or Block
-  // session inflated the "X/900" progress bar with minutes that were never actually delivered.
-  const weekMinsByPatient = useMemo(() => {
-    const map = new Map<number, number>();
+  // Keep delivered and projected minutes separate. Completed minutes drive actual progress;
+  // still-scheduled minutes extend the projection to show whether more time is needed by week end.
+  const { weekMinsByPatient, projectedWeekMinsByPatient } = useMemo(() => {
+    const completedMap = new Map<number, number>();
+    const projectedMap = new Map<number, number>();
     patients.forEach((p) => {
-      if (p.isDischarged) return;
+      if (!isActiveAdmission(p)) return;
       const bounds = getPatientWeekBounds(p.admissionDate, day);
       const patientSessions = weekSessions.filter((s) => {
         if (s.patientId !== p.id) return false;
-        if (isMissedStatus(s.status) || s.therapyType === "Block") return false;
+        if (isMissedStatus(s.status) || isCanceledStatus(s.status) || s.therapyType === "Block") return false;
         const sessionStart = new Date(s.startTime);
         return sessionStart >= bounds.start && sessionStart <= bounds.end;
       });
-      const sum = patientSessions.reduce(
-        (acc, curr) => acc + (curr.status === "completed" ? (curr.actualDurationMinutes ?? curr.durationMinutes) : curr.durationMinutes),
-        0,
-      );
-      map.set(p.id, sum);
+      const completed = patientSessions
+        .filter((session) => session.status === "completed")
+        .reduce((sum, session) => sum + (session.actualDurationMinutes ?? session.durationMinutes), 0);
+      const pending = patientSessions
+        .filter((session) => session.status === "scheduled")
+        .reduce((sum, session) => sum + session.durationMinutes, 0);
+      completedMap.set(p.id, completed);
+      projectedMap.set(p.id, completed + pending);
     });
-    return map;
+    return {
+      weekMinsByPatient: completedMap,
+      projectedWeekMinsByPatient: projectedMap,
+    };
   }, [patients, weekSessions, day]);
 
   // How many active (non-discharged) patients are below their weekly target
   const patientsUnderTarget = useMemo(() => {
     return patients.filter((p) => {
-      if (p.isDischarged) return false;
+      if (!isActiveAdmission(p)) return false;
       if (teamFilter !== "all" && p.teamId !== teamFilter) return false;
-      const mins = weekMinsByPatient.get(p.id) ?? 0;
+      const mins = projectedWeekMinsByPatient.get(p.id) ?? 0;
       const target = p.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET;
       return mins < target;
     });
-  }, [patients, weekMinsByPatient, teamFilter]);
+  }, [patients, projectedWeekMinsByPatient, teamFilter]);
 
   // Fire a toast when a patient crosses from below to at/above their weekly target
   const prevWeekMinsRef = useRef<Map<number, number> | null>(null);
@@ -559,14 +746,14 @@ export default function TherapyBoard() {
     // dialog on a plain page refresh. Just record the baseline this time; only compare from the
     // next run onward, when a change to weekMinsByPatient reflects an actual new session.
     if (!prev) {
-      prevWeekMinsRef.current = new Map(weekMinsByPatient);
+      prevWeekMinsRef.current = new Map(projectedWeekMinsByPatient);
       return;
     }
     patients.forEach((p) => {
-      if (p.isDischarged) return;
+      if (!isActiveAdmission(p)) return;
       const target: number = p.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET;
       const prevMins = prev.get(p.id) ?? 0;
-      const currMins = weekMinsByPatient.get(p.id) ?? 0;
+      const currMins = projectedWeekMinsByPatient.get(p.id) ?? 0;
       if (prevMins < target && currMins >= target) {
         const bounds = getPatientWeekBounds(p.admissionDate, day);
         const patientWeekSessions: WeekSessionRow[] = weekSessions
@@ -575,7 +762,7 @@ export default function TherapyBoard() {
             // Match weekMinsByPatient's own filter -- a missed or Block session was never
             // counted toward the total, so it can't be a valid "trim this to get under target"
             // recommendation below (TargetReachedDialog's buildRecommendations).
-            if (isMissedStatus(s.status) || s.therapyType === "Block") return false;
+            if (s.status !== "scheduled" || s.therapyType === "Block") return false;
             const sessionStart = new Date(s.startTime);
             return sessionStart >= bounds.start && sessionStart <= bounds.end;
           })
@@ -590,12 +777,13 @@ export default function TherapyBoard() {
           patientName: p.name,
           target,
           totalMinutes: currMins,
+          completedMinutes: weekMinsByPatient.get(p.id) ?? 0,
           weekSessions: patientWeekSessions,
         });
       }
     });
-    prevWeekMinsRef.current = new Map(weekMinsByPatient);
-  }, [weekMinsByPatient, patients, weekSessions, therapists]);
+    prevWeekMinsRef.current = new Map(projectedWeekMinsByPatient);
+  }, [projectedWeekMinsByPatient, weekMinsByPatient, patients, weekSessions, therapists, day]);
 
   // Therapist -> team map for filtering
   const therapistTeam = useMemo(() => {
@@ -614,10 +802,10 @@ export default function TherapyBoard() {
 
   // Group flags by patient
   const flagsByPatient = useMemo(() => {
-    const map = new Map<number, { id: number; flagType: FlagType }[]>();
+    const map = new Map<number, { id: number; flagType: FlagType; date: Date | string }[]>();
     flags.forEach((f) => {
       const arr = map.get(f.patientId) ?? [];
-      arr.push({ id: f.id, flagType: f.flagType as FlagType });
+      arr.push({ id: f.id, flagType: f.flagType as FlagType, date: f.date });
       map.set(f.patientId, arr);
     });
     return map;
@@ -627,7 +815,7 @@ export default function TherapyBoard() {
   const recentTherapyPatientIds = useMemo(() => {
     const set = new Set<number>();
     weekSessions.forEach((s) => {
-      if (s.therapyType === "Block") return;
+      if (s.therapyType === "Block" || isMissedStatus(s.status) || isCanceledStatus(s.status)) return;
       const diff = differenceInDays(day, new Date(s.startTime));
       if (diff >= 0 && diff <= 2) {
         set.add(s.patientId);
@@ -657,7 +845,7 @@ export default function TherapyBoard() {
     if (!therapistId) return null;
 
     const therapistOverlap = tiles.find(t => {
-      if (t.therapistId !== therapistId || t.id === excludeSessionId) return false;
+      if (t.therapistId !== therapistId || t.id === excludeSessionId || isCanceledStatus(t.status)) return false;
 
       const isMatchingGroupOrConcurrent = t.deliveryMode === deliveryMode && (deliveryMode === "group" || deliveryMode === "concurrent");
       if (isMatchingGroupOrConcurrent) return false;
@@ -818,7 +1006,7 @@ export default function TherapyBoard() {
   const dailyMinutesByPatient = useMemo(() => {
     const map = new Map<number, number>();
     tiles.forEach(t => {
-      if (isMissedStatus(t.status) || t.therapyType === "Block") return;
+      if ((t.status !== "scheduled" && t.status !== "completed") || t.therapyType === "Block") return;
       // If completed, use actualDurationMinutes if provided
       const mins = t.status === "completed" ? (t.actualDurationMinutes ?? t.durationMinutes) : t.durationMinutes;
       map.set(t.patientId, (map.get(t.patientId) || 0) + mins);
@@ -835,7 +1023,9 @@ export default function TherapyBoard() {
   }, [tiles]);
 
   const sensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
+    // Leave enough movement tolerance that a slightly shaky single click still opens the
+    // session editor; deliberate movement beyond this threshold starts a drag.
+    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
   );
 
@@ -848,7 +1038,7 @@ export default function TherapyBoard() {
     setSessionDraft({
       patientId,
       therapyType: "PT",
-      therapistId: null,
+      therapistId: canEdit ? null : currentTherapistId,
       slotIndex,
       durationMinutes: 30,
       deliveryMode: "individual",
@@ -856,7 +1046,7 @@ export default function TherapyBoard() {
       notes: "",
     });
     setSessionDialogOpen(true);
-  }, [setSessionDraft, setSessionDialogOpen]);
+  }, [canEdit, currentTherapistId, setSessionDraft, setSessionDialogOpen]);
 
   const openEditSession = useCallback((tile: SessionTileData) => {
     setSessionDraft({
@@ -866,6 +1056,7 @@ export default function TherapyBoard() {
       therapistId: tile.therapistId,
       slotIndex: tile.slotIndex,
       durationMinutes: tile.durationMinutes,
+      actualDurationMinutes: tile.actualDurationMinutes ?? null,
       deliveryMode: tile.deliveryMode || "individual",
       status: tile.status || "scheduled",
       missedReason: tile.missedReason || undefined,
@@ -875,6 +1066,7 @@ export default function TherapyBoard() {
   }, [setSessionDraft, setSessionDialogOpen]);
 
   const handleResizeSession = useCallback((sessionId: number, newDurationMinutes: number) => {
+    if (!canEdit) return;
     const session = rawSessions.find(s => s.id === sessionId);
     if (!session) return;
 
@@ -883,7 +1075,7 @@ export default function TherapyBoard() {
 
     const slotsNeeded = newDurationMinutes / 30;
     if (tile.slotIndex + slotsNeeded > TIME_SLOTS.length) {
-      toast.error("Session exceeds clinical hours (5 PM limit)");
+      toast.error("Session exceeds clinical hours (6 PM limit)");
       return;
     }
 
@@ -898,8 +1090,6 @@ export default function TherapyBoard() {
         endTime: end,
         durationMinutes: newDurationMinutes,
         ignoreConflicts: true,
-      }, {
-        onSuccess: () => toast.success("Session duration updated")
       });
     };
 
@@ -910,6 +1100,7 @@ export default function TherapyBoard() {
   // Books a slot proposed by this morning's auto-generated gap-fill digest directly, without
   // opening the full session dialog -- one click from the "At Risk" popover in BoardHeader.
   function quickBookDigestSlot(patientId: number, slot: { startTime: string; durationMinutes: number; therapistId: number | null; therapyType: "PT" | "OT" | "SLP" }) {
+    if (!requireEdit()) return;
     const start = new Date(slot.startTime);
     const end = new Date(start.getTime() + slot.durationMinutes * 60000);
 
@@ -923,8 +1114,6 @@ export default function TherapyBoard() {
         durationMinutes: slot.durationMinutes,
         notes: "Booked from morning digest",
         ignoreConflicts: true,
-      }, {
-        onSuccess: () => toast.success("Session created")
       });
     };
 
@@ -933,12 +1122,24 @@ export default function TherapyBoard() {
   }
 
   function saveSession(value: SessionFormValue) {
+    const managesOwnSession = canEdit;
+    const chartOnly = Boolean(value.id) && role === "staff" && canChart && value.therapistId === currentTherapistId;
+    if (!managesOwnSession && !chartOnly) {
+      toast.error("You can only change sessions assigned to you.");
+      return;
+    }
     const start = slotIndexToDate(day, value.slotIndex);
     const end = new Date(start.getTime() + value.durationMinutes * 60000);
 
     const doSave = () => {
       if (value.id) {
-        updateSession.mutate({
+        updateSession.mutate(chartOnly ? {
+          id: value.id,
+          actualDurationMinutes: value.actualDurationMinutes ?? undefined,
+          notes: value.notes,
+          status: value.status,
+          missedReason: value.missedReason,
+        } : {
           id: value.id,
           therapyType: value.therapyType,
           therapistId: value.therapistId,
@@ -952,7 +1153,7 @@ export default function TherapyBoard() {
           missedReason: value.missedReason,
           ignoreConflicts: true,
         }, {
-          onSuccess: () => toast.success("Session updated")
+          onSuccess: () => setSessionDialogOpen(false),
         });
       } else {
         createSession.mutate({
@@ -968,116 +1169,91 @@ export default function TherapyBoard() {
           missedReason: value.missedReason,
           ignoreConflicts: true,
         }, {
-          onSuccess: () => toast.success("Session created")
+          onSuccess: () => setSessionDialogOpen(false),
         });
       }
     };
 
-    const warnings = [checkLunchOverlap(start, end), checkTherapistAvailability(value.therapistId, start, end), checkDoubleBooking(value.therapistId, value.deliveryMode, start, end, value.id)];
-    processWarnings(warnings, () => {
+    // Override warnings are for creating or rescheduling work, not documenting work that
+    // already happened. A status-only change (Completed/Missed), note edit, or actual-minutes
+    // update must save immediately even when the original appointment sits outside a later
+    // edited shift definition.
+    const original = value.id
+      ? rawSessions.find((session) => session.id === value.id)
+      : undefined;
+    const scheduleChanged = !original
+      || dateToSlotIndex(new Date(original.startTime)) !== value.slotIndex
+      || original.durationMinutes !== value.durationMinutes
+      || original.therapistId !== value.therapistId
+      || (original.deliveryMode || "individual") !== value.deliveryMode;
+
+    if (value.id && !scheduleChanged) {
       doSave();
-      setSessionDialogOpen(false);
-    });
+      return;
+    }
+
+    const warnings = [checkLunchOverlap(start, end), checkTherapistAvailability(value.therapistId, start, end), checkDoubleBooking(value.therapistId, value.deliveryMode, start, end, value.id)];
+    processWarnings(warnings, doSave);
   }
 
-  function savePatient(value: PatientFormValue) {
-    if (value.id) {
-      const oldPatient = patients.find((p) => p.id === value.id);
-      updatePatient.mutate({
+  async function savePatient(value: PatientFormValue): Promise<boolean> {
+    if (!requireEdit()) return false;
+    const common = {
+      mrn: value.mrn.trim().toUpperCase(),
+      roomNumber: value.roomNumber.trim(),
+      name: value.name.trim(),
+      notes: value.notes.trim(),
+      isDischarged: value.isDischarged,
+      admissionDate: value.admissionDate || undefined,
+      estimatedDischargeDate: value.estimatedDischargeDate || undefined,
+      weeklyMinuteTarget: value.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
+      teamId: value.teamId ?? null,
+    };
+    try {
+    if (value.id && !value.isRoomPlaceholder) {
+      await updatePatient.mutateAsync({
         id: value.id,
-        roomNumber: value.roomNumber,
-        name: value.name,
-        notes: value.notes,
-        isDischarged: value.isDischarged,
-        admissionDate: value.admissionDate || undefined,
-        estimatedDischargeDate: value.estimatedDischargeDate || undefined,
-        weeklyMinuteTarget: value.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
-        teamId: value.teamId ?? null,
-      }, {
-        onSuccess: () => {
-          toast.success("Patient updated");
-          // If the patient was just marked as discharged, leave an "Available" slot in that room
-          if (value.isDischarged && oldPatient && !oldPatient.isDischarged) {
-            createPatient.mutate({
-              roomNumber: value.roomNumber,
-              name: "Available",
-              notes: "",
-              isDischarged: false,
-              weeklyMinuteTarget: DEFAULT_WEEKLY_MINUTE_TARGET,
-              teamId: oldPatient.teamId ?? null,
-            });
-          }
-        }
+        ...common,
+        previousAdmissionId: value.previousAdmissionId ?? undefined,
+        isRoomPlaceholder: false,
       });
     } else {
-      createPatient.mutate({
-        roomNumber: value.roomNumber,
-        name: value.name,
-        notes: value.notes,
-        isDischarged: value.isDischarged,
-        admissionDate: value.admissionDate || undefined,
-        estimatedDischargeDate: value.estimatedDischargeDate || undefined,
-        weeklyMinuteTarget: value.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
-        teamId: value.teamId ?? null,
-      }, {
-        onSuccess: (newPatient) => {
-          if (value.sessionTime && value.sessionTime !== "none" && value.sessionType && value.sessionDuration) {
-            const sessionStart = slotIndexToDate(day, Number(value.sessionTime));
-            createSession.mutate({
-              patientId: newPatient.id,
-              therapyType: value.sessionType,
-              startTime: sessionStart,
-              endTime: new Date(sessionStart.getTime() + value.sessionDuration * 60000),
-              durationMinutes: value.sessionDuration,
-              therapistId: value.sessionTherapist,
-              notes: "",
-              ignoreConflicts: true,
-            });
-            toast.success("Patient and session added");
-          } else {
-            toast.success("Patient added");
-          }
-        }
+      const newPatient = await createPatient.mutateAsync({
+        ...common,
+        previousAdmissionId: value.previousAdmissionId ?? undefined,
       });
+      if (value.sessionTime && value.sessionTime !== "none" && value.sessionType && value.sessionDuration) {
+        const sessionStart = slotIndexToDate(day, Number(value.sessionTime));
+        createSession.mutate({
+          patientId: newPatient.id,
+          therapyType: value.sessionType,
+          startTime: sessionStart,
+          endTime: new Date(sessionStart.getTime() + value.sessionDuration * 60000),
+          durationMinutes: value.sessionDuration,
+          therapistId: value.sessionTherapist,
+          notes: "",
+        });
+      }
+    }
+      return true;
+    } catch {
+      return false;
     }
   }
 
-  function handleSnapshot() {
-    // Include therapists/teams so a saved snapshot is self-contained and can be printed
-    // later without needing today's live data (therapist/team names, not just IDs).
-    saveSnapshot.mutate(
-      {
-        date: day,
-        snapshot: { sessions: rawSessions, patients, flags, therapists, teams },
-      },
-      {
-        onSuccess: () => toast.success("Board snapshot saved"),
-        onError: () => toast.error("Could not save snapshot"),
-      },
-    );
+  async function handleSnapshot(note?: string) {
+    if (!requireEdit()) return null;
+    return saveSnapshot.mutateAsync({ date: day, note });
   }
 
-  function handlePrintAllPatients() {
-    const activePatients = patientsBySection.flatMap((s) => s.patients);
-    printAllPatientSchedules(activePatients, day, tiles, therapists);
-  }
-
-  function handleCopyDay() {
-    copyDayToNextDay.mutate(
-      { date: day },
-      {
-        onSuccess: (res) => toast.success(`Copied ${res.count} sessions to tomorrow.`),
-        onError: () => toast.error("Could not copy sessions."),
-      }
-    );
+  async function handleCopyDay() {
+    if (!requireEdit()) return null;
+    return copyDayToNextDay.mutateAsync({ date: day });
   }
 
   // Group patients by team and filter based on teamFilter selection
   const patientsBySection = useMemo(() => {
-    const isPatientDC = (p: typeof patients[0]) => {
-      const pFlags = flagsByPatient.get(p.id) ?? [];
-      return p.isDischarged || pFlags.some((f) => f.flagType === "DC");
-    };
+    const isPatientDC = (p: typeof patients[0]) => p.isDischarged;
 
     const sectionsToRender = teamFilter === "all" ? teams : teams.filter(t => t.id === teamFilter);
     const result = sectionsToRender.map((section) => ({
@@ -1100,17 +1276,18 @@ export default function TherapyBoard() {
     return result;
   }, [patients, teams, teamFilter, flagsByPatient]);
 
-  const { customCollisionDetection, handleDragStart, handleDragEnd } = useBoardDnd({
+  const { customCollisionDetection, handleDragStart, handleDragEnd, handleDragCancel } = useBoardDnd({
     day,
     patientsBySection,
     setActiveDrag,
     setActiveDragPatient,
-    updatePatient,
+    reorderPatient,
     updateSession,
     checkLunchOverlap,
     checkTherapistAvailability,
     checkDoubleBooking,
-    processWarnings
+    processWarnings,
+    canEdit,
   });
 
 
@@ -1125,18 +1302,53 @@ export default function TherapyBoard() {
 
   // Hoisted out of the patient .map() below -- one stable function shared by every row instead of
   // a fresh closure allocated per patient on every render.
-  const handleToggleFlag = useCallback((patientId: number, flag: FlagType, active: boolean) => {
-    toggleFlag.mutate({ patientId, flagType: flag, date: day, active });
-  }, [toggleFlag, day]);
+  const handleToggleFlag = useCallback(async (patientId: number, flag: FlagType, active: boolean) => {
+    if (!canEdit) return;
+    await toggleFlag.mutateAsync({ patientId, flagType: flag, date: day, active });
+  }, [toggleFlag, day, canEdit]);
 
   const handleCopyPatientSessions = useCallback((patientId: number) => {
+    if (!requireEdit()) return;
     copyPatientSessions.mutate({ patientId, date: day });
-  }, [copyPatientSessions, day]);
+  }, [copyPatientSessions, day, requireEdit]);
 
   const totalSessions = tiles.length;
   const conflictCount = conflictIds.size;
   const isBoardLoading =
     patientsQuery.isLoading || sessionsQuery.isLoading || therapistsQuery.isLoading;
+  const isBoardRefreshing = !isBoardLoading && (
+    patientsQuery.isFetching || sessionsQuery.isFetching || therapistsQuery.isFetching ||
+    teamsQuery.isFetching || flagsQuery.isFetching
+  );
+  const isSaving =
+    createSession.isPending || updateSession.isPending || deleteSession.isPending ||
+    createPatient.isPending || updatePatient.isPending || archivePatient.isPending ||
+    restorePatient.isPending || toggleFlag.isPending || saveSnapshot.isPending ||
+    createTherapist.isPending || updateTherapist.isPending || archiveTherapist.isPending ||
+    restoreTherapist.isPending || copyDayToNextDay.isPending || copyPatientSessions.isPending ||
+    completeAllSessions.isPending || completeOwnSession.isPending || undoOwnCompletion.isPending;
+  const boardError =
+    patientsQuery.error || sessionsQuery.error || therapistsQuery.error || teamsQuery.error ||
+    flagsQuery.error || createSession.error || updateSession.error || deleteSession.error ||
+    createPatient.error || updatePatient.error || archivePatient.error || restorePatient.error ||
+    toggleFlag.error || saveSnapshot.error || createTherapist.error || updateTherapist.error ||
+    archiveTherapist.error || restoreTherapist.error || copyDayToNextDay.error || copyPatientSessions.error ||
+    completeAllSessions.error || completeOwnSession.error || undoOwnCompletion.error;
+  const mobilePatients = patientsBySection
+    .flatMap((section) => section.patients)
+    .filter((patient) => isActiveAdmission(patient) && !patient.isRoomPlaceholder);
+  const mobilePatientIds = new Set(mobilePatients.map((patient) => patient.id));
+  const mobileSessions = visibleTiles.filter((session) => mobilePatientIds.has(session.patientId));
+  const hasVisiblePatients = patientsBySection.some((section) => section.patients.length > 0);
+  const isBoardUnavailable = Boolean(boardError) && patientsQuery.data === undefined;
+  const needsAccountSetup = role !== null && !hasBoardAccess;
+  const sessionDischargeFlag = sessionDraft
+    ? (flagsByPatient.get(sessionDraft.patientId) ?? []).find((flag) => flag.flagType === "DC")
+    : undefined;
+  const sessionDischargeAt = sessionDischargeFlag
+    && formatDateKey(new Date(sessionDischargeFlag.date)) === formatDateKey(day)
+      ? new Date(sessionDischargeFlag.date)
+      : null;
 
   return (
     <div className="min-h-screen bg-transparent">
@@ -1150,6 +1362,7 @@ export default function TherapyBoard() {
         teams={teams}
         patientsUnderTarget={patientsUnderTarget}
         weekMinsByPatient={weekMinsByPatient}
+        projectedWeekMinsByPatient={projectedWeekMinsByPatient}
         conflictCount={conflictCount}
         conflictPairs={conflictPairs}
         therapists={therapists}
@@ -1162,10 +1375,10 @@ export default function TherapyBoard() {
         setHistoryOpen={setHistoryOpen}
         setDataAnalysisOpen={setDataAnalysisOpen}
         handleSnapshot={handleSnapshot}
-        handlePrintAllPatients={handlePrintAllPatients}
         mySchedTherapist={mySchedTherapist}
         setMySchedTherapist={setMySchedTherapist}
         tiles={tiles}
+        sourceSessions={rawSessions}
         handleCopyDay={handleCopyDay}
         digestByPatientId={digestByPatientId}
         onBookSuggestion={quickBookDigestSlot}
@@ -1178,17 +1391,59 @@ export default function TherapyBoard() {
           setProductivityHubOpen(true);
         }}
         onViewStats={setStatsTherapistId}
+        canCompleteAll={role === "admin" || role === "team_lead" || role === "staff"}
+        completionSessionCount={!canEdit ? tiles.filter((tile) => tile.therapistId === currentTherapistId && tile.therapyType !== "Block" && tile.status === "scheduled").length : undefined}
+        personalCompletion={!canEdit}
+        isCompletingAllSessions={completeAllSessions.isPending}
+        onCompleteAllSessions={() => completeAllSessions.mutateAsync({ date: day })}
       />
 
-      {/* Mobile hint */}
-      <div className="flex items-center gap-2 border-b border-slate-100 bg-white px-4 py-2 text-xs text-slate-500 sm:hidden">
-        <Smartphone className="h-3.5 w-3.5 shrink-0 text-primary" />
-        <span>Tap <strong className="text-slate-700">My Schedule</strong> for a focused view. Swipe the grid to see all time slots.</span>
-      </div>
-
       {/* Board */}
-      <main className="p-4 sm:p-5">
-        {isBoardLoading ? (
+      <main className="space-y-4 p-3 sm:p-5">
+        {!needsAccountSetup && <BoardStatusSummary
+          conflictCount={conflictCount}
+          isLoading={isBoardLoading}
+          isRefreshing={isBoardRefreshing}
+          isSaving={isSaving}
+          errorMessage={boardError?.message}
+          onRetry={() => {
+            createSession.reset();
+            updateSession.reset();
+            deleteSession.reset();
+            createPatient.reset();
+            updatePatient.reset();
+            archivePatient.reset();
+            restorePatient.reset();
+            toggleFlag.reset();
+            saveSnapshot.reset();
+            createTherapist.reset();
+            updateTherapist.reset();
+            archiveTherapist.reset();
+            restoreTherapist.reset();
+            copyDayToNextDay.reset();
+            copyPatientSessions.reset();
+            completeAllSessions.reset();
+            completeOwnSession.reset();
+            undoOwnCompletion.reset();
+            if (!hasBoardAccess) return;
+            void Promise.all([
+              patientsQuery.refetch(), sessionsQuery.refetch(), therapistsQuery.refetch(),
+              teamsQuery.refetch(), flagsQuery.refetch(), weekSessionsQuery.refetch(),
+            ]);
+          }}
+          onReviewConflicts={conflictPairs[0] ? () => jumpToPatient(conflictPairs[0].sessionA.patientId) : undefined}
+        />}
+        <TeamHuddle day={day} />
+        {needsAccountSetup ? (
+          <div className="rounded-xl border border-amber-300 bg-white px-5 py-12 text-center shadow-sm" role="status">
+            <UserCircle2 className="mx-auto h-10 w-10 text-amber-700" />
+            <h1 className="mt-3 text-lg font-bold text-slate-950">Your board access needs one setup step</h1>
+            <p className="mx-auto mt-1 max-w-lg text-sm leading-6 text-slate-600">
+              An administrator must connect your account to the correct staff profile before the full schedule can be displayed. A team assignment is not required.
+            </p>
+            <p className="mx-auto mt-3 max-w-lg text-xs font-semibold text-amber-800">No patient data was requested or exposed.</p>
+          </div>
+        ) : isBoardLoading ? (
           <div className="overflow-hidden rounded border border-slate-200 bg-white shadow-sm">
             <div className="flex border-b border-slate-200 bg-slate-50 px-4 py-2.5">
               <div className="h-3 w-20 animate-pulse rounded bg-slate-200" />
@@ -1200,29 +1455,69 @@ export default function TherapyBoard() {
               </div>
             ))}
           </div>
+        ) : isBoardUnavailable ? (
+          <div className="rounded-xl border border-rose-200 bg-white px-5 py-12 text-center shadow-sm">
+            <AlertTriangle className="mx-auto h-10 w-10 text-rose-700" />
+            <h1 className="mt-3 text-lg font-bold text-slate-950">Schedule unavailable</h1>
+            <p className="mx-auto mt-1 max-w-md text-sm text-slate-600">We couldn't load enough information to safely display the board. Use Refresh board above when your connection is available.</p>
+          </div>
         ) : (
+        <>
+        <MobileTodayList
+          day={day}
+          patients={mobilePatients}
+          teams={teams}
+          therapists={therapists}
+          sessions={mobileSessions}
+          conflictIds={conflictIds}
+          canEdit={canEdit}
+          onAddSession={openNewSession}
+          onEditSession={openEditSession}
+          onAddPatient={() => { setPatientDraft(null); setPatientDialogOpen(true); }}
+        />
+        <div className="hidden md:block">
         <DndContext
-          sensors={sensors}
+          sensors={canEdit ? sensors : []}
           collisionDetection={customCollisionDetection}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
+          onDragCancel={handleDragCancel}
         >
-          <div className="overflow-x-auto overflow-y-hidden w-fit max-w-full mx-auto rounded-xl glass-panel touch-pan-x overscroll-x-contain scroll-smooth" style={{ WebkitOverflowScrolling: "touch" }}>
-            <div className="min-w-max pb-16">
-              {/* Time header */}
-              <TimeHeaderRow />
+          <div className="mx-auto flex h-[calc(100vh-11rem)] min-h-[420px] w-fit max-w-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            {/* Keep the time ruler outside the vertical scroller so it can never move out
+                of view. Its horizontal position follows the schedule below. */}
+            <div ref={timeHeaderScrollRef} className="w-full shrink-0 overflow-hidden">
+              <div className="min-w-max">
+                <TimeHeaderRow />
+              </div>
+            </div>
 
+            <div
+              className="min-h-0 w-full flex-1 overflow-auto touch-pan-x overscroll-contain scroll-smooth"
+              style={{ WebkitOverflowScrolling: "touch" }}
+              onScroll={(event) => {
+                if (timeHeaderScrollRef.current) {
+                  timeHeaderScrollRef.current.scrollLeft = event.currentTarget.scrollLeft;
+                }
+              }}
+            >
+            <div className="min-w-max pb-16">
               {/* Team sections */}
-              {patients.length === 0 ? (
+              {!hasVisiblePatients ? (
                 <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
                   <Users className="h-10 w-10 text-slate-300" />
-                  <p className="text-sm text-slate-500">No patients yet.</p>
-                  <Button
-                    size="sm"
-                    onClick={() => { setPatientDraft(null); setPatientDialogOpen(true); }}
-                  >
-                    <Plus className="mr-1 h-4 w-4" /> Add your first patient
-                  </Button>
+                  <div>
+                    <p className="text-base font-bold text-slate-900">No active admissions</p>
+                    <p className="mt-1 text-sm text-slate-600">Add an admission to begin scheduling this team.</p>
+                  </div>
+                  {isAdmin && (
+                    <Button
+                      className="h-11"
+                      onClick={() => { setPatientDraft(null); setPatientDialogOpen(true); }}
+                    >
+                      <Plus className="mr-2 h-4 w-4" /> Add admission
+                    </Button>
+                  )}
                 </div>
               ) : (
                 patientsBySection.map((section) => {
@@ -1253,23 +1548,24 @@ export default function TherapyBoard() {
                         >
                           {section.patients.map((patient, rowIdx) => {
                             const pFlags = flagsByPatient.get(patient.id) ?? [];
-                            const isDC = patient.isDischarged || pFlags.some((f) => f.flagType === "DC");
-                            const isMedicalHold = pFlags.some((f) => f.flagType === "Medical Hold");
+                            const isDC = patient.isDischarged;
+                            const isPlaceholder = patient.isRoomPlaceholder;
+                            const isMedicalHold = !isPlaceholder && pFlags.some((f) => f.flagType === "Medical Hold");
                             
                             // Check if patient had therapy in the last 2 days (or has it scheduled today)
                             const hasTherapyRecent = recentTherapyPatientIds.has(patient.id);
-                            const missedTherapyAlert = !isDC && !isMedicalHold && !hasTherapyRecent;
+                            const missedTherapyAlert = !isPlaceholder && !isDC && !isMedicalHold && !hasTherapyRecent;
 
                             // Missing Exit Eval Alert
                             let missingExitEvalAlert = false;
                             const estimatedDC = patient.estimatedDischargeDate;
-                            if (estimatedDC && !isDC) {
+                            if (estimatedDC && !isPlaceholder && !isDC) {
                                const dcDate = new Date(estimatedDC + "T00:00:00");
                                const dcDaysAway = differenceInDays(dcDate, day);
                                if (dcDaysAway >= 0 && dcDaysAway <= 2) {
                                   // Approaching discharge. Check if there is an Eval session on dcDate or dcDate - 1 day.
                                   const evalExists = upcomingSessions.some((s) => {
-                                      if (s.patientId !== patient.id || s.therapyType !== "Eval") return false;
+                                      if (s.patientId !== patient.id || !isEvaluationTherapyType(s.therapyType)) return false;
                                       const sDate = new Date(s.startTime);
                                       const diffToDC = differenceInDays(dcDate, startOfDay(sDate));
                                       return diffToDC === 0 || diffToDC === -1;
@@ -1290,6 +1586,7 @@ export default function TherapyBoard() {
                                 therapists={therapists}
                                 pFlags={pFlags}
                                 weekMinsByPatient={weekMinsByPatient}
+                                projectedWeekMinsByPatient={projectedWeekMinsByPatient}
                                 tilesByPatientSlot={tilesByPatientSlot}
                                 occupiedCells={occupiedCells}
                                 dailyMinutesByPatient={dailyMinutesByPatient}
@@ -1317,6 +1614,7 @@ export default function TherapyBoard() {
                 })
               )}
             </div>
+            </div>
           </div>
 
           <DragOverlay>
@@ -1336,7 +1634,7 @@ export default function TherapyBoard() {
                 />
               </div>
             ) : activeDragPatient ? (
-              <div className="flex w-72 items-center gap-1.5 border border-slate-300 bg-white px-3 py-2 shadow-xl rounded cursor-grabbing">
+              <div className="flex w-52 cursor-grabbing items-center gap-1.5 rounded border border-slate-300 bg-white px-3 py-2 shadow-xl sm:w-72">
                 <span className="truncate text-sm font-bold text-slate-800">{activeDragPatient.name}</span>
                 <span className="shrink-0 inline-flex min-w-[2.5rem] justify-center rounded border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-xs font-bold tabular-nums text-slate-600">
                   {activeDragPatient.roomNumber}
@@ -1345,98 +1643,149 @@ export default function TherapyBoard() {
             ) : null}
           </DragOverlay>
         </DndContext>
+        </div>
+        </>
         )}
 
-        {/* Legend -- session tiles are colored by assigned therapist (each staff member picks
-            their own color in the Staff panel), not by therapy type, so the type key below is
-            intentionally plain/uncolored rather than implying a color mapping that no longer
-            matches what's actually on the grid. */}
-        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-lg border border-white/40 glass-surface px-4 py-3 shadow-sm">
-          <span className="text-micro font-semibold uppercase tracking-widest text-slate-500 w-full md:w-auto">Legend</span>
+        <section aria-label="Schedule legend" className="mt-3 hidden overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm md:block">
+          <div className="flex items-center justify-between gap-4 border-b border-slate-200 bg-slate-50 px-4 py-2.5">
+            <div className="flex items-center gap-2">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-100 text-blue-700">
+                <UserCircle2 className="h-4 w-4" />
+              </span>
+              <div>
+                <h2 className="text-xs font-extrabold uppercase tracking-[0.12em] text-slate-800">Schedule key</h2>
+                <p className="text-[11px] text-slate-500">How to read the board at a glance</p>
+              </div>
+            </div>
+            <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-bold tabular-nums text-slate-700">
+              {activePatientCount} active patient{activePatientCount === 1 ? "" : "s"}
+            </span>
+          </div>
 
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            {THERAPY_TYPES.map((t) => {
-              const meta = THERAPY_META[t];
-              return (
-                <div key={t} className="flex items-center gap-1.5">
-                  <span className="flex h-5 w-8 items-center justify-center rounded border border-white/50 bg-white/60 shadow-sm text-micro font-bold text-slate-600">
-                    {meta.label}
+          <div className="grid divide-y divide-slate-200 xl:grid-cols-[1fr_0.8fr_1.7fr] xl:divide-x xl:divide-y-0">
+            <div className="min-w-0 px-4 py-3">
+              <p className="mb-2 text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Tile labels</p>
+              <div className="flex flex-wrap gap-1.5">
+                {["PT", "OT", "SLP"].map((type) => (
+                  <span key={type} className="inline-flex h-7 items-center rounded-md border border-slate-200 bg-slate-50 px-2.5 text-xs font-extrabold text-slate-800">
+                    {type}
                   </span>
-                  <span className="text-xs font-medium text-slate-700">{meta.full}</span>
+                ))}
+                <span className="inline-flex h-7 items-center rounded-md border border-violet-200 bg-violet-50 px-2.5 text-xs font-extrabold text-violet-800">Eval</span>
+                <span className="inline-flex h-7 items-center rounded-md border border-slate-300 bg-slate-200 px-2.5 text-xs font-extrabold text-slate-700">Block</span>
+              </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-slate-500">Evaluations include the discipline on the tile, such as PT Eval.</p>
+            </div>
+
+            <div className="min-w-0 px-4 py-3">
+              <p className="mb-2 text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Color</p>
+              <div className="flex items-center gap-2.5">
+                <span className="relative h-8 w-12 shrink-0 rounded-md border border-sky-300 bg-sky-100 shadow-sm">
+                  <span className="absolute inset-y-0 left-0 w-1 rounded-l-md bg-sky-600" />
+                </span>
+                <p className="text-xs font-semibold leading-snug text-slate-700">Tile color identifies the assigned therapist.</p>
+              </div>
+            </div>
+
+            <div className="min-w-0 px-4 py-3">
+              <p className="mb-2 text-[10px] font-extrabold uppercase tracking-wider text-slate-500">Session state</p>
+              <div className="flex flex-wrap gap-x-4 gap-y-2.5">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                  <span className="h-3 w-3 rounded-sm border border-blue-300 bg-blue-100" /> Scheduled
                 </div>
-              );
-            })}
-          </div>
-
-          <div className="hidden md:block h-5 w-px bg-slate-300/50" />
-
-          <div className="flex items-center gap-1.5">
-            <UserCircle2 className="h-4 w-4 text-slate-500" />
-            <span className="text-xs font-medium text-slate-700">Tile color = assigned therapist</span>
-          </div>
-
-          <div className="hidden md:block h-5 w-px bg-slate-300/50" />
-
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="flex items-center gap-1.5">
-              <CheckCircle2 className="h-4 w-4 text-emerald-600" strokeWidth={2.5} />
-              <span className="text-xs font-medium text-slate-700">Completed</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <XCircle className="h-4 w-4 text-red-500" strokeWidth={2.5} />
-              <span className="text-xs font-medium text-slate-700">Missed</span>
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" strokeWidth={2.5} /> Completed
+                </div>
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                  <XCircle className="h-4 w-4 text-rose-600" strokeWidth={2.5} /> Missed
+                </div>
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                  <LogOut className="h-4 w-4 text-slate-500" strokeWidth={2.5} /> Canceled — D/C
+                </div>
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                  <span className="h-4 w-5 rounded-sm border-l-2 border-l-rose-500 bg-slate-200 bg-[repeating-linear-gradient(135deg,rgba(100,116,139,0.18),rgba(100,116,139,0.18)_3px,transparent_3px,transparent_6px)]" /> After D/C cutoff
+                </div>
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                  <AlertTriangle className="h-4 w-4 text-amber-600" strokeWidth={2.5} /> Needs review
+                </div>
+              </div>
             </div>
           </div>
-
-          <div className="w-full md:w-auto md:ml-auto flex items-center justify-between gap-2 text-xs font-medium text-slate-500 pt-3 md:pt-0 border-t border-slate-300/30 md:border-0 mt-1 md:mt-0">
-            <div>
-              <span className="tabular-nums font-bold text-slate-700">{patients.length}</span> patient{patients.length !== 1 ? "s" : ""}
-            </div>
-          </div>
-        </div>
+        </section>
       </main>
 
       {/* Dialogs */}
-      <SessionDialog
+      <Suspense fallback={null}>
+      {sessionDialogOpen && <SessionDialog
         open={sessionDialogOpen}
         onOpenChange={setSessionDialogOpen}
         initial={sessionDraft}
         patients={patients}
         therapists={therapists}
         referenceDate={day}
+        previousTherapistName={sessionDraft?.id ? assignmentHistoryBySessionId.get(sessionDraft.id)?.previousTherapistName : undefined}
         onSave={saveSession}
+        canComplete={role === "viewer" && currentTherapistId != null && sessionDraft?.therapistId === currentTherapistId && sessionDraft?.status === "scheduled"}
+        isCompleting={completeOwnSession.isPending}
+        onComplete={(id) => completeOwnSession.mutate({ id })}
+        canUndoComplete={role === "viewer" && currentTherapistId != null && sessionDraft?.therapistId === currentTherapistId && sessionDraft?.status === "completed"}
+        isUndoingCompletion={undoOwnCompletion.isPending}
+        onUndoComplete={(id) => undoOwnCompletion.mutate({ id })}
+        dischargeAt={sessionDischargeAt}
+        isUpdatingDischargeToday={toggleFlag.isPending}
+        onSetDischargeTime={isAdmin || role === "team_lead" ? (value) => {
+          if (!sessionDraft) return;
+          toggleFlag.mutate(
+            { patientId: sessionDraft.patientId, flagType: "DC", date: value ?? day, active: value !== null },
+            { onSuccess: () => toast.success(value ? `D/C cutoff set for ${value.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : "D/C Today notice removed") },
+          );
+        } : undefined}
         onDelete={(id) => {
+          if (!requireEdit()) return;
           deleteSession.mutate({ id });
           setSessionDialogOpen(false);
         }}
-      />
+        readOnly={!(canEdit || (role === "staff" && canChart && currentTherapistId != null && sessionDraft?.therapistId === currentTherapistId))}
+        chartOnly={role === "staff" && canChart && currentTherapistId != null && sessionDraft?.therapistId === currentTherapistId}
+      />}
 
-      <PatientDialog
+      {patientDialogOpen && <PatientDialog
         open={patientDialogOpen}
         onOpenChange={setPatientDialogOpen}
         initial={patientDraft}
         teams={teams}
         therapists={therapists}
         onSave={savePatient}
-      />
+      />}
 
-      <WeeklyMinutesPanel
+      {weeklyMinutesPanelOpen && <WeeklyMinutesPanel
         open={weeklyMinutesPanelOpen}
         onOpenChange={setWeeklyMinutesPanelOpen}
-      />
-      <AskSchedulerPanel open={askSchedulerPanelOpen} onOpenChange={setAskSchedulerPanelOpen} />
+        referenceDate={day}
+      />}
+      {askSchedulerPanelOpen && (
+        <AskSchedulerPanel
+          open={askSchedulerPanelOpen}
+          onOpenChange={setAskSchedulerPanelOpen}
+          referenceDate={day}
+        />
+      )}
 
-      <BoardHistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} />
+      {historyOpen && <BoardHistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} />}
 
-      <DataAnalysisModal
+      {dataAnalysisOpen && <DataAnalysisModal
         open={dataAnalysisOpen}
         onOpenChange={setDataAnalysisOpen}
-        patients={patientsQuery.data ?? []}
+        referenceDate={day}
+        patients={(patientsQuery.data ?? []).filter((patient) => !patient.isRoomPlaceholder)}
         onEditPatient={(id) => {
           const patient = patientsQuery.data?.find(p => p.id === id);
           if (patient) {
             setPatientDraft({
               id: patient.id,
+              mrn: patient.mrn ?? "",
+              previousAdmissionId: patient.previousAdmissionId,
               roomNumber: patient.roomNumber,
               name: patient.name,
               notes: patient.notes ?? "",
@@ -1445,24 +1794,29 @@ export default function TherapyBoard() {
               estimatedDischargeDate: patient.estimatedDischargeDate ?? "",
               weeklyMinuteTarget: patient.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
               teamId: patient.teamId ?? null,
+              isRoomPlaceholder: patient.isRoomPlaceholder,
             });
             setPatientDialogOpen(true);
           }
         }}
-      />
+      />}
 
-      <PatientPanel
+      {panelOpen && <PatientPanel
         open={panelOpen}
         onOpenChange={setPanelOpen}
         patients={patients}
+        archivedPatients={archivedPatientsQuery.data ?? []}
         onAdd={(initialData) => {
           if (initialData) {
             setPatientDraft({
+              mrn: initialData.mrn ?? "",
+              previousAdmissionId: initialData.previousAdmissionId,
               roomNumber: initialData.roomNumber ?? "",
               name: initialData.name ?? "",
               notes: initialData.notes ?? "",
               isDischarged: false,
               weeklyMinuteTarget: DEFAULT_WEEKLY_MINUTE_TARGET,
+              teamId: initialData.teamId ?? null,
             });
           } else {
             setPatientDraft(null);
@@ -1472,6 +1826,8 @@ export default function TherapyBoard() {
         onEdit={(p) => {
           setPatientDraft({
             id: p.id,
+            mrn: p.mrn ?? "",
+            previousAdmissionId: p.previousAdmissionId,
             roomNumber: p.roomNumber,
             name: p.name,
             notes: p.notes ?? "",
@@ -1480,23 +1836,43 @@ export default function TherapyBoard() {
             estimatedDischargeDate: p.estimatedDischargeDate ?? "",
             weeklyMinuteTarget: p.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
             teamId: p.teamId ?? null,
+            isRoomPlaceholder: p.isRoomPlaceholder,
           });
           setPatientDialogOpen(true);
         }}
-        onDelete={(id) => {
-          deletePatient.mutate({ id });
-          toast.success("Patient removed");
+        onReadmit={(p) => {
+          setPatientDraft({
+            mrn: p.mrn ?? "",
+            previousAdmissionId: p.id,
+            roomNumber: "",
+            name: p.name,
+            notes: p.notes ?? "",
+            isDischarged: false,
+            admissionDate: "",
+            estimatedDischargeDate: "",
+            weeklyMinuteTarget: p.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
+            teamId: p.teamId ?? null,
+          });
+          setPatientDialogOpen(true);
         }}
-        therapists={therapists}
-        teams={teams}
-      />
+        onArchive={(id, reason) => {
+          if (!requireAdmin()) return;
+          archivePatient.mutate({ id, reason });
+        }}
+        onRestore={(id) => {
+          if (!requireAdmin()) return;
+          restorePatient.mutate({ id });
+        }}
+      />}
 
-      <TherapistPanel
+      {staffPanelOpen && <TherapistPanel
         open={staffPanelOpen}
         onOpenChange={setStaffPanelOpen}
         therapists={therapists}
+        archivedTherapists={archivedTherapistsQuery.data ?? []}
         teams={teams}
         onAdd={(data) => {
+          if (!requireAdmin()) return;
           createTherapist.mutate({
             name: data.name,
             email: data.email,
@@ -1506,9 +1882,9 @@ export default function TherapyBoard() {
             weekendRotation: data.weekendRotation,
             ...data.schedule,
           });
-          toast.success("Staff member added");
         }}
         onEdit={(id, data) => {
+          if (!requireAdmin()) return;
           updateTherapist.mutate({
             id,
             name: data.name,
@@ -1519,11 +1895,18 @@ export default function TherapyBoard() {
             weekendRotation: data.weekendRotation,
             ...data.schedule,
           });
-          toast.success("Staff member updated");
         }}
-        onDelete={(id) => {
-          deleteTherapist.mutate({ id });
-          toast.success("Staff member removed");
+        onArchive={(id, reason) => {
+          if (!requireAdmin()) return;
+          archiveTherapist.mutate({ id, reason });
+        }}
+        onRestore={(id) => {
+          if (!requireAdmin()) return;
+          restoreTherapist.mutate({ id });
+        }}
+        onInviteAsUser={(email, role) => {
+          if (!requireAdmin()) return;
+          inviteUser.mutate({ email, role });
         }}
         onViewStats={setStatsTherapistId}
         onOpenProductivityHub={(tId?: number) => {
@@ -1531,28 +1914,31 @@ export default function TherapyBoard() {
           setProductivityHubViewMode(tId ? "staff" : "admin");
           setProductivityHubOpen(true);
         }}
-        onSendTomorrowAssignments={(therapistIds) => sendTomorrowAssignments.mutate({ referenceDate: day, therapistIds })}
+        onSendTomorrowAssignments={(therapistIds) => {
+          if (!requireEdit()) return;
+          sendTomorrowAssignments.mutate({ referenceDate: day, therapistIds });
+        }}
         sendingTomorrowAssignments={sendTomorrowAssignments.isPending}
         sendingTherapistIds={sendTomorrowAssignments.isPending ? sendTomorrowAssignments.variables?.therapistIds ?? [] : []}
         onOpenWeekendStaffing={() => setWeekendStaffingOpen(true)}
-      />
+      />}
 
-      <WeekendStaffingModal
+      {weekendStaffingOpen && <WeekendStaffingModal
         open={weekendStaffingOpen}
         onOpenChange={setWeekendStaffingOpen}
         referenceDate={day}
-      />
+      />}
 
-      <ProductivityHubModal
+      {productivityHubOpen && <ProductivityHubModal
         open={productivityHubOpen}
         onOpenChange={setProductivityHubOpen}
         therapists={therapists}
         date={day}
         initialTherapistId={productivityHubTherapistId}
         initialViewMode={productivityHubViewMode}
-      />
+      />}
 
-      <SickCallModal
+      {sickCallModalOpen && <SickCallModal
         open={sickCallModalOpen}
         onOpenChange={setSickCallModalOpen}
         therapists={therapists}
@@ -1561,40 +1947,42 @@ export default function TherapyBoard() {
           sessionsQuery.refetch();
         }}
         onViewStats={setStatsTherapistId}
-      />
+      />}
 
-      <StaffStatsModal
+      {statsTherapistId !== null && <StaffStatsModal
         open={statsTherapistId !== null}
         onOpenChange={(open) => {
           if (!open) setStatsTherapistId(null);
         }}
         therapistId={statsTherapistId}
         date={day}
-      />
+      />}
 
-      <ComplianceSentinelModal
+      {complianceSentinelOpen && <ComplianceSentinelModal
         open={complianceSentinelOpen}
         onOpenChange={setComplianceSentinelOpen}
         day={day}
         onFixPatient={(patientId) => {
           jumpToPatient(patientId);
         }}
-      />
+      />}
 
-      <PredictiveStaffingPanel
+      {predictiveStaffingOpen && <PredictiveStaffingPanel
         open={predictiveStaffingOpen}
         onOpenChange={setPredictiveStaffingOpen}
         day={day}
-      />
+      />}
 
-      <TargetReachedDialog
+      {targetAlertData !== null && <TargetReachedDialog
         open={targetAlertData !== null}
         onOpenChange={(o) => { if (!o) setTargetAlertData(null); }}
         patientName={targetAlertData?.patientName ?? ""}
         target={targetAlertData?.target ?? DEFAULT_WEEKLY_MINUTE_TARGET}
         totalMinutes={targetAlertData?.totalMinutes ?? 0}
+        completedMinutes={targetAlertData?.completedMinutes ?? 0}
         weekSessions={targetAlertData?.weekSessions ?? []}
-      />
+      />}
+      </Suspense>
       {/* Override Warning Modal */}
       <AlertDialog open={!!overrideWarning} onOpenChange={(open) => !open && setOverrideWarning(null)}>
         <AlertDialogContent className="sm:max-w-[425px] overflow-hidden rounded-2xl glass-panel p-6">

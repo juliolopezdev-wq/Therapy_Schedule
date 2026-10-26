@@ -150,10 +150,14 @@ function vitePluginManusDebugCollector(): Plugin {
   };
 }
 
-const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector()];
-
-export default defineConfig({
-  plugins,
+export default defineConfig(({ command }) => ({
+  // Location metadata and the Manus editing/runtime bridge are development conveniences. They
+  // add hundreds of kilobytes of inline HTML and browser instrumentation when shipped.
+  plugins: [
+    react(),
+    tailwindcss(),
+    ...(command === "serve" ? [jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector()] : []),
+  ],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
@@ -184,4 +188,4 @@ export default defineConfig({
       deny: ["**/.*"],
     },
   },
-});
+}));

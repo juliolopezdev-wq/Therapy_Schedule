@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { usePermissions } from "@/_core/hooks/usePermissions";
 import {
   Dialog,
   DialogContent,
@@ -20,9 +21,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  THERAPY_TYPES,
-  THERAPY_META,
   TIME_SLOTS,
+  isEvaluationTherapyType,
+  therapyDiscipline,
   type TherapyType,
 } from "@/lib/board";
 import { trpc } from "@/lib/trpc";
@@ -30,6 +31,8 @@ import { Trash2 } from "lucide-react";
 
 export interface PatientFormValue {
   id?: number;
+  mrn: string;
+  previousAdmissionId?: number | null;
   roomNumber: string;
   name: string;
   notes: string;
@@ -38,6 +41,7 @@ export interface PatientFormValue {
   estimatedDischargeDate?: string;
   weeklyMinuteTarget?: number;
   teamId?: number | null;
+  isRoomPlaceholder?: boolean;
   sessionTime?: string;
   sessionType?: TherapyType;
   sessionDuration?: number;
@@ -48,12 +52,13 @@ interface PatientDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initial: PatientFormValue | null;
-  onSave: (value: PatientFormValue) => void;
-  therapists?: { id: number; name: string }[];
+  onSave: (value: PatientFormValue) => Promise<boolean>;
+  therapists?: { id: number; name: string; therapyType?: string }[];
   teams?: { id: number; name: string; color: string }[];
 }
 
 const EMPTY: PatientFormValue = {
+  mrn: "",
   roomNumber: "",
   name: "",
   notes: "",
@@ -69,24 +74,44 @@ const EMPTY: PatientFormValue = {
 };
 
 export function PatientDialog({ open, onOpenChange, initial, onSave, therapists = [], teams = [] }: PatientDialogProps) {
+  const { canEdit } = usePermissions();
   const [form, setForm] = useState<PatientFormValue>(() => {
     const val = initial ?? EMPTY;
-    return val.name === "Available" ? { ...val, name: "" } : val;
+    return val.isRoomPlaceholder ? { ...val, name: "", mrn: "" } : val;
   });
 
   useEffect(() => {
     const val = initial ?? EMPTY;
-    setForm(val.name === "Available" ? { ...val, name: "" } : val);
+    setForm(val.isRoomPlaceholder ? { ...val, name: "", mrn: "" } : val);
   }, [initial, open]);
 
   const isEditing = Boolean(form.id);
-  const canSave = form.roomNumber.trim() && form.name.trim();
+  const isPlaceholder = Boolean(form.isRoomPlaceholder);
+  const isNewAdmission = !isEditing || isPlaceholder;
+  const [isSaving, setIsSaving] = useState(false);
+  const datesAreValid = !form.admissionDate || !form.estimatedDischargeDate || form.estimatedDischargeDate >= form.admissionDate;
+  const targetIsValid = Number.isInteger(form.weeklyMinuteTarget) && (form.weeklyMinuteTarget ?? 0) >= 30;
+  const canSave = Boolean(form.roomNumber.trim() && form.name.trim() && form.mrn.trim() && datesAreValid && targetIsValid);
+  const initialSessionType = form.sessionType ?? "PT";
+  const initialVisitKind = isEvaluationTherapyType(initialSessionType) ? "evaluation" : "treatment";
+  const initialDiscipline = therapyDiscipline(initialSessionType) ?? "PT";
+  const initialEvaluationType = { PT: "PT Eval", OT: "OT Eval", SLP: "SLP Eval" } as const;
+
+  const selectInitialSessionType = (visitKind: "treatment" | "evaluation", discipline: "PT" | "OT" | "SLP") => {
+    const nextType: TherapyType = visitKind === "evaluation" ? initialEvaluationType[discipline] : discipline;
+    const selected = therapists.find((therapist) => therapist.id === form.sessionTherapist);
+    setForm({
+      ...form,
+      sessionType: nextType,
+      sessionTherapist: selected?.therapyType === discipline ? form.sessionTherapist : null,
+    });
+  };
 
   // Additional Minutes Data
   const utils = trpc.useUtils();
   const { data: additionalMinutes = [] } = trpc.additionalMinutes.listByPatient.useQuery(
     { patientId: form.id as number },
-    { enabled: isEditing }
+    { enabled: isEditing && !isPlaceholder }
   );
   const createAdditionalMinutes = trpc.additionalMinutes.create.useMutation({
     onSuccess: () => {
@@ -108,41 +133,55 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md glass-panel p-6">
+      <DialogContent className="max-h-[90vh] overflow-y-auto p-6 sm:max-w-lg glass-panel">
         <DialogHeader>
-          <DialogTitle>{isEditing ? "Edit Patient" : "Add Patient"}</DialogTitle>
+          <DialogTitle>{isPlaceholder ? "Admit Patient" : isEditing ? "Edit Admission" : "Add Admission"}</DialogTitle>
           <DialogDescription>
             Enter patient details and scheduling notes.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
               <Label>Room</Label>
               <Input
                 value={form.roomNumber}
                 onChange={(e) => setForm({ ...form, roomNumber: e.target.value })}
                 placeholder="106"
+                disabled={!canEdit || isSaving}
               />
             </div>
-            <div className="col-span-2 space-y-2">
-              <Label>Patient Name</Label>
+            <div className="space-y-2">
+              <Label>MRN</Label>
               <Input
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="Available"
+                value={form.mrn}
+                onChange={(e) => setForm({ ...form, mrn: e.target.value.toUpperCase() })}
+                placeholder="Medical record number"
+                autoComplete="off"
+                disabled={!canEdit || isSaving}
               />
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="space-y-2">
+            <Label>Patient Name</Label>
+            <Input
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="Patient name"
+              disabled={!canEdit || isSaving}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="space-y-2">
               <Label>Admission Date</Label>
               <Input
                 type="date"
                 value={form.admissionDate ?? ""}
                 onChange={(e) => setForm({ ...form, admissionDate: e.target.value })}
+                disabled={!canEdit || isSaving}
               />
             </div>
             <div className="space-y-2">
@@ -151,24 +190,32 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
                 type="date"
                 value={form.estimatedDischargeDate ?? ""}
                 onChange={(e) => setForm({ ...form, estimatedDischargeDate: e.target.value })}
+                disabled={!canEdit || isSaving}
               />
             </div>
             <div className="space-y-2">
               <Label>Target (min)</Label>
               <Input
                 type="number"
-                min={0}
+                min={30}
                 step={30}
                 value={form.weeklyMinuteTarget ?? 900}
                 onChange={(e) => setForm({ ...form, weeklyMinuteTarget: Number(e.target.value) })}
+                disabled={!canEdit || isSaving}
               />
             </div>
           </div>
+          {!datesAreValid && (
+            <p className="text-xs font-medium text-red-600" role="alert">
+              Estimated discharge cannot be before the admission date.
+            </p>
+          )}
 
           {teams.length > 0 && (
             <div className="space-y-2">
-              <Label>Team / Discipline</Label>
+              <Label>Team</Label>
               <Select
+                disabled={!canEdit || isSaving}
                 value={form.teamId ? String(form.teamId) : "none"}
                 onValueChange={(v) => setForm({ ...form, teamId: v === "none" ? null : Number(v) })}
               >
@@ -197,21 +244,23 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
               placeholder="e.g. around meals only, 3x/wk, 60 min ST"
               rows={2}
+              disabled={!canEdit || isSaving}
             />
           </div>
 
-          <div className="flex items-center gap-3">
+          {isEditing && !isPlaceholder && <div className="flex items-center gap-3">
             <Switch
               id="discharged"
               checked={form.isDischarged}
               onCheckedChange={(checked) => setForm({ ...form, isDischarged: checked })}
+              disabled={!canEdit || isSaving}
             />
             <Label htmlFor="discharged" className="cursor-pointer font-normal text-slate-700">
               Mark as Discharged (DC)
             </Label>
-          </div>
+          </div>}
 
-          {isEditing && (
+          {isEditing && !isPlaceholder && (
             <div className="rounded-lg glass-surface p-5 space-y-4 mt-6">
               <div className="border-b border-white/20 pb-3">
                 <Label className="text-base font-semibold text-slate-800">Daily Minute Adjustments</Label>
@@ -231,15 +280,17 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
                         </span>
                         {adj.reason && <span className="text-slate-500 italic text-xs truncate max-w-[120px]">({adj.reason})</span>}
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 w-8 p-0 text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                        onClick={() => deleteAdditionalMinutes.mutate({ id: adj.id })}
-                        disabled={deleteAdditionalMinutes.isPending}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      {canEdit && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0 text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                          onClick={() => deleteAdditionalMinutes.mutate({ id: adj.id })}
+                          disabled={deleteAdditionalMinutes.isPending}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -249,45 +300,47 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
                 </div>
               )}
 
-              <div className="flex flex-col gap-3 pt-3 border-t border-slate-200/60">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold text-slate-600">Date</Label>
-                    <Input className="h-9" type="date" value={newAdjDate} onChange={(e) => setNewAdjDate(e.target.value)} />
+              {canEdit && (
+                <div className="flex flex-col gap-3 pt-3 border-t border-slate-200/60">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold text-slate-600">Date</Label>
+                      <Input className="h-9" type="date" value={newAdjDate} onChange={(e) => setNewAdjDate(e.target.value)} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold text-slate-600">Minutes (+ or -)</Label>
+                      <Input className="h-9" type="number" step={15} value={newAdjMinutes} onChange={(e) => setNewAdjMinutes(Number(e.target.value))} />
+                    </div>
                   </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold text-slate-600">Minutes (+ or -)</Label>
-                    <Input className="h-9" type="number" step={15} value={newAdjMinutes} onChange={(e) => setNewAdjMinutes(Number(e.target.value))} />
+                  <div className="flex items-end gap-3">
+                    <div className="space-y-1.5 flex-1">
+                      <Label className="text-xs font-semibold text-slate-600">Reason (optional)</Label>
+                      <Input className="h-9" placeholder="e.g. Missed session makeup" value={newAdjReason} onChange={(e) => setNewAdjReason(e.target.value)} />
+                    </div>
+                    <Button
+                      size="sm"
+                      className="h-9 px-5 shadow-sm"
+                      disabled={!newAdjDate || newAdjMinutes === 0 || createAdditionalMinutes.isPending}
+                      onClick={() => {
+                        const dateObj = new Date(newAdjDate + "T12:00:00");
+                        createAdditionalMinutes.mutate({
+                          patientId: form.id as number,
+                          date: dateObj,
+                          additionalMinutes: newAdjMinutes,
+                          reason: newAdjReason || undefined,
+                        });
+                      }}
+                    >
+                      Add
+                    </Button>
                   </div>
                 </div>
-                <div className="flex items-end gap-3">
-                  <div className="space-y-1.5 flex-1">
-                    <Label className="text-xs font-semibold text-slate-600">Reason (optional)</Label>
-                    <Input className="h-9" placeholder="e.g. Missed session makeup" value={newAdjReason} onChange={(e) => setNewAdjReason(e.target.value)} />
-                  </div>
-                  <Button
-                    size="sm"
-                    className="h-9 px-5 shadow-sm"
-                    disabled={!newAdjDate || newAdjMinutes === 0 || createAdditionalMinutes.isPending}
-                    onClick={() => {
-                      const dateObj = new Date(newAdjDate + "T12:00:00");
-                      createAdditionalMinutes.mutate({
-                        patientId: form.id as number,
-                        date: dateObj,
-                        additionalMinutes: newAdjMinutes,
-                        reason: newAdjReason || undefined,
-                      });
-                    }}
-                  >
-                    Add
-                  </Button>
-                </div>
-              </div>
+              )}
             </div>
           )}
 
           {/* Initial Session Scheduling (Optional) */}
-          {!isEditing && (
+          {isNewAdmission && (
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-4 mt-6">
               <div className="border-b border-slate-200 pb-2">
                 <Label className="text-sm font-bold text-slate-700">Initial Therapy Session (Optional)</Label>
@@ -298,6 +351,7 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
                 <div className="space-y-2">
                   <Label>Start Time</Label>
                   <Select
+                    disabled={!canEdit || isSaving}
                     value={form.sessionTime}
                     onValueChange={(v) => {
                       let duration = form.sessionDuration || 30;
@@ -325,7 +379,7 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
                 <div className="space-y-2">
                   <Label>Duration</Label>
                   <Select
-                    disabled={form.sessionTime === "none"}
+                    disabled={!canEdit || isSaving || form.sessionTime === "none"}
                     value={String(form.sessionDuration)}
                     onValueChange={(v) => setForm({ ...form, sessionDuration: Number(v) })}
                   >
@@ -357,35 +411,44 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
               </div>
 
               <div className="space-y-2">
-                <Label>Therapy Type</Label>
-                <div className="grid grid-cols-4 gap-2">
-                  {THERAPY_TYPES.map((t) => {
-                    const meta = THERAPY_META[t];
-                    const active = form.sessionType === t;
-                    return (
+                <Label>Visit Type</Label>
+                <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    {(["treatment", "evaluation"] as const).map((kind) => (
                       <button
-                        key={t}
+                        key={kind}
                         type="button"
-                        disabled={form.sessionTime === "none"}
-                        onClick={() => setForm({ ...form, sessionType: t })}
-                        className="rounded-md px-2 py-2 text-xs font-bold transition-all disabled:opacity-50"
-                        style={{
-                          backgroundColor: active ? meta.bg : "#ffffff",
-                          color: active ? meta.fg : "#64748b",
-                          outline: active ? "2px solid rgba(0,0,0,0.15)" : "1px solid #e2e8f0",
-                        }}
+                        disabled={!canEdit || isSaving || form.sessionTime === "none"}
+                        onClick={() => selectInitialSessionType(kind, initialDiscipline)}
+                        className={`min-h-10 rounded-lg border px-2 text-xs font-bold capitalize transition-colors disabled:opacity-50 ${initialVisitKind === kind ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 bg-white text-slate-700 hover:bg-blue-50"}`}
                       >
-                        {meta.label}
+                        {kind}
                       </button>
-                    );
-                  })}
+                    ))}
+                  </div>
+                  <div>
+                    <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">Discipline</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(["PT", "OT", "SLP"] as const).map((discipline) => (
+                        <button
+                          key={discipline}
+                          type="button"
+                          disabled={!canEdit || isSaving || form.sessionTime === "none"}
+                          onClick={() => selectInitialSessionType(initialVisitKind, discipline)}
+                          className={`min-h-10 rounded-lg border px-2 text-xs font-black transition-colors disabled:opacity-50 ${initialDiscipline === discipline ? "border-slate-800 bg-slate-800 text-white" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-100"}`}
+                        >
+                          {discipline}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
 
               <div className="space-y-2">
                 <Label>Therapist (Optional)</Label>
                 <Select
-                  disabled={form.sessionTime === "none"}
+                  disabled={!canEdit || isSaving || form.sessionTime === "none"}
                   value={form.sessionTherapist ? String(form.sessionTherapist) : "none"}
                   onValueChange={(v) =>
                     setForm({ ...form, sessionTherapist: v === "none" ? null : Number(v) })
@@ -396,9 +459,14 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">Unassigned</SelectItem>
-                    {therapists.map((t) => (
+                    {therapists
+                      .filter((therapist) => {
+                        const discipline = therapyDiscipline(form.sessionType ?? "PT");
+                        return discipline == null || therapist.therapyType === discipline;
+                      })
+                      .map((t) => (
                       <SelectItem key={t.id} value={String(t.id)}>
-                        {t.name}
+                        {t.name}{t.therapyType ? ` · ${t.therapyType}` : ""}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -410,17 +478,24 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {canEdit ? "Cancel" : "Close"}
           </Button>
-          <Button
-            disabled={!canSave}
-            onClick={() => {
-              onSave(form);
-              onOpenChange(false);
-            }}
-          >
-            {isEditing ? "Save" : "Add Patient"}
-          </Button>
+          {canEdit && (
+            <Button
+              disabled={!canSave || isSaving}
+              onClick={async () => {
+                setIsSaving(true);
+                try {
+                  const saved = await onSave(form);
+                  if (saved) onOpenChange(false);
+                } finally {
+                  setIsSaving(false);
+                }
+              }}
+            >
+              {isSaving ? "Saving…" : isPlaceholder ? "Admit Patient" : isEditing ? "Save" : "Add Admission"}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

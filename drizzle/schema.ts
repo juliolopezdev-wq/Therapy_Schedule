@@ -7,7 +7,10 @@ export const users = sqliteTable("users", {
   name: text("name"),
   email: text("email"),
   loginMethod: text("loginMethod"),
-  role: text("role", { enum: ["user", "admin"] }).default("user").notNull(),
+  role: text("role", { enum: ["admin", "team_lead", "staff", "viewer"] }).default("staff").notNull(),
+  // null = never deactivated. Set when an admin removes someone's access without deleting their
+  // row (preserves audit-log/history references to them).
+  deactivatedAt: integer("deactivatedAt", { mode: "timestamp" }),
   createdAt: integer("createdAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
   updatedAt: integer("updatedAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
   lastSignedIn: integer("lastSignedIn", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
@@ -15,6 +18,112 @@ export const users = sqliteTable("users", {
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
+
+// One row per invited email. openId for a real user is "email:<address>" (see server/auth.ts) --
+// an invite exists before that user row does, created by an admin, and is what request-magic-link
+// checks against to decide whether an email is allowed to log in at all.
+export const invites = sqliteTable("invites", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  email: text("email").notNull().unique(),
+  role: text("role", { enum: ["admin", "team_lead", "staff", "viewer"] }).notNull().default("staff"),
+  invitedByUserId: integer("invitedByUserId").notNull(),
+  createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+  acceptedAt: integer("acceptedAt", { mode: "timestamp" }),
+});
+
+export type Invite = typeof invites.$inferSelect;
+export type InsertInvite = typeof invites.$inferInsert;
+
+// One-time login tokens. Only `tokenHash` (sha256 of the random token sent by email) is stored --
+// the raw token never touches the DB, so a leaked DB dump doesn't hand out live login links.
+export const magicLinks = sqliteTable("magicLinks", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  email: text("email").notNull(),
+  tokenHash: text("tokenHash").notNull().unique(),
+  expiresAt: integer("expiresAt", { mode: "timestamp" }).notNull(),
+  usedAt: integer("usedAt", { mode: "timestamp" }),
+  ipAddress: text("ipAddress"),
+  createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type MagicLink = typeof magicLinks.$inferSelect;
+export type InsertMagicLink = typeof magicLinks.$inferInsert;
+
+// DB-backed sessions (rather than a stateless JWT) so a revoked/expired session can be killed
+// immediately -- an admin force-logging-out a departing staff member needs this to take effect
+// on their very next request, not whenever a token would've naturally expired.
+export const sessions = sqliteTable("sessions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("userId").notNull(),
+  tokenHash: text("tokenHash").notNull().unique(),
+  createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+  lastSeenAt: integer("lastSeenAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+  expiresAt: integer("expiresAt", { mode: "timestamp" }).notNull(),
+  ipAddress: text("ipAddress"),
+  userAgent: text("userAgent"),
+  revokedAt: integer("revokedAt", { mode: "timestamp" }),
+});
+
+export type Session = typeof sessions.$inferSelect;
+export type InsertSession = typeof sessions.$inferInsert;
+
+export const auditLog = sqliteTable("auditLog", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  actorUserId: integer("actorUserId"),
+  actorEmail: text("actorEmail"),
+  action: text("action").notNull(),
+  targetType: text("targetType"),
+  targetId: text("targetId"),
+  metadata: text("metadata", { mode: "json" }),
+  createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type AuditLogEntry = typeof auditLog.$inferSelect;
+export type InsertAuditLogEntry = typeof auditLog.$inferInsert;
+
+// Operational staff communication. Messages intentionally do not link to patients: the board is
+// for coverage, handoffs, announcements, and recognition—not clinical documentation or PHI.
+export const staffMessages = sqliteTable("staffMessages", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  authorUserId: integer("authorUserId").notNull(),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  channel: text("channel", { enum: ["general", "handoff", "coverage", "kudos"] }).notNull().default("general"),
+  priority: text("priority", { enum: ["normal", "important", "urgent"] }).notNull().default("normal"),
+  requiresAcknowledgement: integer("requiresAcknowledgement", { mode: "boolean" }).notNull().default(false),
+  pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
+  resolvedAt: integer("resolvedAt", { mode: "timestamp" }),
+  resolvedByUserId: integer("resolvedByUserId"),
+  archivedAt: integer("archivedAt", { mode: "timestamp" }),
+  createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+  updatedAt: integer("updatedAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type StaffMessage = typeof staffMessages.$inferSelect;
+export type InsertStaffMessage = typeof staffMessages.$inferInsert;
+
+export const staffMessageAcknowledgements = sqliteTable("staffMessageAcknowledgements", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  messageId: integer("messageId").notNull(),
+  userId: integer("userId").notNull(),
+  createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type StaffMessageAcknowledgement = typeof staffMessageAcknowledgements.$inferSelect;
+
+// Private operational conversations. Message bodies are only returned to the sender and
+// recipient; audit entries record delivery metadata, never the message content.
+export const staffDirectMessages = sqliteTable("staffDirectMessages", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  senderUserId: integer("senderUserId").notNull(),
+  recipientUserId: integer("recipientUserId").notNull(),
+  body: text("body").notNull(),
+  readAt: integer("readAt", { mode: "timestamp" }),
+  createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+});
+
+export type StaffDirectMessage = typeof staffDirectMessages.$inferSelect;
+export type InsertStaffDirectMessage = typeof staffDirectMessages.$inferInsert;
 
 export const teams = sqliteTable("teams", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -54,6 +163,12 @@ export const therapists = sqliteTable("therapists", {
   // 6=Sat), intervalWeeks: number, anchorDate: "YYYY-MM-DD" (any date that falls in an "on" week) }.
   // null means no rotation -- weekend eligibility falls back to workDays/workHours like any other day.
   weekendRotation: text("weekendRotation"),
+  // Soft-remove, mirroring patients.archivedAt -- staff removal is reversible (an admin can
+  // restore), unlike the old hard delete. Archived staff drop out of the active roster/pickers
+  // but their history (sessions, stats, audit log) stays intact.
+  archivedAt: integer("archivedAt", { mode: "timestamp" }),
+  archivedByUserId: integer("archivedByUserId"),
+  archiveReason: text("archiveReason"),
   createdAt: integer("createdAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
   updatedAt: integer("updatedAt", { mode: 'timestamp' }).$defaultFn(() => new Date()).notNull(),
 });
@@ -77,10 +192,19 @@ export type InsertWeekendStaffingOverride = typeof weekendStaffingOverrides.$inf
 
 export const patients = sqliteTable("patients", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  // MRN links distinct admission episodes for the same person. It is nullable only so legacy
+  // rows can be migrated without inventing identifiers; all newly admitted patients require it.
+  mrn: text("mrn"),
+  previousAdmissionId: integer("previousAdmissionId"),
   roomNumber: text("roomNumber").notNull(),
   name: text("name").notNull(),
   notes: text("notes"),
   isDischarged: integer("isDischarged", { mode: 'boolean' }).default(false).notNull(),
+  // Vacant-room rows remain visible on the board but are never part of the active census.
+  isRoomPlaceholder: integer("isRoomPlaceholder", { mode: 'boolean' }).default(false).notNull(),
+  archivedAt: integer("archivedAt", { mode: "timestamp" }),
+  archivedByUserId: integer("archivedByUserId"),
+  archiveReason: text("archiveReason"),
   admissionDate: text("admissionDate"),
   estimatedDischargeDate: text("estimatedDischargeDate"),
   weeklyMinuteTarget: integer("weeklyMinuteTarget").default(900).notNull(),
@@ -116,13 +240,13 @@ export const therapySessions = sqliteTable("therapySessions", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   patientId: integer("patientId").notNull(),
   therapistId: integer("therapistId"),
-  therapyType: text("therapyType", { enum: ["PT", "OT", "SLP", "Eval", "Block"] }).notNull(),
+  therapyType: text("therapyType", { enum: ["PT", "OT", "SLP", "PT Eval", "OT Eval", "SLP Eval", "Eval", "Block"] }).notNull(),
   startTime: integer("startTime", { mode: 'timestamp' }).notNull(),
   endTime: integer("endTime", { mode: 'timestamp' }).notNull(),
   durationMinutes: integer("durationMinutes").notNull(),
   actualDurationMinutes: integer("actualDurationMinutes"),
   deliveryMode: text("deliveryMode", { enum: ["individual", "concurrent", "group"] }).default("individual").notNull(),
-  status: text("status", { enum: ["scheduled", "completed", "missed_refusal", "missed_clinical_hold", "missed_staffing", "missed_other"] }).default("scheduled").notNull(),
+  status: text("status", { enum: ["scheduled", "completed", "canceled_discharge", "missed_refusal", "missed_clinical_hold", "missed_staffing", "missed_other"] }).default("scheduled").notNull(),
   missedReason: text("missedReason"),
   notes: text("notes"),
   // Who made this booking/edit exist in its current form -- "ai" for PAMi tool calls, "human" for

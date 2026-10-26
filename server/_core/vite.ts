@@ -13,8 +13,17 @@ export async function setupVite(app: Express, server: Server) {
     allowedHosts: true as const,
   };
 
+  // vite.config.ts's default export can be a plain object or a `(env) => config` callback
+  // (the latter lets it vary plugins by command/mode). Spreading a function directly silently
+  // produces `{}` -- every resolve/alias/root setting would vanish and every /src/* request
+  // would 404 against the wrong root. Resolve it the same way `vite build`/`vite dev` would.
+  const resolvedViteConfig =
+    typeof viteConfig === "function"
+      ? await viteConfig({ command: "serve", mode: "development" })
+      : viteConfig;
+
   const vite = await createViteServer({
-    ...viteConfig,
+    ...resolvedViteConfig,
     configFile: false,
     server: serverOptions,
     appType: "custom",

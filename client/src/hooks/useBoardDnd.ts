@@ -1,6 +1,6 @@
 import { type DragStartEvent, type DragEndEvent, type CollisionDetection, pointerWithin } from "@dnd-kit/core";
 import { toast } from "sonner";
-import { TIME_SLOTS, slotIndexToDate, DEFAULT_WEEKLY_MINUTE_TARGET } from "@/lib/board";
+import { TIME_SLOTS, slotIndexToDate } from "@/lib/board";
 import { type SessionTileData } from "@/components/board/SessionTile";
 import type { Patient, Team } from "../../../drizzle/schema";
 import type { trpc } from "@/lib/trpc";
@@ -12,12 +12,14 @@ interface UseBoardDndProps {
   patientsBySection: BoardSection[];
   setActiveDrag: (session: SessionTileData | null) => void;
   setActiveDragPatient: (patient: Patient | null) => void;
-  updatePatient: ReturnType<typeof trpc.patients.update.useMutation>;
+  reorderPatient: ReturnType<typeof trpc.patients.reorder.useMutation>;
   updateSession: ReturnType<typeof trpc.sessions.update.useMutation>;
   checkLunchOverlap: (start: Date, end: Date) => string | null;
   checkTherapistAvailability: (therapistId: number | null, start: Date, end: Date) => string | null;
   checkDoubleBooking: (therapistId: number | null, deliveryMode: string, start: Date, end: Date, ignoreSessionId?: number) => string | null;
   processWarnings: (warnings: (string | null)[], onConfirm: () => void) => void;
+  /** Viewer role -- dragging would only hit a FORBIDDEN on drop, so disable it at the source. */
+  canEdit: boolean;
 }
 
 export const customCollisionDetection: CollisionDetection = (args) => {
@@ -68,15 +70,17 @@ export function useBoardDnd({
   patientsBySection,
   setActiveDrag,
   setActiveDragPatient,
-  updatePatient,
+  reorderPatient,
   updateSession,
   checkLunchOverlap,
   checkTherapistAvailability,
   checkDoubleBooking,
-  processWarnings
+  processWarnings,
+  canEdit,
 }: UseBoardDndProps) {
-  
+
   function handleDragStart(event: DragStartEvent) {
+    if (!canEdit) return;
     const data = event.active.data.current as any;
     if (data?.session) {
       setActiveDrag(data.session);
@@ -88,6 +92,7 @@ export function useBoardDnd({
   function handleDragEnd(event: DragEndEvent) {
     setActiveDrag(null);
     setActiveDragPatient(null);
+    if (!canEdit) return;
     const { active, over } = event;
     if (!over) return;
     
@@ -97,8 +102,7 @@ export function useBoardDnd({
     if (data?.patient) {
       const targetData = over.data.current as any;
       if (targetData?.teamId !== undefined) {
-        let newOrderIndex = data.patient.orderIndex ?? 0;
-
+        const targetTeamId = targetData.teamId === 0 ? null : targetData.teamId;
         if (targetData.isPatientDrop) {
           const targetPatientId = Number(over.id.toString().replace("patient-", ""));
           const targetSection = patientsBySection.find(s => 
@@ -114,33 +118,34 @@ export function useBoardDnd({
             if (overIndex !== -1) {
               if (activeIndex === overIndex) return; // Dropped in the exact same spot
 
-              const isMovingDown = activeIndex !== -1 && activeIndex < overIndex;
-              const prevPatient = targetSection.patients[isMovingDown ? overIndex : overIndex - 1];
-              const nextPatient = targetSection.patients[isMovingDown ? overIndex + 1 : overIndex];
+              const activeRect = active.rect.current.translated;
+              const activeCenter = activeRect
+                ? activeRect.top + activeRect.height / 2
+                : over.rect.top + over.rect.height / 2;
+              const placeAfter = activeIndex !== -1
+                ? activeIndex < overIndex
+                : activeCenter > over.rect.top + over.rect.height / 2;
 
-              const prevOrder = prevPatient ? (prevPatient.orderIndex ?? 0) : (nextPatient ? (nextPatient.orderIndex ?? 0) - 100 : 0);
-              const nextOrder = nextPatient ? (nextPatient.orderIndex ?? 0) : (prevPatient ? (prevPatient.orderIndex ?? 0) + 100 : 100);
-
-              newOrderIndex = (prevOrder + nextOrder) / 2;
+              reorderPatient.mutate({
+                patientId: data.patient.id,
+                targetTeamId,
+                targetPatientId,
+                placeAfter,
+              });
+              return;
             }
           }
-        } else if (data.patient.teamId === targetData.teamId) {
-           // Dropped onto the same team header, don't move
-           return;
+          return;
         }
-        
-        updatePatient.mutate({
-          id: data.patient.id,
-          roomNumber: data.patient.roomNumber,
-          name: data.patient.name,
-          notes: data.patient.notes ?? "",
-          isDischarged: data.patient.isDischarged,
-          admissionDate: data.patient.admissionDate ?? undefined,
-          weeklyMinuteTarget: data.patient.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
-          teamId: targetData.teamId === 0 ? null : targetData.teamId,
-          orderIndex: newOrderIndex,
+
+        // A team-header drop means "append to this team". It is a no-op when the
+        // patient is already in that team (including the synthetic Unassigned team).
+        if (data.patient.teamId === targetTeamId) return;
+        reorderPatient.mutate({
+          patientId: data.patient.id,
+          targetTeamId,
+          targetPatientId: null,
         });
-        toast.success(`Patient moved to ${targetData.teamName || (targetData.teamId ? "another team" : "Unassigned")}`);
       }
       return;
     }
@@ -163,7 +168,7 @@ export function useBoardDnd({
 
     const slotsNeeded = session.durationMinutes / 30;
     if (target.slotIndex + slotsNeeded > TIME_SLOTS.length) {
-      toast.error("Session exceeds clinical hours (5 PM limit)");
+      toast.error("Session exceeds clinical hours (6 PM limit)");
       return;
     }
 
@@ -174,8 +179,6 @@ export function useBoardDnd({
         startTime: newStart,
         endTime: newEnd,
         ignoreConflicts: true,
-      }, {
-        onSuccess: () => toast.success("Session moved")
       });
     };
 
@@ -183,9 +186,15 @@ export function useBoardDnd({
     processWarnings(warnings, doMove);
   }
 
+  function handleDragCancel() {
+    setActiveDrag(null);
+    setActiveDragPatient(null);
+  }
+
   return {
     customCollisionDetection,
     handleDragStart,
-    handleDragEnd
+    handleDragEnd,
+    handleDragCancel,
   };
 }
