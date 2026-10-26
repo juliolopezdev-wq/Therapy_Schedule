@@ -34,6 +34,14 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
   applyHttpSecurity(app);
+  // Collapse duplicate slashes in the path (e.g. "//api/auth/verify" from an APP_URL with a
+  // trailing slash) so already-sent email links still hit the right route.
+  app.use((req, _res, next) => {
+    const q = req.url.indexOf("?");
+    const path = q === -1 ? req.url : req.url.slice(0, q);
+    if (path.includes("//")) req.url = path.replace(/\/{2,}/g, "/") + (q === -1 ? "" : req.url.slice(q));
+    next();
+  });
   // Keep JSON payloads bounded; file traffic uses the storage proxy registered below.
   app.use(express.json({ limit: "5mb" }));
   app.use(express.urlencoded({ limit: "5mb", extended: true }));
