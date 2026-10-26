@@ -20,6 +20,8 @@ export const ENV = {
   smtpUser: process.env.SMTP_USER ?? "",
   smtpPass: process.env.SMTP_PASS ?? "",
   smtpFrom: process.env.SMTP_FROM ?? "",
+  // Resend HTTPS API key -- takes priority over SMTP when set (works on hosts that block SMTP ports).
+  resendApiKey: process.env.RESEND_API_KEY ?? "",
   // Comma-separated recipient list -- explicit rather than derived from user accounts, since not
   // every staff member who should see this digest necessarily has a login.
   digestNotificationEmails: (process.env.DIGEST_NOTIFICATION_EMAILS ?? "")

@@ -22,7 +22,36 @@ function getTransporter() {
 
 /** Fast, synchronous, no-I/O check -- safe to await/check inline before deciding whether to queue a send. */
 export function isEmailConfigured(): boolean {
-  return !!(ENV.smtpHost && ENV.smtpUser && ENV.smtpPass);
+  return !!ENV.resendApiKey || !!(ENV.smtpHost && ENV.smtpUser && ENV.smtpPass);
+}
+
+/**
+ * Sends via Resend's HTTPS API (port 443). Preferred over SMTP because hosts like Render's free
+ * tier block outbound SMTP ports (25/465/587) entirely.
+ */
+async function sendViaResend(params: { to: string[]; subject: string; html: string; text: string }): Promise<boolean> {
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${ENV.resendApiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: ENV.smtpFrom || "onboarding@resend.dev",
+        to: params.to,
+        subject: params.subject,
+        html: params.html,
+        text: params.text,
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) {
+      console.warn(`[email] Resend failed (${res.status}):`, await res.text());
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.warn("[email] Resend failed to send:", error);
+    return false;
+  }
 }
 
 /**
@@ -37,6 +66,7 @@ export async function sendEmail(params: { to: string[]; subject: string; html: s
     console.warn("[email] No recipients configured (DIGEST_NOTIFICATION_EMAILS) -- skipping send.");
     return false;
   }
+  if (ENV.resendApiKey) return sendViaResend(params);
   const transporter = getTransporter();
   if (!transporter) {
     console.warn("[email] SMTP not configured (SMTP_HOST/SMTP_USER/SMTP_PASS) -- skipping send.");
