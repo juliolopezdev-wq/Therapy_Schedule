@@ -14,7 +14,9 @@ function getTransporter() {
     connectionTimeout: 10_000,
     greetingTimeout: 10_000,
     socketTimeout: 15_000,
-  });
+    // Render has no outbound IPv6 -- force IPv4 or smtp.gmail.com resolves to an unreachable AAAA record.
+    family: 4,
+  } as nodemailer.TransportOptions);
   return _transporter;
 }
 
