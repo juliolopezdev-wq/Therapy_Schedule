@@ -1,3 +1,4 @@
+import { storeMessage, readMessage, boardMessageContext, directMessageContext } from "./messageEncryption";
 import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { createClient } from "@libsql/client/http";
 import { drizzle } from "drizzle-orm/libsql";
@@ -2775,6 +2776,8 @@ export async function listStaffMessages(userId: number) {
   }
   return rows.map((row) => ({
     ...row,
+    title: readMessage(row.title, boardMessageContext(row.authorUserId, "title")),
+    body: readMessage(row.body, boardMessageContext(row.authorUserId, "body")),
     acknowledgementCount: acknowledgementCount.get(row.id) ?? 0,
     acknowledgedByMe: mine.has(row.id),
   }));
@@ -2784,13 +2787,19 @@ export async function getStaffMessage(id: number) {
   const db = await getDb();
   if (!db) return undefined;
   const [row] = await db.select().from(staffMessages).where(eq(staffMessages.id, id)).limit(1);
-  return row;
+  return row ? { ...row,
+    title: readMessage(row.title, boardMessageContext(row.authorUserId, "title")),
+    body: readMessage(row.body, boardMessageContext(row.authorUserId, "body")),
+  } : undefined;
 }
 
 export async function createStaffMessage(data: Omit<InsertStaffMessage, "id" | "createdAt" | "updatedAt" | "archivedAt" | "resolvedAt" | "resolvedByUserId" | "pinned">) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(staffMessages).values(data);
+  const result = await db.insert(staffMessages).values({ ...data,
+    title: storeMessage(data.title, boardMessageContext(data.authorUserId, "title")),
+    body: storeMessage(data.body, boardMessageContext(data.authorUserId, "body")),
+  });
   const id = extractInsertId(result);
   return getStaffMessage(id);
 }
@@ -2872,7 +2881,7 @@ export async function listDirectMessageThreads(currentUserId: number) {
         peerName: person.name,
         peerEmail: person.email,
         peerRole: person.role,
-        lastMessage: message.body,
+        lastMessage: readMessage(message.body, directMessageContext(message.senderUserId, message.recipientUserId)),
         lastMessageAt: message.createdAt,
         sentByMe: message.senderUserId === currentUserId,
         unreadCount: unread,
@@ -2887,13 +2896,14 @@ export async function listDirectMessageThreads(currentUserId: number) {
 export async function listDirectConversation(currentUserId: number, peerUserId: number) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(staffDirectMessages)
+  const rows = await db.select().from(staffDirectMessages)
     .where(or(
       and(eq(staffDirectMessages.senderUserId, currentUserId), eq(staffDirectMessages.recipientUserId, peerUserId)),
       and(eq(staffDirectMessages.senderUserId, peerUserId), eq(staffDirectMessages.recipientUserId, currentUserId)),
     ))
     .orderBy(asc(staffDirectMessages.createdAt), asc(staffDirectMessages.id))
     .limit(200);
+  return rows.map(row => ({ ...row, body: readMessage(row.body, directMessageContext(row.senderUserId, row.recipientUserId)) }));
 }
 
 export async function createDirectMessage(data: InsertStaffDirectMessage) {
@@ -2903,7 +2913,9 @@ export async function createDirectMessage(data: InsertStaffDirectMessage) {
     .where(and(eq(users.id, data.recipientUserId), isNull(users.deactivatedAt)))
     .limit(1);
   if (!recipient) throw new Error("Recipient account is unavailable");
-  const result = await db.insert(staffDirectMessages).values(data);
+  const result = await db.insert(staffDirectMessages).values({ ...data,
+    body: storeMessage(data.body, directMessageContext(data.senderUserId, data.recipientUserId)),
+  });
   return { id: extractInsertId(result) };
 }
 
