@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { AlertCircle, ArrowRight, Loader2, Lock, Mail, MailCheck, Timer, UserCheck } from "lucide-react";
 import { useState } from "react";
-import { useSearch } from "wouter";
+import { Redirect, useSearch } from "wouter";
 
 const ERROR_MESSAGES: Record<string, string> = {
   missing_token: "That sign-in link is missing its token. Request a fresh one below.",
@@ -81,6 +81,7 @@ export default function Login() {
   const errorCode = new URLSearchParams(search).get("error");
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
+  const currentUser = trpc.auth.me.useQuery(undefined, { retry: false });
 
   const requestLink = trpc.auth.requestLink.useMutation({
     onSuccess: () => setSent(true),
@@ -91,6 +92,8 @@ export default function Login() {
     if (!email.trim()) return;
     requestLink.mutate({ email: email.trim() });
   };
+
+  if (currentUser.data) return <Redirect to="/board" />;
 
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-slate-950 p-4">

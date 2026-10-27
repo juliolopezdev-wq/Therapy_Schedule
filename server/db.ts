@@ -2361,10 +2361,14 @@ export async function getMagicLinkByTokenHash(tokenHash: string) {
   return result[0];
 }
 
-export async function markMagicLinkUsed(id: number): Promise<void> {
+export async function markMagicLinkUsed(id: number): Promise<boolean> {
   const db = await getDb();
-  if (!db) return;
-  await db.update(magicLinks).set({ usedAt: new Date() }).where(eq(magicLinks.id, id));
+  if (!db) return false;
+  const now = new Date();
+  const claimed = await db.update(magicLinks).set({ usedAt: now })
+    .where(and(eq(magicLinks.id, id), isNull(magicLinks.usedAt), gt(magicLinks.expiresAt, now)))
+    .returning({ id: magicLinks.id });
+  return claimed.length === 1;
 }
 
 /** Count of unexpired, unused magic-link requests for this email/IP since `since` -- used for rate limiting. */

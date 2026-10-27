@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Express, Request, Response } from "express";
 
 const mocks = vi.hoisted(() => ({
   countRecentMagicLinks: vi.fn(),
@@ -10,6 +11,9 @@ const mocks = vi.hoisted(() => ({
   upsertUser: vi.fn(),
   markInviteAccepted: vi.fn(),
   createSession: vi.fn(),
+  getSessionByTokenHash: vi.fn(),
+  getUserById: vi.fn(),
+  touchSession: vi.fn(),
   sendEmail: vi.fn(),
 }));
 
@@ -22,7 +26,8 @@ vi.mock("../email", () => ({
   sendEmail: mocks.sendEmail,
 }));
 
-import { requestMagicLink, verifyMagicLink } from "./auth";
+import { registerAuthRoutes, requestMagicLink, verifyMagicLink } from "./auth";
+import { COOKIE_NAME } from "@shared/const";
 
 const existingTeamLead = {
   id: 7,
@@ -67,7 +72,7 @@ describe("magic-link access for existing accounts", () => {
       expiresAt: new Date(Date.now() + 60_000),
       usedAt: null,
     });
-    mocks.markMagicLinkUsed.mockResolvedValue(undefined);
+    mocks.markMagicLinkUsed.mockResolvedValue(true);
     mocks.createSession.mockResolvedValue(22);
     const cookie = vi.fn();
 
@@ -85,5 +90,89 @@ describe("magic-link access for existing accounts", () => {
     }));
     expect(mocks.markInviteAccepted).not.toHaveBeenCalled();
     expect(cookie).toHaveBeenCalledOnce();
+  });
+});
+
+describe("email-link confirmation", () => {
+  const routes = new Map<string, (req: Request, res: Response) => Promise<void>>();
+  registerAuthRoutes({
+    get: (path: string, handler: never) => routes.set(`GET ${path}`, handler),
+    post: (path: string, handler: never) => routes.set(`POST ${path}`, handler),
+  } as unknown as Express);
+
+  function response() {
+    return {
+      setHeader: vi.fn(), type: vi.fn().mockReturnThis(), send: vi.fn(),
+      redirect: vi.fn(), cookie: vi.fn(),
+    };
+  }
+
+  function request(token = "valid-token") {
+    return {
+      query: { token }, body: { token }, headers: {}, ip: "127.0.0.1", protocol: "https", socket: {},
+    } as unknown as Request;
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.getMagicLinkByTokenHash.mockResolvedValue({
+      id: 11, email: existingTeamLead.email, expiresAt: new Date(Date.now() + 60_000), usedAt: null,
+    });
+    mocks.getUserByOpenId.mockResolvedValue(existingTeamLead);
+    mocks.markMagicLinkUsed.mockResolvedValue(true);
+    mocks.createSession.mockResolvedValue(22);
+  });
+
+  it("does not consume a link or create a session when it is opened repeatedly", async () => {
+    const res = response();
+    const open = routes.get("GET /api/auth/verify")!;
+    await open(request(), res as unknown as Response);
+    await open(request(), res as unknown as Response);
+    expect(mocks.getMagicLinkByTokenHash).not.toHaveBeenCalled();
+    expect(mocks.markMagicLinkUsed).not.toHaveBeenCalled();
+    expect(mocks.createSession).not.toHaveBeenCalled();
+    expect(res.send).toHaveBeenCalledWith(expect.stringContaining('method="post"'));
+    expect(res.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+  });
+
+  it("escapes untrusted tokens in the confirmation form", async () => {
+    const res = response();
+    await routes.get("GET /api/auth/verify")!(request('\"><script>alert(1)</script>'), res as unknown as Response);
+    expect(res.send.mock.calls[0][0]).toContain('&quot;&gt;&lt;script&gt;');
+    expect(res.send.mock.calls[0][0]).not.toContain("<script>");
+  });
+
+  it("consumes the link only after confirmation and sets a session cookie", async () => {
+    const res = response();
+    await routes.get("POST /api/auth/verify")!(request(), res as unknown as Response);
+    expect(mocks.markMagicLinkUsed).toHaveBeenCalledWith(11);
+    expect(mocks.createSession).toHaveBeenCalledOnce();
+    expect(res.cookie).toHaveBeenCalledOnce();
+    expect(res.redirect).toHaveBeenCalledWith(303, "/board");
+  });
+
+  it.each(["used", "expired", "missing", "claimed concurrently"])("rejects a %s link without creating a session", async (state) => {
+    if (state === "used") mocks.getMagicLinkByTokenHash.mockResolvedValue({ usedAt: new Date() });
+    if (state === "expired") mocks.getMagicLinkByTokenHash.mockResolvedValue({ expiresAt: new Date(0) });
+    if (state === "missing") mocks.getMagicLinkByTokenHash.mockResolvedValue(undefined);
+    if (state === "claimed concurrently") mocks.markMagicLinkUsed.mockResolvedValue(false);
+    const res = response();
+    await routes.get("POST /api/auth/verify")!(request(), res as unknown as Response);
+    expect(mocks.createSession).not.toHaveBeenCalled();
+    expect(res.cookie).not.toHaveBeenCalled();
+    expect(res.redirect).toHaveBeenCalledWith(303, "/login?error=invalid_or_expired");
+  });
+
+  it("keeps an already authenticated user signed in on a repeated confirmation", async () => {
+    mocks.getMagicLinkByTokenHash.mockResolvedValue({ usedAt: new Date() });
+    mocks.getSessionByTokenHash.mockResolvedValue({ id: 22, userId: existingTeamLead.id, expiresAt: new Date(Date.now() + 60_000) });
+    mocks.getUserById.mockResolvedValue(existingTeamLead);
+    mocks.touchSession.mockResolvedValue(undefined);
+    const req = request();
+    req.headers.cookie = `${COOKIE_NAME}=existing-session`;
+    const res = response();
+    await routes.get("POST /api/auth/verify")!(req, res as unknown as Response);
+    expect(res.redirect).toHaveBeenCalledWith(303, "/board");
+    expect(mocks.createSession).not.toHaveBeenCalled();
   });
 });
