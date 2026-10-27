@@ -1,4 +1,5 @@
 import UserMenu from "@/components/UserMenu";
+import AccessActivity from "@/components/admin/AccessActivity";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { trpc } from "@/lib/trpc";
+import { formatDate } from "@/lib/utils";
 import { ArrowLeft, Check, Loader2, MailX, Send, Trash2, UserRound } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Link } from "wouter";
@@ -37,19 +39,6 @@ const ROLE_LABELS: Record<Role, string> = {
   staff: "Staff",
   viewer: "View only",
 };
-
-function formatDate(value: Date | string | number | null | undefined, fallback = "Never") {
-  if (!value) return fallback;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return fallback;
-  return date.toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
 
 function SectionCard({
   title,
@@ -235,7 +224,10 @@ export default function AdminUsers() {
   });
 
   const revokeSession = trpc.admin.revokeSession.useMutation({
-    onSuccess: invalidateAll,
+    onSuccess: () => {
+      toast.success("Device signed out");
+      invalidateAll();
+    },
     onError: (e) => toast.error(e.message),
   });
 
@@ -289,6 +281,10 @@ export default function AdminUsers() {
               <p className="mt-1 max-w-2xl text-sm text-blue-100/80">
                 Invite teammates, assign permissions, and review account activity from one place.
               </p>
+              <nav aria-label="Activity shortcuts" className="mt-5 flex flex-wrap gap-2">
+                <a href="#signed-in-devices" className="rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">Signed-in devices ↓</a>
+                <a href="#audit-log" className="rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">Audit log ↓</a>
+              </nav>
             </div>
           </div>
         </div>
@@ -311,8 +307,8 @@ export default function AdminUsers() {
           {[
             { label: "Active users", value: usersQuery.isLoading || usersQuery.isError ? "—" : activeUserCount },
             { label: "Pending invites", value: invitesQuery.isLoading || invitesQuery.isError ? "—" : pendingInvites.length },
-            { label: "Live sessions", value: sessionsQuery.isLoading || sessionsQuery.isError ? "—" : sessions.length },
-            { label: "Audit events", value: auditQuery.isLoading || auditQuery.isError ? "—" : auditEntries.length },
+            { label: "Signed-in devices", value: sessionsQuery.isLoading || sessionsQuery.isError ? "—" : sessions.length },
+            { label: "Recent audit events", value: auditQuery.isLoading || auditQuery.isError ? "—" : auditEntries.length },
           ].map(({ label, value }) => (
             <Card key={label} className="gap-0 rounded-2xl border-slate-200/80 bg-white p-4 shadow-sm sm:p-5">
               <p className="text-2xl font-black tracking-tight text-slate-900">{value}</p>
@@ -520,156 +516,85 @@ export default function AdminUsers() {
           </Table>
         </SectionCard>
 
-        <div className="grid items-start gap-6 xl:grid-cols-2">
-          <SectionCard
-            title="Pending invites"
-            description="Invitations waiting for a teammate to join."
-            count={pendingInvites.length}
-          >
-            <Table>
-              <TableHeader className="bg-slate-50/80">
-                <TableRow className="border-slate-100 hover:bg-transparent">
-                  <TableHead className="h-11 px-5 text-xs font-bold uppercase tracking-wider text-slate-500">Email</TableHead>
-                  <TableHead className="h-11 px-4 text-xs font-bold uppercase tracking-wider text-slate-500">Role</TableHead>
-                  <TableHead className="h-11 px-4 text-xs font-bold uppercase tracking-wider text-slate-500">Status</TableHead>
-                  <TableHead className="h-11 px-5 text-right"><span className="sr-only">Actions</span></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {invitesQuery.isError ? <ErrorRow columns={4} message="Pending invites could not be loaded." /> : invitesQuery.isLoading ? <LoadingRows columns={4} /> : pendingInvites.length === 0 ? (
-                  <EmptyRow columns={4} message="There are no pending invitations." />
-                ) : pendingInvites.map((item) => (
-                  <TableRow key={item.id} className="border-slate-100 hover:bg-sky-50/35">
-                    <TableCell className="px-5 py-4 font-medium text-slate-800">{item.email}</TableCell>
-                    <TableCell className="px-4 py-3">
-                      <Select
-                        value={item.role}
-                        disabled={updateInviteRole.isPending || revokeInvite.isPending || resendInvite.isPending}
-                        onValueChange={(role: Role) => updateInviteRole.mutate({ email: item.email, role })}
-                      >
-                        <SelectTrigger className="h-9 w-[118px] bg-white" aria-label={`Role for ${item.email}`}>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {ROLES.map((role) => <SelectItem key={role} value={role}>{ROLE_LABELS[role]}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    </TableCell>
-                    <TableCell className="px-4 py-4">
-                      <Badge variant="secondary" className="rounded-full bg-amber-50 text-amber-700 ring-1 ring-amber-200/70">
-                        Waiting
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="px-5 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={revokeInvite.isPending || resendInvite.isPending}
-                          className="gap-1.5 text-sky-700 hover:bg-sky-50 hover:text-sky-800"
-                          onClick={() => resendInvite.mutate({ email: item.email })}
-                        >
-                          {resendInvite.isPending && resendInvite.variables?.email === item.email
-                            ? <Loader2 className="h-4 w-4 animate-spin" />
-                            : <Send className="h-4 w-4" />}
-                          Resend
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={revokeInvite.isPending || resendInvite.isPending}
-                          className="gap-1.5 text-slate-500 hover:bg-rose-50 hover:text-rose-700"
-                          onClick={() => setInviteToRevoke({ id: item.id, email: item.email })}
-                        >
-                          <MailX className="h-4 w-4" />
-                          Revoke
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </SectionCard>
-
-          <SectionCard
-            title="Active sessions"
-            description="Devices currently signed in to MinuteMinder."
-            count={sessions.length}
-          >
-            <Table>
-              <TableHeader className="bg-slate-50/80">
-                <TableRow className="border-slate-100 hover:bg-transparent">
-                  <TableHead className="h-11 px-5 text-xs font-bold uppercase tracking-wider text-slate-500">User</TableHead>
-                  <TableHead className="h-11 px-4 text-xs font-bold uppercase tracking-wider text-slate-500">Last active</TableHead>
-                  <TableHead className="h-11 px-5 text-right"><span className="sr-only">Actions</span></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sessionsQuery.isError ? <ErrorRow columns={3} message="Active sessions could not be loaded." /> : sessionsQuery.isLoading ? <LoadingRows columns={3} /> : sessions.length === 0 ? (
-                  <EmptyRow columns={3} message="There are no active sessions." />
-                ) : sessions.map((session) => (
-                  <TableRow key={session.id} className="border-slate-100 hover:bg-sky-50/35">
-                    <TableCell className="px-5 py-3.5">
-                      <p className="font-medium text-slate-800">{session.userEmail || session.userName}</p>
-                      <p className="mt-0.5 text-xs text-slate-400">{session.ipAddress || "IP unavailable"}</p>
-                    </TableCell>
-                    <TableCell className="px-4 py-3.5">
-                      <p className="text-sm text-slate-600">{formatDate(session.lastSeenAt)}</p>
-                      <p className="mt-0.5 text-xs text-slate-400">Expires {formatDate(session.expiresAt)}</p>
-                    </TableCell>
-                    <TableCell className="px-5 py-3.5 text-right">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={revokeSession.isPending}
-                        className="text-slate-500 hover:bg-rose-50 hover:text-rose-700"
-                        onClick={() => revokeSession.mutate({ sessionId: session.id })}
-                      >
-                        Revoke
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </SectionCard>
-        </div>
-
         <SectionCard
-          title="Audit log"
-          description="A chronological record of recent administrative changes."
-          count={auditEntries.length}
+          title="Pending invites"
+          description="Invitations waiting for a teammate to join."
+          count={pendingInvites.length}
         >
           <Table>
             <TableHeader className="bg-slate-50/80">
               <TableRow className="border-slate-100 hover:bg-transparent">
-                <TableHead className="h-11 px-5 text-xs font-bold uppercase tracking-wider text-slate-500">When</TableHead>
-                <TableHead className="h-11 px-4 text-xs font-bold uppercase tracking-wider text-slate-500">Actor</TableHead>
-                <TableHead className="h-11 px-4 text-xs font-bold uppercase tracking-wider text-slate-500">Action</TableHead>
-                <TableHead className="h-11 px-5 text-xs font-bold uppercase tracking-wider text-slate-500">Target</TableHead>
+                <TableHead className="h-11 px-5 text-xs font-bold uppercase tracking-wider text-slate-500">Email</TableHead>
+                <TableHead className="h-11 px-4 text-xs font-bold uppercase tracking-wider text-slate-500">Role</TableHead>
+                <TableHead className="h-11 px-4 text-xs font-bold uppercase tracking-wider text-slate-500">Status</TableHead>
+                <TableHead className="h-11 px-5 text-right"><span className="sr-only">Actions</span></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {auditQuery.isError ? <ErrorRow columns={4} message="Audit activity could not be loaded." /> : auditQuery.isLoading ? <LoadingRows columns={4} /> : auditEntries.length === 0 ? (
-                <EmptyRow columns={4} message="No administrative activity has been recorded." />
-              ) : auditEntries.map((entry) => (
-                <TableRow key={entry.id} className="border-slate-100 hover:bg-sky-50/35">
-                  <TableCell className="px-5 py-3.5 text-sm text-slate-500">{formatDate(entry.createdAt)}</TableCell>
-                  <TableCell className="px-4 py-3.5 font-medium text-slate-700">{entry.actorEmail}</TableCell>
-                  <TableCell className="px-4 py-3.5">
-                    <Badge variant="secondary" className="rounded-md bg-blue-50 font-medium text-blue-700">
-                      {entry.action.replaceAll("_", " ")}
+              {invitesQuery.isError ? <ErrorRow columns={4} message="Pending invites could not be loaded." /> : invitesQuery.isLoading ? <LoadingRows columns={4} /> : pendingInvites.length === 0 ? (
+                <EmptyRow columns={4} message="There are no pending invitations." />
+              ) : pendingInvites.map((item) => (
+                <TableRow key={item.id} className="border-slate-100 hover:bg-sky-50/35">
+                  <TableCell className="px-5 py-4 font-medium text-slate-800">{item.email}</TableCell>
+                  <TableCell className="px-4 py-3">
+                    <Select
+                      value={item.role}
+                      disabled={updateInviteRole.isPending || revokeInvite.isPending || resendInvite.isPending}
+                      onValueChange={(role: Role) => updateInviteRole.mutate({ email: item.email, role })}
+                    >
+                      <SelectTrigger className="h-9 w-[118px] bg-white" aria-label={`Role for ${item.email}`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ROLES.map((role) => <SelectItem key={role} value={role}>{ROLE_LABELS[role]}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                  <TableCell className="px-4 py-4">
+                    <Badge variant="secondary" className="rounded-full bg-amber-50 text-amber-700 ring-1 ring-amber-200/70">
+                      Waiting
                     </Badge>
                   </TableCell>
-                  <TableCell className="px-5 py-3.5 text-sm text-slate-500">
-                    <span className="capitalize">{entry.targetType}</span> <span className="font-mono text-xs text-slate-400">{entry.targetId}</span>
+                  <TableCell className="px-5 py-3">
+                    <div className="flex items-center justify-end gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={revokeInvite.isPending || resendInvite.isPending}
+                        className="gap-1.5 text-sky-700 hover:bg-sky-50 hover:text-sky-800"
+                        onClick={() => resendInvite.mutate({ email: item.email })}
+                      >
+                        {resendInvite.isPending && resendInvite.variables?.email === item.email
+                          ? <Loader2 className="h-4 w-4 animate-spin" />
+                          : <Send className="h-4 w-4" />}
+                        Resend
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={revokeInvite.isPending || resendInvite.isPending}
+                        className="gap-1.5 text-slate-500 hover:bg-rose-50 hover:text-rose-700"
+                        onClick={() => setInviteToRevoke({ id: item.id, email: item.email })}
+                      >
+                        <MailX className="h-4 w-4" />
+                        Revoke
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         </SectionCard>
+
+        <AccessActivity
+          sessions={sessionsQuery}
+          audit={auditQuery}
+          users={users}
+          currentUserId={currentUser?.id}
+          onRevoke={(id) => revokeSession.mutateAsync({ sessionId: id })}
+          revoking={revokeSession.isPending}
+        />
       </div>
 
       <AlertDialog

@@ -3,8 +3,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { AlertCircle, ArrowRight, Loader2, Lock, Mail, MailCheck, Timer, UserCheck } from "lucide-react";
-import { useState } from "react";
-import { Redirect, useSearch } from "wouter";
+import { SIGN_IN_LOCK_MS, SIGN_IN_MAX_FAILURES } from "@shared/const";
+import { useEffect, useMemo, useState } from "react";
+import { Redirect, useLocation, useSearch } from "wouter";
+
+const LOCK_MINUTES = SIGN_IN_LOCK_MS / 60_000;
 
 const ERROR_MESSAGES: Record<string, string> = {
   missing_token: "That sign-in link is missing its token. Request a fresh one below.",
@@ -77,19 +80,57 @@ function MinutesIllustration() {
 }
 
 export default function Login() {
+  const utils = trpc.useUtils();
   const search = useSearch();
+  const [, navigate] = useLocation();
   const errorCode = new URLSearchParams(search).get("error");
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
+  const [now, setNow] = useState(Date.now);
   const currentUser = trpc.auth.me.useQuery(undefined, { retry: false });
+  const signInStatus = trpc.auth.signInStatus.useQuery(undefined, {
+    // only poll while locked
+    refetchInterval: (query) => (query.state.data?.lockedUntil ? 15_000 : false),
+    refetchOnWindowFocus: true,
+    retry: false,
+  });
+  // use server-relative time so a wrong device clock can't skew the countdown
+  const status = signInStatus.data;
+  const lockedUntil = useMemo(
+    () => (status?.lockedUntil ? Date.now() + Math.max(0, status.lockedUntil - status.serverNow) : 0),
+    [status],
+  );
+  useEffect(() => {
+    if (!lockedUntil) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [lockedUntil]);
+  const secondsLeft = Math.max(0, Math.ceil((lockedUntil - now) / 1000));
+  const isLocked = secondsLeft > 0;
+  const countdown = `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, "0")}`;
+  useEffect(() => {
+    if (lockedUntil && secondsLeft === 0) {
+      setSent(false);
+      void signInStatus.refetch();
+    }
+  }, [lockedUntil, secondsLeft, signInStatus.refetch]);
 
   const requestLink = trpc.auth.requestLink.useMutation({
-    onSuccess: () => setSent(true),
+    onMutate: async () => { await utils.auth.signInStatus.cancel(); },
+    onSuccess: (result) => {
+      utils.auth.signInStatus.setData(undefined, { lockedUntil: result.lockedUntil, serverNow: result.serverNow });
+      setSent(!result.lockedUntil && !result.invalidFormat);
+      if (errorCode) navigate("/login", { replace: true });
+    },
   });
+  // The request endpoint enforces the lock authoritatively. A failed preflight must not
+  // disable sign-in indefinitely during transient failures or a rolling server upgrade.
+  const canSubmit = !isLocked && !requestLink.isPending;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim()) return;
+    if (!canSubmit) return;
     requestLink.mutate({ email: email.trim() });
   };
 
@@ -129,7 +170,15 @@ export default function Login() {
           </div>
 
           <div className="p-7">
-            {sent ? (
+            {isLocked && (
+              <div role="alert" className="mb-5 rounded-xl border border-amber-400/30 bg-amber-400/10 p-4 text-amber-100">
+                <p className="flex items-center gap-2 text-sm font-semibold"><Timer className="h-4 w-4" />Sign-in requests temporarily paused</p>
+                <p className="mt-2 text-sm leading-relaxed text-amber-100/80">{SIGN_IN_MAX_FAILURES} incorrect email attempts were made in this browser. You can request another sign-in link after the {LOCK_MINUTES}-minute wait.</p>
+                <p className="mt-3 text-sm">Next attempt in <span role="timer" aria-label="Time until next sign-in attempt" className="ml-1 font-mono text-xl font-bold tabular-nums">{countdown}</span></p>
+                <p className="mt-2 text-xs text-amber-100/70">Requests unlock automatically. Refreshing this page does not reset the wait.</p>
+              </div>
+            )}
+            {sent && !isLocked ? (
               <div className="text-center animate-in fade-in duration-300">
                 <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-400/10 ring-1 ring-emerald-300/30">
                   <MailCheck className="h-6 w-6 text-emerald-300" />
@@ -153,7 +202,7 @@ export default function Login() {
               <>
                 <h1 className="text-xl font-bold text-white">Let's mind those minutes.</h1>
                 <p className="mt-1 text-sm text-slate-400">
-                  Enter your work email and we'll send you a link to today's minutes.
+                  Enter your invited email address and we'll send you a sign-in link.
                 </p>
 
                 {errorCode && (
@@ -163,8 +212,8 @@ export default function Login() {
                   </div>
                 )}
 
-                <form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-3">
-                  <label htmlFor="login-email" className="sr-only">Work email</label>
+                <form noValidate onSubmit={handleSubmit} className="mt-6 flex flex-col gap-3">
+                  <label htmlFor="login-email" className="sr-only">Email address</label>
                   <div className="relative">
                     <Mail className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                     <Input
@@ -175,16 +224,21 @@ export default function Login() {
                       onChange={(e) => setEmail(e.target.value)}
                       autoFocus
                       required
+                      disabled={isLocked || requestLink.isPending}
+                      maxLength={320}
+                      autoComplete="email"
                       className="h-11 rounded-lg border-white/10 bg-slate-950 pl-10 text-white placeholder:text-slate-600 focus-visible:border-sky-400/70 focus-visible:ring-sky-400/20"
                     />
                   </div>
                   <Button
                     id="login-submit"
                     type="submit"
-                    disabled={requestLink.isPending}
+                    disabled={!canSubmit}
                     className="group h-11 rounded-lg bg-sky-500 font-semibold text-slate-950 transition-colors hover:bg-sky-400"
                   >
-                    {requestLink.isPending ? (
+                    {isLocked ? (
+                      <>Try again in {countdown}</>
+                    ) : requestLink.isPending ? (
                       <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sending...
                       </>
@@ -198,7 +252,10 @@ export default function Login() {
                   {requestLink.error && (
                     <p className="text-center text-sm text-red-300">{requestLink.error.message}</p>
                   )}
+                  {!isLocked && requestLink.data?.invalidFormat && <p role="alert" className="text-sm text-red-300">Enter a valid email address, such as name@example.com.</p>}
+                  {signInStatus.isError && <p role="status" className="text-sm text-amber-200">You can still request a sign-in link. We'll check availability when you submit. <button type="button" className="underline" onClick={() => { void signInStatus.refetch(); }}>Refresh availability</button>.</p>}
                 </form>
+                <p className="mt-3 text-xs leading-relaxed text-slate-500">{SIGN_IN_MAX_FAILURES} invalid or uninvited email attempts within {LOCK_MINUTES} minutes pause new link requests in this browser for {LOCK_MINUTES} minutes.</p>
 
                 {/* Trust badges */}
                 <ul className="mt-6 grid grid-cols-3 gap-2 text-[11px] text-slate-400">

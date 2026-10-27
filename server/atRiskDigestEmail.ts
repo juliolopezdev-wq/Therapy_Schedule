@@ -8,54 +8,11 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function formatSlotTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
 function buildEmailContent(atRisk: MorningDigestPatientEntry[], dateLabel: string): { subject: string; html: string; text: string } {
-  const subject = `${atRisk.length} patient(s) at risk of missing weekly minutes -- ${dateLabel}`;
-
-  const textLines = atRisk.map((p) => {
-    const slot = p.proposedSlots[0];
-    const slotText = slot
-      ? `Proposed: ${slot.therapyType} with ${slot.therapistName ?? "unassigned"} at ${formatSlotTime(slot.startTime)} (${slot.durationMinutes} min)`
-      : "No open slot found -- needs a manual look.";
-    return `- ${p.patientName} (Room ${p.roomNumber}): ${p.remainingMinutes} of ${p.target} min remaining. ${slotText}`;
-  });
-
-  const rows = atRisk
-    .map((p) => {
-      const slot = p.proposedSlots[0];
-      const slotHtml = slot
-        ? `${escapeHtml(slot.therapyType)} with ${escapeHtml(slot.therapistName ?? "unassigned")} at ${formatSlotTime(slot.startTime)} (${slot.durationMinutes} min)`
-        : `<em>No open slot found -- needs a manual look.</em>`;
-      return `<tr>
-        <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;">${escapeHtml(p.patientName)} <span style="color:#6b7280;">(Room ${escapeHtml(p.roomNumber)})</span></td>
-        <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;color:#dc2626;font-weight:600;">${p.remainingMinutes} / ${p.target} min</td>
-        <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;">${slotHtml}</td>
-      </tr>`;
-    })
-    .join("");
-
-  const html = `
-    <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:640px;">
-      <h2 style="color:#1e293b;">Morning digest -- ${escapeHtml(dateLabel)}</h2>
-      <p style="color:#334155;">${atRisk.length} patient(s) are projected to miss their weekly therapy-minute target unless something changes today. PAMi has already proposed an open slot for each where one exists -- these are proposals only, nothing has been booked.</p>
-      <table style="border-collapse:collapse;width:100%;font-size:14px;">
-        <thead>
-          <tr style="text-align:left;color:#64748b;">
-            <th style="padding:6px 12px;">Patient</th>
-            <th style="padding:6px 12px;">Remaining</th>
-            <th style="padding:6px 12px;">Proposed slot</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-      <p style="color:#64748b;font-size:13px;margin-top:16px;">Open the board or ask PAMi to book any of these. This is an automated digest -- no reply needed.</p>
-    </div>
-  `;
-
-  const text = `Morning digest -- ${dateLabel}\n\n${atRisk.length} patient(s) at risk of missing their weekly target:\n\n${textLines.join("\n")}\n\nOpen the board or ask PAMi to book any of these.`;
+  const subject = `Therapy planning review available -- ${dateLabel}`;
+  const boardUrl = ENV.appUrl ? `${ENV.appUrl}/board` : "";
+  const text = `A therapy planning review is available for ${dateLabel}. Sign in to MinuteMinder to review current patient goals, minute gaps, and proposed slots. No sessions have been booked.${boardUrl ? `\n\n${boardUrl}` : ""}`;
+  const html = `<div style="font-family:system-ui,sans-serif"><h2>Therapy planning review available</h2><p>Sign in to review current patient goals, minute gaps, and proposed slots. No sessions have been booked.</p>${boardUrl ? `<p><a href="${escapeHtml(boardUrl).replace(/"/g, "&quot;")}">Open MinuteMinder</a></p>` : ""}</div>`;
 
   return { subject, html, text };
 }

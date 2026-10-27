@@ -39,6 +39,7 @@ export interface PatientFormValue {
   isDischarged: boolean;
   admissionDate?: string;
   estimatedDischargeDate?: string;
+  actualDischargeDate?: string;
   weeklyMinuteTarget?: number;
   teamId?: number | null;
   isRoomPlaceholder?: boolean;
@@ -259,6 +260,8 @@ export function PatientDialog({ open, onOpenChange, initial, onSave, therapists 
               Mark as Discharged (DC)
             </Label>
           </div>}
+
+          {form.isDischarged && !isPlaceholder && <div className="space-y-2"><Label htmlFor="actual-discharge-date">Actual discharge date</Label><Input id="actual-discharge-date" type="date" min={form.admissionDate || undefined} value={form.actualDischargeDate ?? ""} disabled={!canEdit || isSaving} onChange={event => setForm({ ...form, actualDischargeDate: event.target.value })} /><p className="text-xs text-slate-500">Confirm the actual date to verify the discharge assessment window. An estimated date is not sufficient.</p></div>}
 
           {isEditing && !isPlaceholder && (
             <div className="rounded-lg glass-surface p-5 space-y-4 mt-6">

@@ -23,7 +23,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { cn, staffDisplayName } from "@/lib/utils";
 import { toast } from "sonner";
-import { SECTION_GG_ITEMS, SECTION_GG_SCALE } from "@shared/sectionGG";
+import { SECTION_GG_ITEMS, SECTION_GG_SCALE, assessmentProgress } from "@shared/sectionGG";
 import {
   CheckCheck,
   Lock,
@@ -155,7 +155,7 @@ export function PatientChartModal({
               <GoalsTab patientId={patient.id} />
             </TabsContent>
             <TabsContent value="functional">
-              <FunctionalTab patientId={patient.id} />
+              <FunctionalTab patientId={patient.id} isAdmin={isAdmin} myTherapistId={myTherapistId} />
             </TabsContent>
             {isAdmin && (
               <TabsContent value="access">
@@ -667,10 +667,23 @@ function GoalsTab({ patientId }: { patientId: number }) {
   );
 }
 
-function FunctionalTab({ patientId }: { patientId: number }) {
+function FunctionalTab({ patientId, isAdmin, myTherapistId }: { patientId: number; isAdmin: boolean; myTherapistId: number | null }) {
   const utils = trpc.useUtils();
   const assessmentsQuery = trpc.charting.functionalAssessments.list.useQuery({
     patientId,
+  });
+  const refreshAssessments = () => {
+    void utils.charting.functionalAssessments.list.invalidate({ patientId });
+    void utils.charting.ggCompleteness.invalidate(); void utils.charting.ggTrend.invalidate(); void utils.charting.ggScoringConsistency.invalidate();
+  };
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const update = trpc.charting.functionalAssessments.update.useMutation({
+    onSuccess: () => { toast.success("Assessment draft updated"); setComposing(false); setEditingId(null); setScores({}); refreshAssessments(); },
+    onError: error => toast.error(error.message),
+  });
+  const sign = trpc.charting.functionalAssessments.sign.useMutation({
+    onSuccess: () => { toast.success("Assessment signed"); refreshAssessments(); },
+    onError: error => toast.error(error.message),
   });
   const [composing, setComposing] = useState(false);
   const [assessmentType, setAssessmentType] = useState<
@@ -686,7 +699,7 @@ function FunctionalTab({ patientId }: { patientId: number }) {
       toast.success("Functional assessment saved");
       setScores({});
       setComposing(false);
-      utils.charting.functionalAssessments.list.invalidate({ patientId });
+      refreshAssessments();
     },
     onError: e => toast.error(e.message),
   });
@@ -702,15 +715,13 @@ function FunctionalTab({ patientId }: { patientId: number }) {
         </p>
       </div>
       <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
-        Reference scoring modeled on CMS Section GG. Not a certified MDS
-        data-entry tool -- verify against the current RAI User&apos;s Manual
-        before use in official assessments.
+        IRF reference scoring only. This is not an IRF-PAI submission tool or an official CMS outcome measure. Use your approved clinical record and current IRF-PAI manual for official reporting.
       </p>
       {!composing ? (
         <Button
           size="sm"
           className="h-10 gap-2 rounded-xl bg-sky-600 text-white hover:bg-sky-700"
-          onClick={() => setComposing(true)}
+          onClick={() => { setEditingId(null); setScores({}); setComposing(true); }}
         >
           <Plus className="h-4 w-4" /> New assessment
         </Button>
@@ -719,12 +730,8 @@ function FunctionalTab({ patientId }: { patientId: number }) {
           className="space-y-5 rounded-2xl border border-sky-200 bg-white p-4 shadow-sm sm:p-5"
           onSubmit={e => {
             e.preventDefault();
-            create.mutate({
-              patientId,
-              assessmentType,
-              assessmentDate,
-              itemScores: scores,
-            });
+            if (editingId != null) update.mutate({ id: editingId, patientId, assessmentDate, itemScores: scores });
+            else create.mutate({ patientId, assessmentType, assessmentDate, itemScores: scores });
           }}
         >
           <div className="grid grid-cols-1 gap-4 min-[400px]:grid-cols-2">
@@ -732,6 +739,7 @@ function FunctionalTab({ patientId }: { patientId: number }) {
               <Label className="text-sm font-medium text-slate-700">Type</Label>
               <Select
                 value={assessmentType}
+                disabled={editingId !== null}
                 onValueChange={v =>
                   setAssessmentType(v as typeof assessmentType)
                 }
@@ -816,9 +824,9 @@ function FunctionalTab({ patientId }: { patientId: number }) {
               type="submit"
               size="sm"
               className="h-10 rounded-xl bg-sky-600 text-white hover:bg-sky-700"
-              disabled={create.isPending}
+              disabled={create.isPending || update.isPending}
             >
-              Save assessment
+              {editingId != null ? "Update draft" : "Save draft"}
             </Button>
           </div>
         </form>
@@ -833,7 +841,8 @@ function FunctionalTab({ patientId }: { patientId: number }) {
       ) : (
         (assessmentsQuery.data ?? []).map(a => {
           const itemScores = (a.itemScores ?? {}) as Record<string, number>;
-          const scored = Object.values(itemScores).filter(v => v > 0);
+          const progress = assessmentProgress(itemScores, a.signedAt);
+          const scored = Object.values(itemScores).filter(v => v >= 1 && v <= 6);
           const total = scored.reduce((sum, v) => sum + v, 0);
           return (
             <div
@@ -847,6 +856,7 @@ function FunctionalTab({ patientId }: { patientId: number }) {
                     · {a.assessmentDate}
                   </span>
                 </span>
+                {!a.signedAt && <Badge variant="secondary">{progress.status}</Badge>}
                 {a.signedAt ? (
                   <Badge
                     variant="secondary"
@@ -857,10 +867,12 @@ function FunctionalTab({ patientId }: { patientId: number }) {
                 ) : null}
               </div>
               <p className="mt-1 text-xs text-slate-500">
-                {scored.length} of {SECTION_GG_ITEMS.length} items scored ·
-                total {total}
+                {progress.answered} of {SECTION_GG_ITEMS.length} reference items answered ·
+                {scored.length} performance scores (sum {total}; not a CMS measure)
                 {a.therapistName ? ` · by ${a.therapistName}` : ""}
               </p>
+              {!a.signedAt && (isAdmin || a.completedByTherapistId === myTherapistId) && <Button variant="ghost" size="sm" className="mt-3 mr-2" onClick={() => { setEditingId(a.id); setScores(itemScores); setAssessmentType(a.assessmentType); setAssessmentDate(a.assessmentDate); setComposing(true); }}>Edit draft</Button>}
+              {!a.signedAt && (isAdmin || a.completedByTherapistId === myTherapistId) && <Button className="mt-3" size="sm" variant="outline" disabled={!progress.complete || sign.isPending} onClick={() => sign.mutate({ id: a.id, patientId })}>Sign completed assessment</Button>}
             </div>
           );
         })

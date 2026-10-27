@@ -142,6 +142,7 @@ function redactPatient(patient: Patient): ScopedPatient {
     archivedByUserId: null,
     archiveReason: null,
     estimatedDischargeDate: null,
+    actualDischargeDate: null,
     ptTarget: null,
     otTarget: null,
     slpTarget: null,

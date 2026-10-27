@@ -1,5 +1,4 @@
-import { memo, useCallback, useMemo, useState } from "react";
-import { usePermissions } from "@/_core/hooks/usePermissions";
+import { createContext, memo, useCallback, useContext, useMemo, useState } from "react";
 import { AlertTriangle, Copy, FileText, GripVertical } from "lucide-react";
 import { CSS } from "@dnd-kit/utilities";
 import { useSortable } from "@dnd-kit/sortable";
@@ -37,6 +36,7 @@ const EOW_DAY_LETTERS = ["S", "M", "T", "W", "TH", "F", "S"];
 const EOW_DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 interface PatientRowProps {
+  canEdit: boolean; isAdmin: boolean; canChart: boolean; viewerTherapistId: number | null;
   patient: Patient & { accessLevel?: "full" | "schedule" };
   rowIdx: number;
   day: Date;
@@ -64,7 +64,8 @@ interface PatientRowProps {
   therapistColor: (id: number | null) => string | undefined;
 }
 
-function PatientRowImpl({
+function PatientRowContent({
+  canEdit, isAdmin, canChart, viewerTherapistId: therapistId,
   patient,
   rowIdx,
   day,
@@ -91,27 +92,10 @@ function PatientRowImpl({
   therapistName,
   therapistColor,
 }: PatientRowProps) {
-  const { canEdit, isAdmin, canChart, therapistId } = usePermissions();
   const canManagePatient = isAdmin || (canEdit && patient.accessLevel === "full");
   const canOpenChart = canChart && (isAdmin || patient.accessLevel === "full");
   const [chartOpen, setChartOpen] = useState(false);
   const isPlaceholder = patient.isRoomPlaceholder;
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({
-    id: `patient-${patient.id}`,
-    data: { patient, isPatientDrop: true, teamId: patient.teamId },
-    disabled: !canManagePatient,
-  });
-  const sortableStyle = {
-    transform: CSS.Transform.toString(transform),
-    transition: transition ?? "transform 180ms cubic-bezier(0.2, 0, 0, 1)",
-  };
   // Stable across re-renders unless pFlags itself changes -- otherwise FlagToggle would see a
   // "new" array/callback (and thus re-render) on every PatientRow render regardless of its own
   // memoization.
@@ -133,17 +117,7 @@ function PatientRowImpl({
   );
 
   return (
-    <div
-      ref={setNodeRef}
-      id={`patient-row-${patient.id}`}
-      style={sortableStyle}
-      className={cn(
-        "group/row relative flex h-[72px] border-b border-slate-100 transition-[transform,background-color,box-shadow,opacity] last:border-b-0 hover:bg-slate-50/80 will-change-transform",
-        isDC && "bg-slate-200 opacity-60 grayscale",
-        isDischargeToday && !isDC && "bg-rose-50/50",
-        isDragging && "z-40 opacity-25 shadow-lg",
-      )}
-    >
+    <>
       {/* Patient label */}
       <div
         className={cn(
@@ -152,19 +126,7 @@ function PatientRowImpl({
           "group-hover/row:bg-white group-hover/row:shadow-md",
         )}
       >
-        {canManagePatient && (
-          <button
-            type="button"
-            className="mr-0.5 flex h-10 w-6 shrink-0 touch-none cursor-grab items-center justify-center rounded-md text-slate-400 outline-none transition-colors hover:bg-slate-100 hover:text-sky-700 focus-visible:ring-2 focus-visible:ring-sky-500 active:cursor-grabbing sm:mr-1 sm:w-7"
-            aria-label={`Move ${patient.name}`}
-            title="Drag to reorder or move to another team"
-            onClick={(event) => event.stopPropagation()}
-            {...attributes}
-            {...listeners}
-          >
-            <GripVertical className="h-5 w-5" aria-hidden="true" />
-          </button>
-        )}
+        {canManagePatient && <PatientDragHandle name={patient.name} />}
         <div className="flex h-full min-w-0 flex-1 flex-col justify-center gap-1">
           <div className="flex w-full min-w-0 items-center gap-1">
             <button
@@ -434,12 +396,25 @@ function PatientRowImpl({
           {isPlaceholder ? "—" : dailyMinutesByPatient.get(patient.id) || 0}
         </span>
       </div>
-    </div>
+    </>
   );
 }
 
-// This row renders once per patient per day (up to ~22 grid cells each) and the board re-renders
-// on nearly every query refetch/drag interaction -- memoize so a patient's row only re-renders
-// when its own props actually changed, not whenever any other patient's session/flag/drag state
-// changes. Depends on the parent (TherapyBoard.tsx) passing stable references for tiles/handlers.
-export const PatientRow = memo(PatientRowImpl);
+const PatientRowBody = memo(PatientRowContent);
+type HandleBinding = Pick<ReturnType<typeof useSortable>, "attributes" | "listeners">;
+const PatientHandleContext = createContext<HandleBinding | null>(null);
+function PatientDragHandle({ name }: { name: string }) {
+  const binding = useContext(PatientHandleContext);
+  return <button type="button" className="mr-0.5 flex h-10 w-6 shrink-0 touch-none cursor-grab items-center justify-center rounded-md text-slate-400 outline-none transition-colors hover:bg-slate-100 hover:text-sky-700 focus-visible:ring-2 focus-visible:ring-sky-500 active:cursor-grabbing sm:mr-1 sm:w-7" aria-label={`Move ${name}`} title="Drag to reorder or move to another team" onClick={event => event.stopPropagation()} {...binding?.attributes} {...binding?.listeners}><GripVertical className="h-5 w-5" aria-hidden /></button>;
+}
+
+// Pointer transforms update this lightweight shell, not the chart controls and time-grid body.
+function SortablePatientRow(props: PatientRowProps) {
+  const { patient, canEdit, isAdmin, isDC, pFlags, day } = props;
+  const data = useMemo(() => ({ patient, isPatientDrop: true, teamId: patient.teamId }), [patient]);
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `patient-${patient.id}`, data, disabled: !(isAdmin || canEdit && patient.accessLevel === "full") });
+  const binding = useMemo(() => ({ attributes, listeners }), [attributes, listeners]);
+  const dischargeToday = pFlags.some(flag => flag.flagType === "DC" && formatDateKey(new Date(flag.date)) === formatDateKey(day));
+  return <PatientHandleContext.Provider value={binding}><div ref={setNodeRef} id={`patient-row-${patient.id}`} style={{ transform: CSS.Transform.toString(transform), transition }} className={cn("group/row relative flex h-[72px] border-b border-slate-100 transition-[background-color,box-shadow,opacity] last:border-b-0 hover:bg-slate-50/80", isDC && "bg-slate-200 opacity-60 grayscale", dischargeToday && !isDC && "bg-rose-50/50", isDragging && "z-40 opacity-25 shadow-lg")}><PatientRowBody {...props} /></div></PatientHandleContext.Provider>;
+}
+export const PatientRow = memo(SortablePatientRow);

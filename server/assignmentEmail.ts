@@ -1,67 +1,21 @@
-import { getTherapists, getPatients, getTherapySessionsForDateRange } from "./db";
+import { getTherapists, getTherapySessionsForDateRange } from "./db";
 import { sendEmail, isEmailConfigured } from "./email";
+import { ENV } from "./_core/env";
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function formatSlotTime(date: Date): string {
-  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
-interface AssignmentEntry {
-  timeLabel: string;
-  startTime: Date;
-  patientName: string;
-  roomNumber: string;
-  therapyType: string;
-  durationMinutes: number;
-}
-
 function buildEmailContent(
   therapistName: string,
   dateLabel: string,
-  entries: AssignmentEntry[],
+  sessionCount: number,
 ): { subject: string; html: string; text: string } {
-  const subject = `Your schedule for ${dateLabel} (${entries.length} session${entries.length === 1 ? "" : "s"})`;
+  const subject = `Your schedule for ${dateLabel} (${sessionCount} session${sessionCount === 1 ? "" : "s"})`;
 
-  const sorted = [...entries].sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
-
-  const textLines = sorted.map(
-    (e) => `- ${e.timeLabel}: ${e.therapyType} with ${e.patientName} (Room ${e.roomNumber}), ${e.durationMinutes} min`,
-  );
-
-  const rows = sorted
-    .map(
-      (e) => `<tr>
-        <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;">${escapeHtml(e.timeLabel)}</td>
-        <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;">${escapeHtml(e.patientName)} <span style="color:#6b7280;">(Room ${escapeHtml(e.roomNumber)})</span></td>
-        <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;">${escapeHtml(e.therapyType)}</td>
-        <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;">${e.durationMinutes} min</td>
-      </tr>`,
-    )
-    .join("");
-
-  const html = `
-    <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:640px;">
-      <h2 style="color:#1e293b;">Hi ${escapeHtml(therapistName)}, here's your schedule for ${escapeHtml(dateLabel)}</h2>
-      <p style="color:#334155;">You're assigned to ${entries.length} session${entries.length === 1 ? "" : "s"}:</p>
-      <table style="border-collapse:collapse;width:100%;font-size:14px;">
-        <thead>
-          <tr style="text-align:left;color:#64748b;">
-            <th style="padding:6px 12px;">Time</th>
-            <th style="padding:6px 12px;">Patient</th>
-            <th style="padding:6px 12px;">Type</th>
-            <th style="padding:6px 12px;">Duration</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-      <p style="color:#64748b;font-size:13px;margin-top:16px;">This is an automated schedule notice -- check the board for any changes before your shift.</p>
-    </div>
-  `;
-
-  const text = `Hi ${therapistName}, here's your schedule for ${dateLabel}:\n\n${textLines.join("\n")}`;
+  const boardUrl = ENV.appUrl ? `${ENV.appUrl}/board` : "";
+  const text = `Hi ${therapistName}, your schedule for ${dateLabel} has ${sessionCount} session(s). Sign in to MinuteMinder to view patient details and the latest changes.${boardUrl ? `\n\n${boardUrl}` : ""}`;
+  const html = `<div style="font-family:system-ui,sans-serif"><h2>Your schedule is ready</h2><p>${escapeHtml(therapistName)}, you have ${sessionCount} session(s) for ${escapeHtml(dateLabel)}.</p><p>Sign in to MinuteMinder to view patient details and the latest changes.</p>${boardUrl ? `<p><a href="${escapeHtml(boardUrl).replace(/"/g, "&quot;")}">Open MinuteMinder</a></p>` : ""}</div>`;
 
   return { subject, html, text };
 }
@@ -101,33 +55,20 @@ export async function sendTomorrowAssignments(
   const tomorrow = new Date(referenceDate);
   tomorrow.setDate(tomorrow.getDate() + 1);
 
-  const [therapists, patients, sessions] = await Promise.all([
+  const [therapists, sessions] = await Promise.all([
     getTherapists(),
-    getPatients(),
     getTherapySessionsForDateRange(tomorrow, tomorrow),
   ]);
 
   const therapistMap = new Map(therapists.map((t) => [t.id, t]));
-  const patientMap = new Map(patients.map((p) => [p.id, p]));
   const dateLabel = tomorrow.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
 
-  const byTherapist = new Map<number, AssignmentEntry[]>();
+  const byTherapist = new Map<number, number>();
   for (const s of sessions) {
     if (s.therapyType === "Block") continue;
     if (s.status !== "scheduled") continue;
     if (s.therapistId == null) continue;
-    const patient = patientMap.get(s.patientId);
-    const startTime = new Date(s.startTime);
-    const entry: AssignmentEntry = {
-      timeLabel: formatSlotTime(startTime),
-      startTime,
-      patientName: patient?.name ?? `Patient ${s.patientId}`,
-      roomNumber: patient?.roomNumber ?? "N/A",
-      therapyType: s.therapyType,
-      durationMinutes: s.durationMinutes,
-    };
-    if (!byTherapist.has(s.therapistId)) byTherapist.set(s.therapistId, []);
-    byTherapist.get(s.therapistId)!.push(entry);
+    byTherapist.set(s.therapistId, (byTherapist.get(s.therapistId) ?? 0) + 1);
   }
 
   const result: SendTomorrowAssignmentsResult = { queued: [], skippedNoEmail: [], noSessions: [], failed: [] };
@@ -138,9 +79,9 @@ export async function sendTomorrowAssignments(
   for (const therapistId of targetIds) {
     const therapist = therapistMap.get(therapistId);
     const therapistName = therapist?.name ?? `Therapist ${therapistId}`;
-    const entries = byTherapist.get(therapistId);
+    const sessionCount = byTherapist.get(therapistId) ?? 0;
 
-    if (!entries || entries.length === 0) {
+    if (sessionCount === 0) {
       result.noSessions.push({ therapistId, therapistName });
       continue;
     }
@@ -152,9 +93,9 @@ export async function sendTomorrowAssignments(
       result.failed.push({ therapistId, therapistName });
       continue;
     }
-    const { subject, html, text } = buildEmailContent(therapistName, dateLabel, entries);
+    const { subject, html, text } = buildEmailContent(therapistName, dateLabel, sessionCount);
     void sendEmail({ to: [therapist.email], subject, html, text });
-    result.queued.push({ therapistId, therapistName, sessionCount: entries.length });
+    result.queued.push({ therapistId, therapistName, sessionCount });
   }
 
   return result;

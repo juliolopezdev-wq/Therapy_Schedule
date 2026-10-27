@@ -1,8 +1,8 @@
-// Facility-level Section GG analytics: completeness (the CMS reporting-threshold risk),
-// admission-to-discharge trend (the publicly reported quality measure), and cross-therapist
-// scoring consistency (the audit/accuracy risk). Reference analytics only -- see shared/sectionGG.ts.
+import { formatDateKey } from "../shared/timeGrid";
+// Internal IRF reference-set review. These are not CMS submission rates, public quality measures, or validated staff rankings.
 import { getPatients, getAllFunctionalAssessments } from "./db";
 import { isActiveAdmission } from "../shared/patientLifecycle";
+import { assessmentProgress, assessmentWindow, SECTION_GG_ITEMS } from "../shared/sectionGG";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -19,6 +19,8 @@ export interface GGCompletenessItem {
   isDischarged: boolean;
   hasAdmissionGG: boolean;
   hasDischargeGG: boolean;
+  admissionStatus: string;
+  dischargeStatus: string;
   daysSinceAdmission: number | null;
   daysUntilDischarge: number | null;
   flag: "missing_admission" | "discharge_due_soon" | "missing_discharge" | null;
@@ -38,18 +40,28 @@ export async function getGGCompletenessReport(referenceDate: Date = new Date()):
   const hasAdmission = new Set<number>();
   const hasDischarge = new Set<number>();
   for (const a of allAssessments) {
+    const patient = allPatients.find(p => p.id === a.patientId);
+    if (!patient || !a.signedAt || !assessmentProgress(a.itemScores as Record<string, number>).complete || assessmentWindow(a, patient) !== "within") continue;
     if (a.assessmentType === "admission") hasAdmission.add(a.patientId);
     if (a.assessmentType === "discharge") hasDischarge.add(a.patientId);
   }
 
   const items: GGCompletenessItem[] = relevantPatients.map((p) => {
+    const reviewStatus = (type: string) => {
+      const record = allAssessments.filter(a => a.patientId === p.id && a.assessmentType === type).sort((a, b) => b.assessmentDate.localeCompare(a.assessmentDate))[0];
+      if (!record) return "Not started";
+      const progress = assessmentProgress(record.itemScores as Record<string, number>, record.signedAt);
+      if (!record.signedAt || !progress.complete) return `${progress.status} · ${progress.answered}/${SECTION_GG_ITEMS.length} items`;
+      const window = assessmentWindow(record, p);
+      return window === "within" ? "Signed and complete (reference set)" : window === "outside" ? "Signed · outside assessment window" : "Signed · assessment window unverified";
+    };
     const hasAdmissionGG = hasAdmission.has(p.id);
     const hasDischargeGG = hasDischarge.has(p.id);
     const daysSinceAdmission = p.admissionDate
-      ? Math.floor((referenceDate.getTime() - new Date(p.admissionDate).getTime()) / MS_PER_DAY)
+      ? Math.floor((Date.parse(formatDateKey(referenceDate)) - Date.parse(p.admissionDate)) / MS_PER_DAY)
       : null;
     const daysUntilDischarge = p.estimatedDischargeDate
-      ? Math.floor((new Date(p.estimatedDischargeDate).getTime() - referenceDate.getTime()) / MS_PER_DAY)
+      ? Math.floor((Date.parse(p.estimatedDischargeDate) - Date.parse(formatDateKey(referenceDate))) / MS_PER_DAY)
       : null;
 
     let flag: GGCompletenessItem["flag"] = null;
@@ -61,11 +73,11 @@ export async function getGGCompletenessReport(referenceDate: Date = new Date()):
     } else if (!p.isDischarged && daysUntilDischarge != null && daysUntilDischarge <= 2 && !hasDischargeGG) {
       flag = "discharge_due_soon";
       severity = daysUntilDischarge <= 0 ? "critical" : "warning";
-    } else if (!hasAdmissionGG && daysSinceAdmission != null && daysSinceAdmission >= 0) {
-      if (daysSinceAdmission > 8) {
+    } else if (!hasAdmissionGG) {
+      if (daysSinceAdmission != null && daysSinceAdmission > 8) {
         flag = "missing_admission";
         severity = "critical";
-      } else if (daysSinceAdmission > 3) {
+      } else {
         flag = "missing_admission";
         severity = "warning";
       }
@@ -80,6 +92,7 @@ export async function getGGCompletenessReport(referenceDate: Date = new Date()):
       isDischarged: p.isDischarged,
       hasAdmissionGG,
       hasDischargeGG,
+      admissionStatus: reviewStatus("admission"), dischargeStatus: reviewStatus("discharge"),
       daysSinceAdmission,
       daysUntilDischarge,
       flag,
@@ -93,11 +106,11 @@ export async function getGGCompletenessReport(referenceDate: Date = new Date()):
   const eligibleForAdmission = items.filter((i) => i.daysSinceAdmission != null && i.daysSinceAdmission >= 0);
   const admissionCompletionRate = eligibleForAdmission.length > 0
     ? Math.round((eligibleForAdmission.filter((i) => i.hasAdmissionGG).length / eligibleForAdmission.length) * 100)
-    : 100;
+    : 0;
   const eligibleForDischarge = items.filter((i) => i.isDischarged || (i.daysUntilDischarge != null && i.daysUntilDischarge <= 0));
   const dischargeCompletionRate = eligibleForDischarge.length > 0
     ? Math.round((eligibleForDischarge.filter((i) => i.hasDischargeGG).length / eligibleForDischarge.length) * 100)
-    : 100;
+    : 0;
 
   return { items, admissionCompletionRate, dischargeCompletionRate };
 }
@@ -115,6 +128,9 @@ export async function getGGTrendReport(): Promise<GGTrendPoint[]> {
   const assessments = await getAllFunctionalAssessments();
   const byPatient = new Map<number, { admission?: typeof assessments[number]; discharge?: typeof assessments[number] }>();
   for (const a of assessments) {
+    if (!a.signedAt || !assessmentProgress(a.itemScores as Record<string, number>).complete) continue;
+    // Raw totals are comparable only when every item has an actual 1–6 performance score.
+    if (SECTION_GG_ITEMS.some(item => (a.itemScores as Record<string, number>)[item.code] < 1 || (a.itemScores as Record<string, number>)[item.code] > 6)) continue;
     const entry = byPatient.get(a.patientId) ?? {};
     if (a.assessmentType === "admission" && (!entry.admission || a.assessmentDate > entry.admission.assessmentDate)) entry.admission = a;
     if (a.assessmentType === "discharge" && (!entry.discharge || a.assessmentDate > entry.discharge.assessmentDate)) entry.discharge = a;
@@ -156,7 +172,7 @@ export interface GGConsistencyFlag {
   sampleSize: number;
 }
 
-const MIN_SAMPLE_SIZE = 3;
+const MIN_SAMPLE_SIZE = 10; // Operational review floor, not a validated statistical cutoff.
 const DEVIATION_THRESHOLD = 1.0;
 
 /** Flags a therapist as scoring an item meaningfully differently from the facility average --
@@ -167,10 +183,10 @@ export async function getGGScoringConsistencyReport(): Promise<GGConsistencyFlag
   const therapistSums = new Map<string, { therapistId: number; therapistName: string; itemCode: string; sum: number; count: number }>();
 
   for (const a of assessments) {
-    if (a.completedByTherapistId == null) continue;
+    if (a.completedByTherapistId == null || !a.signedAt) continue;
     const scores = a.itemScores as Record<string, number>;
     for (const [itemCode, score] of Object.entries(scores)) {
-      if (!(score > 0)) continue; // skip not-attempted/unscored
+      if (!(score >= 1 && score <= 6)) continue;
       const fEntry = facilitySums.get(itemCode) ?? { sum: 0, count: 0 };
       fEntry.sum += score;
       fEntry.count += 1;

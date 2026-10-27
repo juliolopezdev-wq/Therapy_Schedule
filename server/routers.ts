@@ -1,7 +1,7 @@
 import { permanentlyDeleteAccount } from "./accountDeletion";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router, protectedProcedure, staffProcedure, schedulerProcedure, adminProcedure } from "./_core/trpc";
-import { logout as logoutUser, requestMagicLink } from "./_core/auth";
+import { logout as logoutUser, requestMagicLink, requestSignInLink, getSignInStatus, recordUserActivity, getSessionStatus } from "./_core/auth";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
@@ -90,10 +90,12 @@ import {
   updateTreatmentNote,
   signTreatmentNote,
   getPatientGoals,
+  getPatientGoalById,
   createPatientGoal,
   updatePatientGoal,
   archivePatientGoal,
   getFunctionalAssessmentsForPatient,
+  getFunctionalAssessmentById,
   createFunctionalAssessment,
   updateFunctionalAssessment,
   signFunctionalAssessment,
@@ -124,9 +126,14 @@ import { sendTomorrowAssignments } from "./assignmentEmail";
 import { getWeekendCoverage, autoAssignWeekendStaff } from "./weekendStaffing";
 import { getWeeklyMinutesSummary, getGapFillSuggestions, getOrCreateTodaysDigest, getPredictiveForecast, rebalanceTherapistAbsence, getComplianceSentinelReport, previewSickCallPriorityTriage } from "./scheduling";
 import { getGGCompletenessReport, getGGTrendReport, getGGScoringConsistencyReport } from "./sectionGGCompliance";
-import { askScheduler, analyzeData } from "./ollama";
+import { approveAiProposal, listAiProposals, dismissAiProposal, undoAiProposal } from "./aiReview";
+import { askScheduler, analyzeData, executeTool } from "./ollama";
 import { canManageSchedule, isChartOnlyUpdate } from "../shared/accessPolicy";
+import { SECTION_GG_ITEMS, SECTION_GG_VALUES, assessmentProgress, isDateKey } from "../shared/sectionGG";
 import { ALL_THERAPY_TYPES } from "../shared/therapyTypes";
+
+const ggScoresSchema = z.record(z.string(), z.number().int()).refine(scores => Object.entries(scores).every(([key, value]) => SECTION_GG_ITEMS.some(item => item.code === key) && SECTION_GG_VALUES.has(value)), "Use supported assessment items and scores");
+const assessmentDateSchema = z.string().refine(isDateKey, "Use a valid calendar date (YYYY-MM-DD)");
 
 const therapyTypeEnum = z.enum(ALL_THERAPY_TYPES);
 const flagTypeEnum = z.enum(["DC", "Name Alert", "Weekend", "In-Service", "Appointment", "Stroke Program", "Shower", "Medical Hold", "Dialysis", "Block Time", "Group Appropriate", "Male Therapist Only", "Female Therapist Only", "Home Eval", "Family Training", "LOA", "15/7"]);
@@ -154,12 +161,12 @@ export const appRouter = router({
       return { ...opts.ctx.user, accessScope: await resolveAccessScope(opts.ctx.user) };
     }),
     requestLink: publicProcedure
-      .input(z.object({ email: z.string().email() }))
-      .mutation(async ({ input, ctx }) => {
-        await requestMagicLink(input.email, ctx.req);
-        // Always identical regardless of whether the email is invited -- don't leak that.
-        return { message: "If that email is registered, a login link has been sent." } as const;
-      }),
+      // format is checked in requestSignInLink so bad addresses count toward the lock
+      .input(z.object({ email: z.string().max(1024) }))
+      .mutation(({ input, ctx }) => requestSignInLink(input.email, ctx.req)),
+    signInStatus: publicProcedure.query(({ ctx }) => getSignInStatus(ctx.req)),
+    activity: protectedProcedure.mutation(async ({ ctx }) => { await recordUserActivity(ctx.req); return { success: true }; }),
+    sessionStatus: publicProcedure.query(({ ctx }) => ctx.user ? getSessionStatus(ctx.req) : null),
     logout: publicProcedure.mutation(async ({ ctx }) => {
       await logoutUser(ctx.req, ctx.res);
       return { success: true } as const;
@@ -461,6 +468,7 @@ export const appRouter = router({
           isDischarged: z.boolean().optional(),
           admissionDate: z.string().optional(),
           estimatedDischargeDate: z.string().optional(),
+          actualDischargeDate: assessmentDateSchema.optional(),
           weeklyMinuteTarget: z.number().int().min(30).optional(),
           teamId: z.number().nullable().optional(),
         }),
@@ -490,6 +498,7 @@ export const appRouter = router({
           isRoomPlaceholder: z.boolean().optional(),
           admissionDate: z.string().optional(),
           estimatedDischargeDate: z.string().optional(),
+          actualDischargeDate: assessmentDateSchema.optional(),
           weeklyMinuteTarget: z.number().int().min(30).optional(),
           teamId: z.number().nullable().optional(),
           orderIndex: z.number().optional(),
@@ -1368,6 +1377,7 @@ export const appRouter = router({
     logView: protectedProcedure
       .input(z.object({ patientId: z.number() }))
       .mutation(async ({ input, ctx }) => {
+        await assertPatientInScope(await resolveAccessScope(ctx.user), input.patientId);
         await logPatientChartAccess(input.patientId, ctx.user.id);
         return { success: true } as const;
       }),
@@ -1375,9 +1385,7 @@ export const appRouter = router({
       .input(z.object({ patientId: z.number() }))
       .query(({ input }) => getPatientChartAccessLog(input.patientId)),
 
-    /** Facility-level Section GG oversight -- completeness (reporting-threshold risk), the
-     *  admission-to-discharge trend (the public quality measure), and cross-therapist scoring
-     *  consistency (calibration/audit risk). Scheduler-level (admin/team lead), not per-patient. */
+    /** Internal reference-set review only, not official CMS completeness or quality measures. */
     ggCompleteness: schedulerProcedure
       .input(z.object({ referenceDate: z.date().optional() }).optional())
       .query(({ input }) => getGGCompletenessReport(input?.referenceDate ?? new Date())),
@@ -1450,6 +1458,7 @@ export const appRouter = router({
             throw new TRPCError({ code: "BAD_REQUEST", message: "This note is signed and locked. Add an addendum instead." });
           }
           await updateTreatmentNote(id, data);
+          await logAudit({ actorUserId: ctx.user.id, actorEmail: ctx.user.email, action: "treatment_note.update", targetType: "patient", targetId: String(note.patientId), metadata: { noteId: id, fields: Object.keys(data) } });
           return { success: true } as const;
         }),
       sign: staffProcedure
@@ -1515,14 +1524,20 @@ export const appRouter = router({
         .mutation(async ({ input, ctx }) => {
           const { id, patientId, ...data } = input;
           await assertPatientInScope(await resolveAccessScope(ctx.user), patientId);
+          const goal = await getPatientGoalById(id);
+          if (!goal || goal.patientId !== patientId) throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found for this patient" });
           await updatePatientGoal(id, data);
+          await logAudit({ actorUserId: ctx.user.id, actorEmail: ctx.user.email, action: "patient_goal.update", targetType: "patient", targetId: String(goal.patientId), metadata: { goalId: id, fields: Object.keys(data) } });
           return { success: true } as const;
         }),
       archive: staffProcedure
         .input(z.object({ id: z.number(), patientId: z.number() }))
         .mutation(async ({ input, ctx }) => {
           await assertPatientInScope(await resolveAccessScope(ctx.user), input.patientId);
+          const goal = await getPatientGoalById(input.id);
+          if (!goal || goal.patientId !== input.patientId) throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found for this patient" });
           await archivePatientGoal(input.id);
+          await logAudit({ actorUserId: ctx.user.id, actorEmail: ctx.user.email, action: "patient_goal.archive", targetType: "patient", targetId: String(goal.patientId), metadata: { goalId: input.id } });
           return { success: true } as const;
         }),
     }),
@@ -1538,8 +1553,8 @@ export const appRouter = router({
         .input(z.object({
           patientId: z.number(),
           assessmentType: z.enum(["admission", "interim", "discharge"]),
-          assessmentDate: z.string(),
-          itemScores: z.record(z.string(), z.number().int().min(0).max(6)),
+          assessmentDate: assessmentDateSchema,
+          itemScores: ggScoresSchema,
         }))
         .mutation(async ({ input, ctx }) => {
           const scope = await resolveAccessScope(ctx.user);
@@ -1562,20 +1577,33 @@ export const appRouter = router({
         .input(z.object({
           id: z.number(),
           patientId: z.number(),
-          itemScores: z.record(z.string(), z.number().int().min(0).max(6)).optional(),
-          assessmentDate: z.string().optional(),
+          itemScores: ggScoresSchema.optional(),
+          assessmentDate: assessmentDateSchema.optional(),
         }))
         .mutation(async ({ input, ctx }) => {
           const { id, patientId, ...data } = input;
-          await assertPatientInScope(await resolveAccessScope(ctx.user), patientId);
-          await updateFunctionalAssessment(id, data);
+          const assessment = await getFunctionalAssessmentById(id);
+          if (!assessment || assessment.patientId !== patientId) throw new TRPCError({ code: "NOT_FOUND", message: "Assessment not found for this patient" });
+          const scope = await resolveAccessScope(ctx.user);
+          await assertPatientInScope(scope, assessment.patientId);
+          if (scope.role !== "admin" && assessment.completedByTherapistId !== scope.therapistId) throw new TRPCError({ code: "FORBIDDEN", message: "You can only edit your own assessments." });
+          if (assessment.signedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "Signed assessments are locked. Create a new assessment for corrections." });
+          await updateFunctionalAssessment(id, data, assessment.patientId);
+          await logAudit({ actorUserId: ctx.user.id, actorEmail: ctx.user.email, action: "functional_assessment.update", targetType: "patient", targetId: String(assessment.patientId), metadata: { assessmentId: id, before: assessment.itemScores, after: data.itemScores ?? assessment.itemScores } });
           return { success: true } as const;
         }),
       sign: staffProcedure
         .input(z.object({ id: z.number(), patientId: z.number() }))
         .mutation(async ({ input, ctx }) => {
-          await assertPatientInScope(await resolveAccessScope(ctx.user), input.patientId);
-          await signFunctionalAssessment(input.id, ctx.user.id);
+          const assessment = await getFunctionalAssessmentById(input.id);
+          if (!assessment || assessment.patientId !== input.patientId) throw new TRPCError({ code: "NOT_FOUND", message: "Assessment not found for this patient" });
+          const scope = await resolveAccessScope(ctx.user);
+          await assertPatientInScope(scope, assessment.patientId);
+          if (scope.role !== "admin" && assessment.completedByTherapistId !== scope.therapistId) throw new TRPCError({ code: "FORBIDDEN", message: "You can only sign your own assessments." });
+          if (assessment.signedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "This assessment is already signed." });
+          if (!assessmentProgress(assessment.itemScores as Record<string, number>).complete) throw new TRPCError({ code: "BAD_REQUEST", message: "Complete every reference item or specify why it was not attempted before signing." });
+          await signFunctionalAssessment(input.id, ctx.user.id, assessment.patientId, assessment);
+          await logAudit({ actorUserId: ctx.user.id, actorEmail: ctx.user.email, action: "functional_assessment.sign", targetType: "patient", targetId: String(assessment.patientId), metadata: { assessmentId: assessment.id } });
           return { success: true } as const;
         }),
     }),
@@ -1688,6 +1716,10 @@ export const appRouter = router({
   /* AI scheduling assistant (free, self-hosted via Ollama)               */
   /* ------------------------------------------------------------------ */
   ai: router({
+    proposals: adminProcedure.query(({ ctx }) => listAiProposals(ctx.user.id)),
+    approve: adminProcedure.input(z.object({ id: z.string().uuid() })).mutation(({ input, ctx }) => approveAiProposal(input.id, ctx.user, executeTool)),
+    dismiss: adminProcedure.input(z.object({ id: z.string().uuid() })).mutation(({ input, ctx }) => dismissAiProposal(input.id, ctx.user.id)),
+    undo: adminProcedure.input(z.object({ id: z.string().uuid() })).mutation(({ input, ctx }) => undoAiProposal(input.id, ctx.user)),
     ask: adminProcedure
       .input(
         z.object({
@@ -1699,8 +1731,8 @@ export const appRouter = router({
           })).max(12).optional(),
         }),
       )
-      .mutation(async ({ input }) =>
-        askScheduler(input.question, input.referenceDate ?? new Date(), input.history ?? []),
+      .mutation(async ({ input, ctx }) =>
+        askScheduler(input.question, input.referenceDate ?? new Date(), input.history ?? [], ctx.user),
       ),
     analyzeData: adminProcedure
       .input(

@@ -6,17 +6,20 @@ import { isEmailConfigured, sendEmail } from "../email";
 import { getSessionCookieOptions } from "./cookies";
 import { ENV } from "./env";
 import type { User } from "../../drizzle/schema";
-import { COOKIE_NAME } from "@shared/const";
+import { COOKIE_NAME, SIGN_IN_LOCK_MS, SIGN_IN_NETWORK_REQUEST_LIMIT, SESSION_IDLE_MS, SESSION_ABSOLUTE_MS } from "@shared/const";
+import { z } from "zod";
 
 function getSessionTokenFromRequest(req: Request): string | undefined {
   return parseCookieHeader(req.headers.cookie || "")[COOKIE_NAME];
 }
 
 const MAGIC_LINK_TTL_MS = 15 * 60 * 1000; // 15 minutes
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-const MAX_LINKS_PER_EMAIL_WINDOW = 3;
-const MAX_LINKS_PER_IP_WINDOW = 10;
-const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const SESSION_TTL_MS = SESSION_ABSOLUTE_MS;
+// keyed by email+IP so someone can't lock a coworker out by spamming their address
+const MAX_LINKS_PER_EMAIL_IP_WINDOW = 3;
+const MAX_LINKS_PER_EMAIL_WINDOW = 10;
+const MAX_LINKS_PER_IP_WINDOW = SIGN_IN_NETWORK_REQUEST_LIMIT;
+const RATE_LIMIT_WINDOW_MS = SIGN_IN_LOCK_MS;
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -26,14 +29,54 @@ function generateToken(): string {
   return randomBytes(32).toString("base64url");
 }
 
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 function openIdForEmail(email: string): string {
-  return `email:${email.toLowerCase()}`;
+  return `email:${normalizeEmail(email)}`;
 }
 
 function getClientIp(req: Request): string {
   // Express resolves this using the app's explicit trust-proxy setting. Reading the forwarding
   // header directly lets a client spoof the key used by the magic-link rate limiter.
   return req.ip || req.socket.remoteAddress || "unknown";
+}
+
+function signInClientKey(req: Request): string {
+  const cookies = parseCookieHeader(req.headers?.cookie || "");
+  let client = cookies.sign_in_client;
+  if (!client || !/^[A-Za-z0-9_-]{43}$/.test(client)) {
+    client = generateToken();
+    req.headers ??= {};
+    req.headers.cookie = `${req.headers.cookie || ""}; sign_in_client=${client}`;
+    req.res?.cookie("sign_in_client", client, { ...getSessionCookieOptions(req), maxAge: 30 * 24 * 60 * 60_000 });
+  }
+  return hashToken(`client:${client}`);
+}
+
+export async function getSignInStatus(req: Request) {
+  const [clientLock, networkLock] = await Promise.all([
+    db.getSignInLock(signInClientKey(req)), db.getSignInLock(hashToken(`network:${getClientIp(req)}`)),
+  ]);
+  const lockedUntil = Math.max(clientLock, networkLock);
+  const serverNow = Date.now();
+  return { lockedUntil: lockedUntil > serverNow ? lockedUntil : 0, serverNow };
+}
+
+export async function requestSignInLink(email: string, req: Request) {
+  const message = "If that email is registered, a login link has been sent.";
+  const initial = await getSignInStatus(req);
+  if (initial.lockedUntil) return { ...initial, message, invalidFormat: false };
+  const networkLock = await db.recordIncorrectSignIn(hashToken(`network:${getClientIp(req)}`), Date.now(), SIGN_IN_NETWORK_REQUEST_LIMIT);
+  if (networkLock) return { lockedUntil: networkLock, serverNow: Date.now(), message, invalidFormat: false };
+  const normalized = normalizeEmail(email);
+  const invalidFormat = !z.string().email().safeParse(normalized).success;
+  const delivery = invalidFormat ? "not_allowed" : await requestMagicLink(normalized, req);
+  const status = delivery === "not_allowed"
+    ? { lockedUntil: await db.recordIncorrectSignIn(signInClientKey(req)), serverNow: Date.now() }
+    : await getSignInStatus(req);
+  return { ...status, message, invalidFormat };
 }
 
 /**
@@ -48,15 +91,20 @@ export async function requestMagicLink(
   req: Request,
   options: { awaitDelivery?: boolean; invitation?: boolean } = {},
 ): Promise<MagicLinkDelivery> {
-  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedEmail = normalizeEmail(email);
   const ip = getClientIp(req);
 
   const since = new Date(Date.now() - RATE_LIMIT_WINDOW_MS);
-  const [emailCount, ipCount] = await Promise.all([
+  const [emailIpCount, emailCount, ipCount] = await Promise.all([
+    db.countRecentMagicLinks({ email: normalizedEmail, ipAddress: ip, since }),
     db.countRecentMagicLinks({ email: normalizedEmail, since }),
     db.countRecentMagicLinks({ ipAddress: ip, since }),
   ]);
-  if (emailCount >= MAX_LINKS_PER_EMAIL_WINDOW || ipCount >= MAX_LINKS_PER_IP_WINDOW) {
+  if (
+    emailIpCount >= MAX_LINKS_PER_EMAIL_IP_WINDOW ||
+    emailCount >= MAX_LINKS_PER_EMAIL_WINDOW ||
+    ipCount >= MAX_LINKS_PER_IP_WINDOW
+  ) {
     console.warn(`[Auth] Rate limit hit for magic-link request (email=${normalizedEmail}, ip=${ip})`);
     return "rate_limited";
   }
@@ -176,13 +224,31 @@ export async function authenticateRequest(req: Request): Promise<User | null> {
   if (!session) return null;
   if (session.revokedAt) return null;
   if (session.expiresAt.getTime() < Date.now()) return null;
+  if (session.createdAt && Date.now() - session.createdAt.getTime() >= SESSION_TTL_MS) return null;
+  if (session.lastSeenAt && Date.now() - session.lastSeenAt.getTime() >= SESSION_IDLE_MS) return null;
 
   const user = await db.getUserById(session.userId);
   if (!user || user.deactivatedAt) return null;
 
-  db.touchSession(session.id).catch(() => {});
-
   return user;
+}
+
+/** Only explicit user activity refreshes inactivity; background board polling must not. */
+export async function recordUserActivity(req: Request): Promise<void> {
+  const token = getSessionTokenFromRequest(req);
+  if (!token) return;
+  const session = await db.getSessionByTokenHash(hashToken(token));
+  if (session && !session.revokedAt) await db.touchSession(session.id);
+}
+
+export async function getSessionStatus(req: Request) {
+  const token = getSessionTokenFromRequest(req);
+  if (!token) return null;
+  const session = await db.getSessionByTokenHash(hashToken(token));
+  if (!session || session.revokedAt) return null;
+  const overall = Math.min(session.expiresAt.getTime(), session.createdAt.getTime() + SESSION_TTL_MS);
+  const idle = session.lastSeenAt.getTime() + SESSION_IDLE_MS;
+  return { serverNow: Date.now(), expiresAt: Math.min(overall, idle), canExtend: idle < overall };
 }
 
 export async function logout(req: Request, res: Response): Promise<void> {
@@ -198,17 +264,17 @@ export async function logout(req: Request, res: Response): Promise<void> {
 export function registerAuthRoutes(app: Express) {
   app.post("/api/auth/request-link", async (req: Request, res: Response) => {
     const email = typeof req.body?.email === "string" ? req.body.email : "";
-    if (!email || !email.includes("@")) {
-      res.status(400).json({ error: "Valid email is required" });
-      return;
-    }
+    res.setHeader("Cache-Control", "no-store");
     try {
-      await requestMagicLink(email, req);
+      const result = await requestSignInLink(email, req);
+      if (result.lockedUntil) {
+        res.setHeader("Retry-After", String(Math.ceil((result.lockedUntil - result.serverNow) / 1000)));
+      }
+      res.status(result.lockedUntil ? 429 : result.invalidFormat ? 400 : 200).json(result);
     } catch (error) {
       console.error("[Auth] Failed to process magic-link request:", error);
+      res.status(503).json({ error: "Sign-in is temporarily unavailable. Please try again." });
     }
-    // Always the same response -- do not leak whether the email is invited.
-    res.json({ message: "If that email is registered, a login link has been sent." });
   });
 
   app.get("/api/auth/verify", async (req: Request, res: Response) => {

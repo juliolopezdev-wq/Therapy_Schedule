@@ -10,6 +10,7 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { startDigestScheduler } from "./digestScheduler";
 import { applyHttpSecurity } from "./security";
+import { upgradeConfiguredSafetySchema } from "../schemaUpgrade";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -31,6 +32,9 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
+  // Dev/start must support an existing database too; only `npm run build` ran db:push before.
+  const upgraded = await upgradeConfiguredSafetySchema();
+  if (upgraded.length) console.log(`[Database] Added required schema objects: ${upgraded.join(", ")}`);
   const app = express();
   const server = createServer(app);
   applyHttpSecurity(app);
@@ -77,4 +81,4 @@ async function startServer() {
   startDigestScheduler();
 }
 
-startServer().catch(console.error);
+startServer().catch(error => { console.error("Server startup failed:", error); process.exitCode = 1; });

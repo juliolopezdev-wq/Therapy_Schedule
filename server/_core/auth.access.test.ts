@@ -26,7 +26,7 @@ vi.mock("../email", () => ({
   sendEmail: mocks.sendEmail,
 }));
 
-import { registerAuthRoutes, requestMagicLink, verifyMagicLink } from "./auth";
+import { registerAuthRoutes, requestMagicLink, verifyMagicLink, authenticateRequest, recordUserActivity, getSessionStatus } from "./auth";
 import { COOKIE_NAME } from "@shared/const";
 
 const existingTeamLead = {
@@ -174,5 +174,29 @@ describe("email-link confirmation", () => {
     await routes.get("POST /api/auth/verify")!(req, res as unknown as Response);
     expect(res.redirect).toHaveBeenCalledWith(303, "/board");
     expect(mocks.createSession).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("shared-device session limits", () => {
+  beforeEach(() => { vi.resetAllMocks(); mocks.getUserById.mockResolvedValue(existingTeamLead); mocks.touchSession.mockResolvedValue(undefined); });
+  const req = () => ({ headers: { cookie: `${COOKIE_NAME}=valid-session` } }) as unknown as Request;
+  const active = () => ({ id: 22, userId: 7, createdAt: new Date(Date.now() - 30 * 60_000), lastSeenAt: new Date(), expiresAt: new Date(Date.now() + 30 * 86400_000), revokedAt: null });
+  it("does not extend an idle session for background authentication", async () => {
+    mocks.getSessionByTokenHash.mockResolvedValue(active());
+    expect(await authenticateRequest(req())).toEqual(existingTeamLead);
+    expect(mocks.touchSession).not.toHaveBeenCalled();
+    await recordUserActivity(req());
+    expect(mocks.touchSession).toHaveBeenCalledWith(22);
+  });
+  it("rejects one-hour-idle sessions and previously issued sessions older than 24 hours", async () => {
+    mocks.getSessionByTokenHash.mockResolvedValue({ ...active(), lastSeenAt: new Date(Date.now() - 3600_000) });
+    expect(await authenticateRequest(req())).toBeNull();
+    mocks.getSessionByTokenHash.mockResolvedValue({ ...active(), createdAt: new Date(Date.now() - 24 * 3600_000) });
+    expect(await authenticateRequest(req())).toBeNull();
+  });
+  it("reports the earlier deadline for the save-work warning", async () => {
+    const session = active(); mocks.getSessionByTokenHash.mockResolvedValue(session);
+    expect(await getSessionStatus(req())).toMatchObject({ expiresAt: session.lastSeenAt.getTime() + 3600_000, canExtend: true });
   });
 });

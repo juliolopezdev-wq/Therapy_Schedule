@@ -49,6 +49,24 @@ export const magicLinks = sqliteTable("magicLinks", {
 export type MagicLink = typeof magicLinks.$inferSelect;
 export type InsertMagicLink = typeof magicLinks.$inferInsert;
 
+export const aiChangeProposals = sqliteTable("aiChangeProposals", {
+  id: text("id").primaryKey(),
+  actorUserId: integer("actorUserId").notNull(),
+  state: text("state").notNull().default("pending"),
+  payload: text("payload", { mode: "json" }).notNull(),
+  result: text("result", { mode: "json" }),
+  createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
+  expiresAt: integer("expiresAt", { mode: "timestamp" }).notNull(),
+});
+
+// timestamps are ms
+export const signInAttempts = sqliteTable("signInAttempts", {
+  ipHash: text("ipHash").primaryKey(),
+  failures: integer("failures").notNull(),
+  resetAt: integer("resetAt").notNull(),
+  lockedUntil: integer("lockedUntil").notNull().default(0),
+});
+
 // DB-backed sessions (rather than a stateless JWT) so a revoked/expired session can be killed
 // immediately -- an admin force-logging-out a departing staff member needs this to take effect
 // on their very next request, not whenever a token would've naturally expired.
@@ -208,6 +226,7 @@ export const patients = sqliteTable("patients", {
   archiveReason: text("archiveReason"),
   admissionDate: text("admissionDate"),
   estimatedDischargeDate: text("estimatedDischargeDate"),
+  actualDischargeDate: text("actualDischargeDate"),
   weeklyMinuteTarget: integer("weeklyMinuteTarget").default(900).notNull(),
   ptTarget: integer("ptTarget"),
   otTarget: integer("otTarget"),

@@ -71,9 +71,9 @@ export function GGComplianceCenter({ open, onOpenChange }: GGComplianceCenterPro
   }, [trendQuery.data]);
 
   const FLAG_META: Record<string, { label: string; icon: typeof ShieldAlert }> = {
-    missing_admission: { label: "Admission GG missing", icon: ShieldAlert },
+    missing_admission: { label: "Admission assessment needs review", icon: ShieldAlert },
     discharge_due_soon: { label: "Discharge GG due", icon: AlertTriangle },
-    missing_discharge: { label: "Discharge GG missing", icon: ShieldAlert },
+    missing_discharge: { label: "Discharge assessment needs review", icon: ShieldAlert },
   };
 
   return (
@@ -87,15 +87,16 @@ export function GGComplianceCenter({ open, onOpenChange }: GGComplianceCenterPro
                   <ClipboardCheck className="h-5 w-5" />
                 </div>
                 <div>
-                  <DialogTitle className="text-xl font-bold tracking-tight text-white">Section GG compliance center</DialogTitle>
+                  <DialogTitle className="text-xl font-bold tracking-tight text-white">IRF assessment tracking</DialogTitle>
                   <DialogDescription className="mt-1 text-sm text-blue-50">
-                    Stay ahead of the CMS reporting threshold and track your real functional-improvement trend.
+                    Review completeness, signatures, and reference-score trends. This is not CMS submission or quality-measure reporting.
                   </DialogDescription>
                 </div>
               </div>
             </DialogHeader>
           </div>
 
+          <p className="border-b bg-amber-50 px-5 py-3 text-xs text-amber-900">A completed record needs all reference items, a signature, and a verified assessment window. Legacy discharges without an actual discharge date remain unverified. <a className="underline" target="_blank" rel="noreferrer" href="https://www.cms.gov/medicare/quality/inpatient-rehabilitation-facility/irf-pai-and-irf-qrp-manual">CMS IRF-PAI manual</a></p>
           <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="flex min-h-0 flex-1 flex-col">
             <div className="shrink-0 border-b border-slate-200 bg-white px-4 pt-3 sm:px-6">
               <TabsList className="grid w-full grid-cols-3 sm:w-auto sm:inline-grid">
@@ -133,7 +134,7 @@ export function GGComplianceCenter({ open, onOpenChange }: GGComplianceCenterPro
                       <div className="flex min-h-72 flex-col items-center justify-center p-8 text-center">
                         <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100"><CheckCircle2 className="h-7 w-7 text-emerald-700" /></div>
                         <h3 className="mt-4 text-lg font-bold text-slate-950">Nothing flagged</h3>
-                        <p className="mt-1 max-w-md text-sm text-slate-600">Every active admission and recent discharge has its Section GG on file.</p>
+                        <p className="mt-1 max-w-md text-sm text-slate-600">No records exceed the review thresholds shown here. Check missing items, signatures, and assessment windows before official reporting.</p>
                       </div>
                     ) : (
                       <div className="divide-y divide-slate-100">
@@ -150,14 +151,15 @@ export function GGComplianceCenter({ open, onOpenChange }: GGComplianceCenterPro
                                   <span className={cn("rounded-full px-2 py-0.5 text-xs font-bold", item.severity === "critical" ? "bg-rose-100 text-rose-800" : "bg-amber-100 text-amber-800")}>{item.severity === "critical" ? "Critical" : "Warning"}</span>
                                 </div>
                                 <p className="mt-1.5 text-sm font-semibold text-slate-900">{meta.label}</p>
+                                <p className="mt-1 text-xs text-slate-600">Admission: {item.admissionStatus} · Discharge: {item.dischargeStatus}</p>
                                 <p className="mt-0.5 text-xs text-slate-500">
-                                  {item.daysSinceAdmission != null && `Day ${item.daysSinceAdmission} of stay`}
+                                  {item.daysSinceAdmission != null && `Day ${item.daysSinceAdmission + 1} of stay`}
                                   {item.daysUntilDischarge != null && item.daysUntilDischarge >= 0 && ` · discharge in ${item.daysUntilDischarge}d`}
-                                  {item.daysUntilDischarge != null && item.daysUntilDischarge < 0 && ` · discharged ${Math.abs(item.daysUntilDischarge)}d ago`}
+                                  {item.daysUntilDischarge != null && item.daysUntilDischarge < 0 && ` · estimated discharge date passed ${Math.abs(item.daysUntilDischarge)}d ago`}
                                 </p>
                               </div>
                               <Button variant="outline" className="h-11 border-blue-200 text-blue-800 hover:bg-blue-50" onClick={() => setChartPatientId({ id: item.patientId, name: item.patientName, roomNumber: item.roomNumber })}>
-                                Score now <ArrowUpRight className="ml-2 h-4 w-4" />
+                                Review chart <ArrowUpRight className="ml-2 h-4 w-4" />
                               </Button>
                             </div>
                           );
@@ -182,9 +184,9 @@ export function GGComplianceCenter({ open, onOpenChange }: GGComplianceCenterPro
                 <>
                   {overallChange != null && (
                     <div className={cn("rounded-xl border p-3", overallChange >= 0 ? "border-emerald-200 bg-emerald-50" : "border-rose-200 bg-rose-50")}>
-                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Average total-score change, admission → discharge</p>
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Internal reference-score change, admission → discharge</p>
                       <p className={cn("mt-1 text-3xl font-extrabold tabular-nums", overallChange >= 0 ? "text-emerald-700" : "text-rose-700")}>{overallChange >= 0 ? "+" : ""}{overallChange}</p>
-                      <p className="text-xs text-slate-500">This is what CMS publicly reports as your functional-improvement measure.</p>
+                      <p className="text-xs text-slate-500">Internal unadjusted reference totals only. Excludes unsigned, incomplete, or non-performance-coded pairs; not the CMS discharge function score.</p>
                     </div>
                   )}
                   <div className="min-h-0 flex-1 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -215,7 +217,7 @@ export function GGComplianceCenter({ open, onOpenChange }: GGComplianceCenterPro
                 <div className="flex flex-1 flex-col items-center justify-center text-center">
                   <CheckCircle2 className="h-10 w-10 text-emerald-300" />
                   <h3 className="mt-3 font-bold text-slate-900">No scoring outliers</h3>
-                  <p className="mt-1 max-w-md text-sm text-slate-600">Every therapist's item-level averages are in line with the facility, or there isn't enough scored data yet.</p>
+                  <p className="mt-1 max-w-md text-sm text-slate-600">No review signals at the current threshold, or insufficient signed data. This does not establish scoring accuracy.</p>
                 </div>
               ) : (
                 <ScrollArea className="min-h-0 flex-1 rounded-xl border border-slate-200 bg-white shadow-sm">

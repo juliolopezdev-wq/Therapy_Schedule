@@ -1,5 +1,11 @@
 # Therapy_Schedule
 
+IRF scheduling and internal reference assessment tracking. See
+[clinical readiness and rollout](docs/clinical-readiness.md) for rule boundaries,
+additive migrations, AI endpoint approval, authentication limits, recovery verification,
+and the staff usability pilot. The app does not submit IRF-PAI records or calculate
+official CMS quality measures.
+
 Stored messages use AES-256-GCM encryption for board titles, board bodies, and direct
 message bodies. The server decrypts them for authorized readers; this is not end-to-end
 encryption. IDs, participants, timestamps, channels, and other metadata remain readable.

@@ -25,8 +25,7 @@ import {
   Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { AiAnswer } from "@/components/AiAnswer";
 
 interface AskSchedulerPanelProps {
   open: boolean;
@@ -97,7 +96,7 @@ function CopyAnswerButton({ text }: { text: string }) {
 }
 
 export function AskSchedulerPanel({ open, onOpenChange, referenceDate }: AskSchedulerPanelProps) {
-  const { canEdit } = usePermissions();
+  const { isAdmin: canEdit } = usePermissions();
   const [question, setQuestion] = useState("");
   const [history, setHistory] = useState<ChatEntry[]>([]);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
@@ -107,8 +106,26 @@ export function AskSchedulerPanel({ open, onOpenChange, referenceDate }: AskSche
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const requestIdRef = useRef(0);
+  const proposals = trpc.ai.proposals.useQuery(undefined, { enabled: open && canEdit, refetchInterval: open ? 15_000 : false });
+  const refreshBoard = () => {
+    void utils.sessions.invalidate();
+    void utils.weeklyMinutes.invalidate();
+    void utils.gapFill.invalidate();
+    void utils.digest.invalidate();
+    void utils.ai.proposals.invalidate();
+  };
+  const approve = trpc.ai.approve.useMutation({
+    onSuccess: (result) => {
+      setErrorMessage(result.errors.length ? result.errors.join(" · ") : null);
+      refreshBoard();
+    },
+    onError: error => { setErrorMessage(error.message); void proposals.refetch(); },
+  });
+  const dismiss = trpc.ai.dismiss.useMutation({ onSuccess: refreshBoard, onError: error => setErrorMessage(error.message) });
+  const undo = trpc.ai.undo.useMutation({ onSuccess: refreshBoard, onError: error => setErrorMessage(error.message) });
   const ask = trpc.ai.ask.useMutation({
     onSuccess: (result) => {
+      void utils.ai.proposals.invalidate();
       if ((result.actionsTaken ?? []).length === 0) return;
       void utils.sessions.list.invalidate();
       void utils.sessions.listForDateRange.invalidate();
@@ -122,7 +139,7 @@ export function AskSchedulerPanel({ open, onOpenChange, referenceDate }: AskSche
     () => referenceDate.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }),
     [referenceDate],
   );
-  const actionCount = history.reduce((total, entry) => total + entry.actionsTaken.length, 0);
+  const actionCount = history.reduce((total, entry) => total + entry.actionsTaken.length, 0) + (proposals.data ?? []).filter(plan => ["completed", "partial"].includes(plan.state)).reduce((total, plan) => total + plan.actions.length, 0);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -233,7 +250,7 @@ export function AskSchedulerPanel({ open, onOpenChange, referenceDate }: AskSche
                   <div>
                     <h2 className="text-sm font-bold text-blue-950">Start with a board review</h2>
                     <p className="mt-1 text-sm leading-relaxed text-blue-900/80">
-                      PAMi reads the selected board date and can explain risks or recommend exact slots. It only changes the schedule when you explicitly ask it to.
+                      PAMi reads the selected board date and recommends specific sessions. Every change requires your approval of a review plan. Goals, tolerance, and clinical judgment come before filling minute targets.
                     </p>
                   </div>
                 </div>
@@ -287,9 +304,7 @@ export function AskSchedulerPanel({ open, onOpenChange, referenceDate }: AskSche
                     </div>
                   )}
                   <div className="flex items-start gap-2">
-                    <div className="min-w-0 flex-1 [&>p]:mb-2 [&>p:last-child]:mb-0 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_strong]:font-bold [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.answer}</ReactMarkdown>
-                    </div>
+                    <AiAnswer text={entry.answer} className="flex-1" />
                     <CopyAnswerButton text={entry.answer} />
                   </div>
                 </div>
@@ -329,6 +344,19 @@ export function AskSchedulerPanel({ open, onOpenChange, referenceDate }: AskSche
             </div>
           )}
 
+          {proposals.isError && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm">Change plans could not be loaded. <button className="underline" onClick={() => { void proposals.refetch(); }}>Try again</button></div>}
+          {(proposals.data ?? []).filter(plan => plan.state !== "dismissed").map(plan => (
+            <section key={plan.id} aria-label="AI change plan" className="rounded-2xl border border-blue-200 bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-bold text-slate-900">{plan.state === "pending" ? "Review proposed changes" : plan.state === "running" ? "Applying changes — do not resubmit" : plan.state === "undone" ? "Changes undone" : "Change results"}</h3>
+              {plan.state === "pending" && <p className="mt-1 text-xs text-slate-500">Nothing has changed yet. Approval applies only to these sessions and expires at {new Date(plan.expiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}. A changed board requires a fresh plan.</p>}
+              <ul className="my-3 max-h-72 space-y-2 overflow-y-auto text-sm">{plan.changes.map((change, i) => <li key={i} className="rounded-lg bg-slate-50 p-3"><p className="font-semibold">{change.title}</p><p className="mt-1 text-xs text-slate-600">{change.detail}</p></li>)}</ul>
+              {!!plan.actions.length && <p className="text-xs text-emerald-800">{plan.state === "undone" ? "Previously applied (now undone)" : "Applied"}: {plan.actions.join(" · ")}</p>}
+              {!!plan.errors.length && <p role="alert" className="mt-2 text-xs text-rose-700">Stopped: {plan.errors.join(" · ")}. Review the applied changes before making another request.</p>}
+              {plan.state === "pending" && <div className="flex flex-wrap justify-end gap-2"><Button variant="outline" disabled={dismiss.isPending || approve.isPending} onClick={() => dismiss.mutate({ id: plan.id })}>Dismiss plan</Button><Button disabled={approve.isPending || dismiss.isPending} onClick={() => approve.mutate({ id: plan.id })}>{approve.isPending ? "Applying…" : `Approve ${plan.changes.length} change${plan.changes.length === 1 ? "" : "s"}`}</Button></div>}
+              {["completed", "partial"].includes(plan.state) && plan.actions.length > 0 && <Button variant="outline" className="mt-3" disabled={undo.isPending} onClick={() => undo.mutate({ id: plan.id })}>Undo these changes</Button>}
+            </section>
+          ))}
+
           {errorMessage && (
             <div role="alert" className="rounded-xl border border-rose-300 bg-rose-50 p-4 text-rose-950">
               <div className="flex items-start gap-3">
@@ -350,7 +378,7 @@ export function AskSchedulerPanel({ open, onOpenChange, referenceDate }: AskSche
         <div className="border-t border-slate-200 bg-white p-4 shadow-[0_-8px_24px_rgba(15,23,42,0.05)]">
           {!canEdit && (
             <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
-              Staff or admin access is required to ask PAMi questions.
+              Administrator access is required to ask PAMi questions.
             </div>
           )}
           <div className="rounded-xl border border-slate-300 bg-white p-2 shadow-sm transition-shadow focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100">

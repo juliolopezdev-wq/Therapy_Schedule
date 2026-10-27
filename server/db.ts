@@ -1,6 +1,9 @@
+import { planPatientMove } from "../shared/patientOrder";
+import { formatDateKey } from "../shared/timeGrid";
 import { storeMessage, readMessage, boardMessageContext, directMessageContext } from "./messageEncryption";
 import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { createClient } from "@libsql/client/http";
+import { SIGN_IN_LOCK_MS, SIGN_IN_MAX_FAILURES, SESSION_IDLE_MS, SESSION_ABSOLUTE_MS } from "@shared/const";
 import { drizzle } from "drizzle-orm/libsql";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -35,6 +38,7 @@ import {
   Invite,
   InsertInvite,
   magicLinks,
+  signInAttempts,
   InsertMagicLink,
   sessions,
   InsertSession,
@@ -323,6 +327,8 @@ export async function updatePatient(id: number, data: Partial<InsertPatient>) {
   normalized.updatedAt = new Date();
   const existing = await getPatientById(id);
   if (!existing) throw new Error("Admission not found");
+  if (normalized.actualDischargeDate && (normalized.actualDischargeDate < (normalized.admissionDate || existing.admissionDate || ""))) throw new Error("Actual discharge cannot be before admission.");
+  if (existing.isDischarged && normalized.isDischarged === false) normalized.actualDischargeDate = null;
 
   if (existing.isRoomPlaceholder && normalized.isRoomPlaceholder === false) {
     throw new Error("Create a new admission instead of converting an available-room marker");
@@ -355,6 +361,7 @@ export async function updatePatient(id: number, data: Partial<InsertPatient>) {
       .orderBy(desc(statusFlags.date), desc(statusFlags.id))
       .limit(1);
     if (latestDischargeFlag?.active) dischargeCutoff = new Date(latestDischargeFlag.date);
+    normalized.actualDischargeDate = normalized.actualDischargeDate ?? formatDateKey(dischargeCutoff);
   }
   let canceledSessionCount = 0;
   await db.transaction(async (tx) => {
@@ -420,57 +427,25 @@ export async function reorderPatient(
   if (!db) throw new Error("Database not available");
 
   return db.transaction(async (tx) => {
-    const activePatients = await tx
-      .select()
-      .from(patients)
-      .where(and(isNull(patients.archivedAt), eq(patients.isDischarged, false)))
-      .orderBy(patients.orderIndex, patients.roomNumber);
-
-    const moving = activePatients.find((patient) => patient.id === patientId);
-    if (!moving) throw new Error("Active admission not found");
-
-    const sameTeam = (teamId: number | null, candidateTeamId: number | null) =>
-      teamId === candidateTeamId;
-    const sourceTeamId = moving.teamId;
-    const destination = activePatients.filter(
-      (patient) => patient.id !== patientId && sameTeam(patient.teamId, targetTeamId),
-    );
-
-    let insertAt = destination.length;
-    if (targetPatientId != null) {
-      const targetIndex = destination.findIndex((patient) => patient.id === targetPatientId);
-      if (targetIndex === -1) throw new Error("Drop target is no longer available");
-      insertAt = targetIndex + (placeAfter ? 1 : 0);
+    const activePatients = await tx.select({ id: patients.id, teamId: patients.teamId, orderIndex: patients.orderIndex, roomNumber: patients.roomNumber })
+      .from(patients).where(and(isNull(patients.archivedAt), eq(patients.isDischarged, false)));
+    if (targetTeamId != null) {
+      const [team] = await tx.select({ id: teams.id }).from(teams).where(eq(teams.id, targetTeamId)).limit(1);
+      if (!team) throw new Error("Destination team is no longer available");
     }
-    destination.splice(insertAt, 0, { ...moving, teamId: targetTeamId });
-
-    const source = sameTeam(sourceTeamId, targetTeamId)
-      ? []
-      : activePatients.filter(
-          (patient) => patient.id !== patientId && sameTeam(patient.teamId, sourceTeamId),
-        );
+    const positions = planPatientMove(activePatients, { patientId, targetTeamId, targetPatientId, placeAfter });
     const now = new Date();
-
-    for (let index = 0; index < destination.length; index += 1) {
-      const patient = destination[index];
-      await tx
-        .update(patients)
-        .set({
-          teamId: patient.id === patientId ? targetTeamId : patient.teamId,
-          orderIndex: (index + 1) * 100,
-          updatedAt: now,
-        })
-        .where(eq(patients.id, patient.id));
+    if (positions.length === 1) {
+      await tx.update(patients).set({ teamId: targetTeamId, orderIndex: positions[0].orderIndex, updatedAt: now }).where(eq(patients.id, positions[0].id));
+    } else if (positions.length > 1) {
+      // Rare legacy ties/precision exhaustion: one SQL statement, never N sequential round trips.
+      const cases = positions.map(position => sql`WHEN ${position.id} THEN ${position.orderIndex}`);
+      await tx.update(patients).set({ teamId: targetTeamId, orderIndex: sql`CASE ${patients.id} ${sql.join(cases, sql` `)} ELSE ${patients.orderIndex} END`, updatedAt: now })
+        .where(inArray(patients.id, positions.map(position => position.id)));
     }
-    for (let index = 0; index < source.length; index += 1) {
-      const patient = source[index];
-      await tx
-        .update(patients)
-        .set({ orderIndex: (index + 1) * 100, updatedAt: now })
-        .where(eq(patients.id, patient.id));
-    }
+    const moving = positions.find(position => position.id === patientId) ?? activePatients.find(patient => patient.id === patientId)!;
+    return { success: true, teamId: targetTeamId, orderIndex: moving.orderIndex, positions };
 
-    return { success: true, teamId: targetTeamId, orderIndex: (insertAt + 1) * 100 };
   });
 }
 
@@ -2348,6 +2323,31 @@ export async function markInviteAccepted(email: string): Promise<void> {
   await db.update(invites).set({ acceptedAt: new Date() }).where(eq(invites.email, email.toLowerCase()));
 }
 
+export async function getSignInLock(ipHash: string): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.select({ lockedUntil: signInAttempts.lockedUntil })
+    .from(signInAttempts).where(eq(signInAttempts.ipHash, ipHash)).limit(1);
+  return row?.lockedUntil ?? 0;
+}
+
+export async function recordIncorrectSignIn(ipHash: string, now = Date.now(), maxFailures = SIGN_IN_MAX_FAILURES): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const resetAt = now + SIGN_IN_LOCK_MS;
+  // single upsert so concurrent failures don't get lost
+  const [row] = await db.insert(signInAttempts).values({ ipHash, failures: 1, resetAt, lockedUntil: 0 })
+    .onConflictDoUpdate({
+      target: signInAttempts.ipHash,
+      set: {
+        failures: sql`CASE WHEN ${signInAttempts.lockedUntil} > ${now} THEN ${signInAttempts.failures} WHEN ${signInAttempts.resetAt} <= ${now} THEN 1 ELSE ${signInAttempts.failures} + 1 END`,
+        resetAt: sql`CASE WHEN ${signInAttempts.lockedUntil} > ${now} THEN ${signInAttempts.resetAt} WHEN ${signInAttempts.resetAt} <= ${now} THEN ${resetAt} ELSE ${signInAttempts.resetAt} END`,
+        lockedUntil: sql`CASE WHEN ${signInAttempts.lockedUntil} > ${now} THEN ${signInAttempts.lockedUntil} WHEN ${signInAttempts.resetAt} <= ${now} THEN 0 WHEN ${signInAttempts.failures} + 1 >= ${maxFailures} THEN ${resetAt} ELSE 0 END`,
+      },
+    }).returning({ lockedUntil: signInAttempts.lockedUntil });
+  return row.lockedUntil;
+}
+
 export async function createMagicLink(data: InsertMagicLink): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -2384,8 +2384,8 @@ export async function countRecentMagicLinks(params: { email?: string; ipAddress?
   ];
   if (params.email) conditions.push(eq(magicLinks.email, params.email.toLowerCase()));
   if (params.ipAddress) conditions.push(eq(magicLinks.ipAddress, params.ipAddress));
-  const result = await db.select().from(magicLinks).where(and(...conditions));
-  return result.length;
+  const [row] = await db.select({ count: sql<number>`count(*)` }).from(magicLinks).where(and(...conditions));
+  return Number(row?.count ?? 0);
 }
 
 export async function createSession(data: InsertSession) {
@@ -2426,7 +2426,7 @@ export async function listActiveSessionsForUser(userId: number) {
   return db
     .select()
     .from(sessions)
-    .where(and(eq(sessions.userId, userId), gt(sessions.expiresAt, new Date())))
+    .where(and(eq(sessions.userId, userId), gt(sessions.expiresAt, new Date()), isNull(sessions.revokedAt), gt(sessions.createdAt, new Date(Date.now() - SESSION_ABSOLUTE_MS)), gt(sessions.lastSeenAt, new Date(Date.now() - SESSION_IDLE_MS))))
     .orderBy(desc(sessions.lastSeenAt));
 }
 
@@ -2449,7 +2449,7 @@ export async function listAllActiveSessions() {
     })
     .from(sessions)
     .innerJoin(users, eq(sessions.userId, users.id))
-    .where(and(gt(sessions.expiresAt, new Date()), isNull(sessions.revokedAt)))
+    .where(and(gt(sessions.expiresAt, new Date()), isNull(sessions.revokedAt), gt(sessions.createdAt, new Date(Date.now() - SESSION_ABSOLUTE_MS)), gt(sessions.lastSeenAt, new Date(Date.now() - SESSION_IDLE_MS))))
     .orderBy(desc(sessions.lastSeenAt));
 }
 
@@ -3163,6 +3163,13 @@ export async function updatePatientGoal(id: number, data: Partial<InsertPatientG
   await db.update(patientGoals).set({ ...data, updatedAt: new Date() }).where(eq(patientGoals.id, id));
 }
 
+export async function getPatientGoalById(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [row] = await db.select().from(patientGoals).where(eq(patientGoals.id, id)).limit(1);
+  return row;
+}
+
 export async function archivePatientGoal(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -3211,18 +3218,27 @@ export async function createFunctionalAssessment(data: InsertFunctionalAssessmen
   return { id: extractInsertId(result) };
 }
 
-export async function updateFunctionalAssessment(id: number, data: Partial<InsertFunctionalAssessment>) {
+export async function getFunctionalAssessmentById(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(functionalAssessments).set({ ...data, updatedAt: new Date() })
-    .where(and(eq(functionalAssessments.id, id), isNull(functionalAssessments.signedAt)));
+  const [row] = await db.select().from(functionalAssessments).where(eq(functionalAssessments.id, id)).limit(1);
+  return row;
 }
 
-export async function signFunctionalAssessment(id: number, signedByUserId: number) {
+export async function updateFunctionalAssessment(id: number, data: Partial<InsertFunctionalAssessment>, patientId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(functionalAssessments).set({ signedAt: new Date(), signedByUserId, updatedAt: new Date() })
-    .where(and(eq(functionalAssessments.id, id), isNull(functionalAssessments.signedAt)));
+  const rows = await db.update(functionalAssessments).set({ ...data, updatedAt: new Date() })
+    .where(and(eq(functionalAssessments.id, id), eq(functionalAssessments.patientId, patientId), isNull(functionalAssessments.signedAt))).returning({ id: functionalAssessments.id });
+  if (!rows.length) throw new Error("Assessment changed or was signed. Refresh before trying again.");
+}
+
+export async function signFunctionalAssessment(id: number, signedByUserId: number, patientId: number, expected: Pick<typeof functionalAssessments.$inferSelect, "updatedAt" | "itemScores" | "assessmentDate">) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const rows = await db.update(functionalAssessments).set({ signedAt: new Date(), signedByUserId, updatedAt: new Date() })
+    .where(and(eq(functionalAssessments.id, id), eq(functionalAssessments.patientId, patientId), eq(functionalAssessments.updatedAt, expected.updatedAt), eq(functionalAssessments.itemScores, expected.itemScores), eq(functionalAssessments.assessmentDate, expected.assessmentDate), isNull(functionalAssessments.signedAt))).returning({ id: functionalAssessments.id });
+  if (!rows.length) throw new Error("Assessment changed or was signed. Refresh before trying again.");
 }
 
 /* ---------------------------------------------------------------------------

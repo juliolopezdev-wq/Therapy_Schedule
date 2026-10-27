@@ -33,6 +33,14 @@ function GridCellImpl({ patientId, slotIndex, onAdd, children, isAlternate, isLu
         if (!children) onAdd?.(patientId, slotIndex);
       }}
     >
+      <CellContents patientId={patientId} slotIndex={slotIndex} onAdd={onAdd} children={children} />
+    </div>
+  );
+}
+
+// Droppable context changes should not rebuild every empty-slot button and icon.
+const CellContents = memo(function CellContents({ patientId, slotIndex, onAdd, children }: Pick<GridCellProps, "patientId" | "slotIndex" | "onAdd" | "children">) {
+  return <>
       {children}
       {!children && onAdd ? (
         <button
@@ -49,9 +57,8 @@ function GridCellImpl({ patientId, slotIndex, onAdd, children, isAlternate, isLu
           </span>
         </button>
       ) : null}
-    </div>
-  );
-}
+  </>;
+});
 
 // Rendered ~22 times per patient row -- memoize so an unrelated cell doesn't re-render just
 // because some other cell/row in the board changed.

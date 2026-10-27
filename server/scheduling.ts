@@ -39,7 +39,6 @@ import {
 } from "../shared/timeGrid";
 import { availableShiftMinutesForDay, getShiftForDay } from "../shared/workSchedule";
 import { isActiveAdmission } from "../shared/patientLifecycle";
-import { upcomingPdpmEvents } from "../shared/pdpm";
 import {
   ALL_EVALUATION_THERAPY_TYPES,
   isEvaluationTherapyType,
@@ -98,6 +97,33 @@ function addDaysLocal(date: Date, days: number) {
   return d;
 }
 
+// The most therapy a patient can realistically get in one day when catching up.
+const MAX_CATCH_UP_MINUTES_PER_DAY = 240;
+
+/**
+ * At risk means the patient is falling behind, not just that the rest of their week isn't booked
+ * yet (units often book a day at a time). Either:
+ * - behind pace: delivered plus still-booked-for-today is short of an even share of the target
+ *   through the end of today, or
+ * - can't catch up: what's still unbooked won't fit in the remaining days at a realistic daily max.
+ */
+export function isAtRisk(p: {
+  target: number;
+  completedMinutes: number;
+  pendingMinutes: number;
+  pendingTodayMinutes: number;
+  daysRemaining: number;
+}) {
+  const unbooked = p.target - p.completedMinutes - p.pendingMinutes;
+  if (unbooked <= 0) return false;
+  const dayOfWeek = 7 - p.daysRemaining + 1; // today's position in the patient's week, 1-7
+  const expectedByEndOfToday = (p.target / 7) * dayOfWeek;
+  const behindPace = p.completedMinutes + p.pendingTodayMinutes < expectedByEndOfToday;
+  const futureDays = Math.max(0, p.daysRemaining - 1);
+  const cantCatchUp = unbooked > futureDays * MAX_CATCH_UP_MINUTES_PER_DAY;
+  return behindPace || cantCatchUp;
+}
+
 export async function getWeeklyMinutesSummary(referenceDate: Date = new Date()): Promise<WeeklyMinutesSummary[]> {
   const allPatients = await getPatients();
   const active = allPatients.filter(isActiveAdmission);
@@ -147,8 +173,7 @@ export async function getWeeklyMinutesSummary(referenceDate: Date = new Date()):
     const target = baseTarget + extraMinutes;
 
     const daysRemaining = daysRemainingInWeek(weekStart, referenceDate);
-    const daysElapsed = Math.max(0, 7 - daysRemaining);
-    const proRatedTarget = (target / 7) * daysElapsed;
+    const projectedTotalMinutes = completedMinutes + pendingMinutes;
 
     // Credits pending (still-scheduled, not-yet-completed) minutes same as getGapFillSuggestions'
     // own "covered" calc does -- a patient already fully booked for the week has nothing left to
@@ -158,12 +183,16 @@ export async function getWeeklyMinutesSummary(referenceDate: Date = new Date()):
     // needed to deliver" everywhere this number is shown/emailed/spoken by PAMi, and could have
     // driven gap-fill to keep proposing sessions on top of an already-full schedule.
     const remainingMinutes = Math.max(0, target - completedMinutes - pendingMinutes);
-    const projectedTotalMinutes = completedMinutes + pendingMinutes;
-    // At risk if projected end-of-week total (assuming zero further attrition) still falls short of target,
-    // or if delivered-to-date is already behind the pro-rated target for elapsed days.
-    const behindProjection = projectedTotalMinutes < target;
-    const behindProRated = daysElapsed > 0 && completedMinutes < proRatedTarget;
-    const atRisk = remainingMinutes > 0 && (behindProjection || behindProRated);
+    const dayStart = new Date(referenceDate);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart.getTime() + 86_400_000);
+    const pendingTodayMinutes = patientSessions
+      .filter((s) => {
+        const t = new Date(s.startTime).getTime();
+        return s.status === "scheduled" && t >= dayStart.getTime() && t < dayEnd.getTime();
+      })
+      .reduce((sum, s) => sum + s.durationMinutes, 0);
+    const atRisk = isAtRisk({ target, completedMinutes, pendingMinutes, pendingTodayMinutes, daysRemaining });
 
     return {
       patientId: patient.id,
@@ -1748,26 +1777,7 @@ export async function getComplianceSentinelReport(referenceDate: Date = new Date
     }
   }
 
-  // PDPM variable per diem step-downs and the Part A 100-day benefit cap, surfaced 14 days out
-  // so billing/therapy can plan around a rate change -- not a certified MDS/billing calculation.
-  for (const patient of activePatients) {
-    if (!patient.admissionDate) continue;
-    const events = upcomingPdpmEvents(patient.admissionDate, referenceDate, 14);
-    for (const event of events) {
-      // Informational only -- not a compliance failure -- so always "warning", never "critical",
-      // and excluded from the compliance-score/critical-count math below.
-      riskItems.push({
-        patientId: patient.id,
-        patientName: patient.name,
-        roomNumber: patient.roomNumber,
-        riskType: "pdpm_timeline",
-        severity: "warning",
-        message: `${event.label} on ${event.date} (day ${event.day} of stay).`,
-        actionNeeded: "Confirm this is reflected in billing/MDS planning; no action needed on the schedule itself.",
-      });
-    }
-  }
-
+  // This deployment serves an IRF. SNF PDPM rate/benefit rules do not apply.
   const scoredRiskItems = riskItems.filter((risk) => risk.riskType !== "pdpm_timeline");
   const patientsWithRisks = new Set(scoredRiskItems.map((risk) => risk.patientId));
   const complianceScore = activePatients.length > 0

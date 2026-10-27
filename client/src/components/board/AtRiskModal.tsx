@@ -111,7 +111,7 @@ export function AtRiskModal({ open, onOpenChange, day, patients, completedMinute
         <DialogContent className="flex h-[90vh] w-[96vw] max-w-[96vw] flex-col gap-0 overflow-hidden rounded-2xl border-slate-200 bg-slate-50 p-0 shadow-2xl xl:max-w-6xl">
           <div className="shrink-0 bg-gradient-to-r from-blue-800 via-blue-700 to-sky-600 px-5 py-5 pr-20 text-white sm:px-6">
             <DialogHeader className="text-left">
-              <div className="flex items-start gap-3"><div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/15 ring-1 ring-white/25"><ShieldAlert className="h-5 w-5"/></div><div><DialogTitle className="text-xl font-bold tracking-tight text-white">Patients at risk</DialogTitle><DialogDescription className="mt-1 text-sm text-blue-50">Review patients projected below their weekly-minute target as of {format(day, "EEEE, MMMM d, yyyy")}.</DialogDescription></div></div>
+              <div className="flex items-start gap-3"><div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/15 ring-1 ring-white/25"><ShieldAlert className="h-5 w-5"/></div><div><DialogTitle className="text-xl font-bold tracking-tight text-white">Patients at risk</DialogTitle><DialogDescription className="mt-1 text-sm text-blue-50">Review patients who are behind pace or can no longer reach their weekly-minute target as of {format(day, "EEEE, MMMM d, yyyy")}.</DialogDescription></div></div>
             </DialogHeader>
           </div>
 

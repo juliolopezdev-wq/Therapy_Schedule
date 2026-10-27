@@ -23,7 +23,11 @@ interface UseBoardDndProps {
 }
 
 export const customCollisionDetection: CollisionDetection = (args) => {
-  const pointerCollisions = pointerWithin(args);
+  const patientDrag = Boolean(args.active.data.current?.patient);
+  const pointerCollisions = pointerWithin(patientDrag ? { ...args, droppableContainers: args.droppableContainers.filter(container => {
+    const id = String(container.id);
+    return id !== String(args.active.id) && (id.startsWith("patient-") || id.startsWith("team-"));
+  }) } : args);
   const isSession = args.active.data.current?.session;
 
   if (isSession) {

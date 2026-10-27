@@ -33,8 +33,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { AiAnswer } from "@/components/AiAnswer";
 
 interface DataAnalysisModalProps {
   open: boolean;
@@ -351,7 +350,7 @@ export function DataAnalysisModal({
               {chatHistory.map((message, index) => (
                 <div key={`${index}-${message.content.slice(0, 20)}`} className={cn("flex", message.role === "user" ? "justify-end" : "justify-start")}>
                   <div className={cn("max-w-[92%] rounded-xl px-3 py-2.5 text-sm leading-relaxed shadow-sm", message.role === "user" ? "rounded-br-sm bg-blue-700 text-white" : message.usedFallback ? "rounded-bl-sm border border-amber-200 bg-amber-50 text-amber-950" : "rounded-bl-sm border border-slate-200 bg-white text-slate-700")}>
-                    {message.role === "assistant" ? <div className="[&>p]:mb-2 [&>p:last-child]:mb-0 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div> : message.content}
+                    {message.role === "assistant" ? <AiAnswer text={message.content} /> : message.content}
                   </div>
                 </div>
               ))}

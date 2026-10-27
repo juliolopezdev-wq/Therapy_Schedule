@@ -1,8 +1,5 @@
-// Functional outcome scoring modeled on CMS Section GG (self-care + mobility), the measure
-// PDPM/MDS 3.0 uses for case-mix and quality reporting. This tool does NOT submit MDS data to
-// CMS and is not a certified assessment instrument -- item codes/labels below are a commonly
-// used reference set for internal tracking only. Verify against the current RAI User's Manual
-// before relying on these for actual MDS completion or PDPM classification.
+// Internal 17-item IRF Section GG reference set, not the full IRF-PAI instrument or a CMS submission schema.
+// Verify official coding, skip logic, exceptions, and reporting against the current IRF-PAI manual.
 export const SECTION_GG_SCALE = [
   { value: 6, label: "6 - Independent" },
   { value: 5, label: "5 - Setup or clean-up assistance" },
@@ -10,7 +7,11 @@ export const SECTION_GG_SCALE = [
   { value: 3, label: "3 - Partial/moderate assistance" },
   { value: 2, label: "2 - Substantial/maximal assistance" },
   { value: 1, label: "1 - Dependent" },
-  { value: 0, label: "Not attempted / not scored" },
+  { value: 7, label: "07 - Patient refused" },
+  { value: 9, label: "09 - Not applicable" },
+  { value: 10, label: "10 - Environmental limitations" },
+  { value: 88, label: "88 - Medical condition or safety concern" },
+  { value: 0, label: "Unscored / legacy unspecified reason" },
 ] as const;
 
 export interface SectionGGItem {
@@ -38,3 +39,30 @@ export const SECTION_GG_ITEMS: SectionGGItem[] = [
   { code: "GG0170M", label: "1 step (curb)", group: "mobility" },
   { code: "GG0170P", label: "Picking up object off floor", group: "mobility" },
 ];
+
+export const SECTION_GG_VALUES = new Set([0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 88]);
+export function isDateKey(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value)
+    && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+}
+
+export function assessmentProgress(scores: Record<string, number>, signedAt?: unknown) {
+  const answered = SECTION_GG_ITEMS.filter(item => SECTION_GG_VALUES.has(scores[item.code]) && scores[item.code] !== 0).length;
+  const complete = answered === SECTION_GG_ITEMS.length;
+  return { answered, complete, status: signedAt ? "Signed" : complete ? "Ready for review" : answered ? "Incomplete draft" : "Draft" };
+}
+
+/** Internal reference-set window checks, never a CMS submission/quality-measure calculation. */
+export function assessmentWindow(assessment: { assessmentDate: string; assessmentType: string }, patient: { admissionDate: string | null; actualDischargeDate?: string | null }) {
+  if (!isDateKey(assessment.assessmentDate) || !patient.admissionDate || !isDateKey(patient.admissionDate)) return "unverified" as const;
+  const day = Date.parse(assessment.assessmentDate);
+  const admission = Date.parse(patient.admissionDate);
+  if (day < admission) return "outside" as const;
+  if (assessment.assessmentType === "admission") return day < admission + 3 * 86_400_000 ? "within" as const : "outside" as const;
+  if (assessment.assessmentType === "discharge") {
+    if (!patient.actualDischargeDate || !isDateKey(patient.actualDischargeDate)) return "unverified" as const;
+    const discharge = Date.parse(patient.actualDischargeDate);
+    return day >= discharge - 2 * 86_400_000 && day <= discharge ? "within" as const : "outside" as const;
+  }
+  return "within" as const;
+}

@@ -1,3 +1,4 @@
+import { usePatientReorder } from "@/hooks/usePatientReorder";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
@@ -149,6 +150,7 @@ export interface ConflictPair {
 // fresh `[]` per render, so it doesn't defeat memoization on the (memoized) PatientRow that
 // receives it as a prop.
 const EMPTY_TILES: SessionTileData[] = [];
+const EMPTY_FLAGS: { id: number; flagType: FlagType; date: Date | string }[] = [];
 
 // Pure function of its arguments (no component state) -- hoisted out of the component so it has
 // stable identity across renders instead of being recreated (and passed to memoized children)
@@ -416,59 +418,7 @@ export default function TherapyBoard() {
     onSuccess: () => { invalidateBoard(); toast.success("Patient updated"); }, 
     onError: (err) => toast.error(err.message) 
   });
-  const reorderPatient = trpc.patients.reorder.useMutation({
-    onMutate: async (variables) => {
-      await utils.patients.list.cancel();
-      const previous = utils.patients.list.getData();
-
-      utils.patients.list.setData(undefined, (current) => {
-        if (!current) return current;
-        const moving = current.find((patient) => patient.id === variables.patientId);
-        if (!moving) return current;
-
-        const sameTeam = (left: number | null, right: number | null) => left === right;
-        const targetTeamId = variables.targetTeamId;
-        const sourceTeamId = moving.teamId;
-        const active = current.filter((patient) => !patient.isDischarged);
-        const destination = active.filter(
-          (patient) => patient.id !== moving.id && sameTeam(patient.teamId, targetTeamId),
-        );
-        let insertAt = destination.length;
-        if (variables.targetPatientId != null) {
-          const targetIndex = destination.findIndex((patient) => patient.id === variables.targetPatientId);
-          if (targetIndex === -1) return current;
-          insertAt = targetIndex + (variables.placeAfter ? 1 : 0);
-        }
-        destination.splice(insertAt, 0, { ...moving, teamId: targetTeamId });
-
-        const ranks = new Map<number, number>();
-        destination.forEach((patient, index) => ranks.set(patient.id, (index + 1) * 100));
-        if (!sameTeam(sourceTeamId, targetTeamId)) {
-          active
-            .filter((patient) => patient.id !== moving.id && sameTeam(patient.teamId, sourceTeamId))
-            .forEach((patient, index) => ranks.set(patient.id, (index + 1) * 100));
-        }
-
-        return current
-          .map((patient) => patient.id === moving.id
-            ? { ...patient, teamId: targetTeamId, orderIndex: ranks.get(patient.id) ?? patient.orderIndex }
-            : ranks.has(patient.id)
-              ? { ...patient, orderIndex: ranks.get(patient.id)! }
-              : patient)
-          .sort((left, right) =>
-            (left.orderIndex ?? 0) - (right.orderIndex ?? 0)
-              || left.roomNumber.localeCompare(right.roomNumber),
-          );
-      });
-
-      return { previous };
-    },
-    onError: (err, _variables, context) => {
-      if (context?.previous) utils.patients.list.setData(undefined, context.previous);
-      toast.error(`Could not move patient: ${err.message}`);
-    },
-    onSettled: () => { void utils.patients.list.invalidate(); },
-  });
+  const reorderPatient = usePatientReorder(day);
   const archivePatient = trpc.patients.archive.useMutation({
     onSuccess: () => { invalidateBoard(); toast.success("Admission archived"); },
     onError: (err) => toast.error(err.message),
@@ -1095,7 +1045,7 @@ export default function TherapyBoard() {
 
     const warnings = [checkLunchOverlap(start, end), checkTherapistAvailability(session.therapistId, start, end), checkDoubleBooking(session.therapistId, session.deliveryMode, start, end, session.id)];
     processWarnings(warnings, doUpdate);
-  }, [rawSessions, tiles, checkTherapistAvailability, checkDoubleBooking, processWarnings, updateSession]);
+  }, [rawSessions, tiles, checkTherapistAvailability, checkDoubleBooking, processWarnings, updateSession.mutate]);
 
   // Books a slot proposed by this morning's auto-generated gap-fill digest directly, without
   // opening the full session dialog -- one click from the "At Risk" popover in BoardHeader.
@@ -1206,6 +1156,7 @@ export default function TherapyBoard() {
       isDischarged: value.isDischarged,
       admissionDate: value.admissionDate || undefined,
       estimatedDischargeDate: value.estimatedDischargeDate || undefined,
+      actualDischargeDate: value.actualDischargeDate || undefined,
       weeklyMinuteTarget: value.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
       teamId: value.teamId ?? null,
     };
@@ -1305,12 +1256,12 @@ export default function TherapyBoard() {
   const handleToggleFlag = useCallback(async (patientId: number, flag: FlagType, active: boolean) => {
     if (!canEdit) return;
     await toggleFlag.mutateAsync({ patientId, flagType: flag, date: day, active });
-  }, [toggleFlag, day, canEdit]);
+  }, [toggleFlag.mutateAsync, day, canEdit]);
 
   const handleCopyPatientSessions = useCallback((patientId: number) => {
     if (!requireEdit()) return;
     copyPatientSessions.mutate({ patientId, date: day });
-  }, [copyPatientSessions, day, requireEdit]);
+  }, [copyPatientSessions.mutate, day, requireEdit]);
 
   const totalSessions = tiles.length;
   const conflictCount = conflictIds.size;
@@ -1322,7 +1273,7 @@ export default function TherapyBoard() {
   );
   const isSaving =
     createSession.isPending || updateSession.isPending || deleteSession.isPending ||
-    createPatient.isPending || updatePatient.isPending || archivePatient.isPending ||
+    createPatient.isPending || updatePatient.isPending || reorderPatient.isPending || archivePatient.isPending ||
     restorePatient.isPending || toggleFlag.isPending || saveSnapshot.isPending ||
     createTherapist.isPending || updateTherapist.isPending || archiveTherapist.isPending ||
     restoreTherapist.isPending || copyDayToNextDay.isPending || copyPatientSessions.isPending ||
@@ -1547,7 +1498,7 @@ export default function TherapyBoard() {
                           strategy={verticalListSortingStrategy}
                         >
                           {section.patients.map((patient, rowIdx) => {
-                            const pFlags = flagsByPatient.get(patient.id) ?? [];
+                            const pFlags = flagsByPatient.get(patient.id) ?? EMPTY_FLAGS;
                             const isDC = patient.isDischarged;
                             const isPlaceholder = patient.isRoomPlaceholder;
                             const isMedicalHold = !isPlaceholder && pFlags.some((f) => f.flagType === "Medical Hold");
@@ -1580,6 +1531,10 @@ export default function TherapyBoard() {
                               <PatientRow
                                 key={patient.id}
                                 patient={patient}
+                                canEdit={canEdit}
+                                isAdmin={isAdmin}
+                                canChart={canChart}
+                                viewerTherapistId={currentTherapistId}
                                 rowIdx={rowIdx}
                                 day={day}
                                 tiles={tilesByPatient.get(patient.id) ?? EMPTY_TILES}
@@ -1792,6 +1747,7 @@ export default function TherapyBoard() {
               isDischarged: patient.isDischarged,
               admissionDate: patient.admissionDate ?? "",
               estimatedDischargeDate: patient.estimatedDischargeDate ?? "",
+              actualDischargeDate: patient.actualDischargeDate ?? "",
               weeklyMinuteTarget: patient.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
               teamId: patient.teamId ?? null,
               isRoomPlaceholder: patient.isRoomPlaceholder,
@@ -1834,6 +1790,7 @@ export default function TherapyBoard() {
             isDischarged: p.isDischarged,
             admissionDate: p.admissionDate ?? "",
             estimatedDischargeDate: p.estimatedDischargeDate ?? "",
+            actualDischargeDate: p.actualDischargeDate ?? "",
             weeklyMinuteTarget: p.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET,
             teamId: p.teamId ?? null,
             isRoomPlaceholder: p.isRoomPlaceholder,

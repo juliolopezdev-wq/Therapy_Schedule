@@ -10,7 +10,8 @@ export const ENV = {
   isProduction: process.env.NODE_ENV === "production",
   forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
-  ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? "https://ollama.com",
+  ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434",
+  aiRemoteApproved: process.env.AI_REMOTE_APPROVED === "true",
   ollamaModel: process.env.OLLAMA_MODEL ?? "gemma4:31b",
   ollamaApiKey: process.env.OLLAMA_API_KEY ?? "",
   // Proactive at-risk email digest (server/atRiskDigestEmail.ts) -- any generic SMTP provider
