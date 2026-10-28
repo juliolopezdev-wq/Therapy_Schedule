@@ -5,6 +5,7 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import ProtectedRoute from "./components/ProtectedRoute";
 import SessionTimeoutNotice from "./components/SessionTimeoutNotice";
+import LiveUpdates from "./components/LiveUpdates";
 import { ThemeProvider } from "./contexts/ThemeContext";
 
 const AdminUsers = lazy(() => import("./pages/AdminUsers"));
@@ -61,6 +62,7 @@ function App() {
         <TooltipProvider>
           <Toaster />
           <SessionTimeoutNotice />
+          <LiveUpdates />
           <Suspense fallback={<PageFallback />}>
             <Router />
           </Suspense>

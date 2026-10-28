@@ -11,6 +11,7 @@ import { serveStatic, setupVite } from "./vite";
 import { startDigestScheduler } from "./digestScheduler";
 import { applyHttpSecurity } from "./security";
 import { upgradeConfiguredSafetySchema } from "../schemaUpgrade";
+import { registerLiveUpdates } from "../liveUpdates";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -51,6 +52,7 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "5mb", extended: true }));
   registerStorageProxy(app);
   registerAuthRoutes(app);
+  registerLiveUpdates(app);
   // tRPC API
   app.use(
     "/api/trpc",

@@ -3,6 +3,7 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
 import type { User } from "../../drizzle/schema";
+import { notifyDataChanged, shouldNotify } from "../liveUpdates";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -22,7 +23,17 @@ const t = initTRPC.context<TrpcContext>().create({
 });
 
 export const router = t.router;
-export const publicProcedure = t.procedure;
+
+// After a successful save, tell open browsers to refresh.
+const notifyOnChange = t.middleware(async ({ type, path, next }) => {
+  const result = await next();
+  if (type === "mutation" && result.ok && shouldNotify(path)) notifyDataChanged();
+  return result;
+});
+
+const baseProcedure = t.procedure.use(notifyOnChange);
+
+export const publicProcedure = baseProcedure;
 
 const requireUser = t.middleware(async opts => {
   const { ctx, next } = opts;
@@ -40,7 +51,7 @@ const requireUser = t.middleware(async opts => {
 });
 
 /** Any logged-in user, any role (includes viewers) -- read access. */
-export const protectedProcedure = t.procedure.use(requireUser);
+export const protectedProcedure = baseProcedure.use(requireUser);
 
 function requireRole(allowed: Array<User["role"]>) {
   return t.middleware(async opts => {
@@ -60,10 +71,10 @@ function requireRole(allowed: Array<User["role"]>) {
 }
 
 /** Admin, Team Lead, or staff. Resource-level ownership is enforced inside each procedure. */
-export const staffProcedure = t.procedure.use(requireRole(["admin", "team_lead", "staff"]));
+export const staffProcedure = baseProcedure.use(requireRole(["admin", "team_lead", "staff"]));
 
 /** Admins and Team Leads can manage schedules across all teams. */
-export const schedulerProcedure = t.procedure.use(requireRole(["admin", "team_lead"]));
+export const schedulerProcedure = baseProcedure.use(requireRole(["admin", "team_lead"]));
 
 /** Admin only -- destructive/config actions (deletes, user management, settings). */
-export const adminProcedure = t.procedure.use(requireRole(["admin"]));
+export const adminProcedure = baseProcedure.use(requireRole(["admin"]));
