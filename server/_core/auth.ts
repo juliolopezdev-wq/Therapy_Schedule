@@ -14,6 +14,7 @@ function getSessionTokenFromRequest(req: Request): string | undefined {
 }
 
 const MAGIC_LINK_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const INVITE_LINK_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const SESSION_TTL_MS = SESSION_ABSOLUTE_MS;
 // keyed by email+IP so someone can't lock a coworker out by spamming their address
 const MAX_LINKS_PER_EMAIL_IP_WINDOW = 3;
@@ -133,24 +134,29 @@ export async function requestMagicLink(
   }
 
   const token = generateToken();
+  if (options.invitation) await db.deleteUnusedInviteLinks(normalizedEmail);
   await db.createMagicLink({
     email: normalizedEmail,
     tokenHash: hashToken(token),
-    expiresAt: new Date(Date.now() + MAGIC_LINK_TTL_MS),
+    expiresAt: new Date(Date.now() + (options.invitation ? INVITE_LINK_TTL_MS : MAGIC_LINK_TTL_MS)),
     ipAddress: ip,
+    forInvite: options.invitation ?? false,
   });
 
   const appUrl = ENV.appUrl || `${req.protocol}://${req.get("host")}`;
   const verifyUrl = `${appUrl}/api/auth/verify?token=${token}`;
   const subject = options.invitation ? "You're invited to MinuteMinder" : "Your MinuteMinder login link";
+  const expiryNote = options.invitation
+    ? "This link works for 7 days or until you accept the invitation, and can only be used once."
+    : "This link expires in 15 minutes and can only be used once.";
   const introduction = options.invitation
     ? "You've been invited to MinuteMinder. Use the link below to accept your invitation and sign in."
     : "Click below to log in.";
   const emailMessage = {
     to: [normalizedEmail],
     subject,
-    text: `${introduction}\n\n${verifyUrl}\n\nThis link expires in 15 minutes and can only be used once.`,
-    html: `<p>${introduction}</p><p><a href="${verifyUrl}">${options.invitation ? "Accept invitation" : "Log in to MinuteMinder"}</a></p><p>This link expires in 15 minutes and can only be used once. If you didn't request this, you can safely ignore this email.</p>`,
+    text: `${introduction}\n\n${verifyUrl}\n\n${expiryNote}`,
+    html: `<p>${introduction}</p><p><a href="${verifyUrl}">${options.invitation ? "Accept invitation" : "Log in to MinuteMinder"}</a></p><p>${expiryNote} If you didn't request this, you can safely ignore this email.</p>`,
   };
 
   if (options.awaitDelivery) {
@@ -176,6 +182,8 @@ export async function verifyMagicLink(token: string, req: Request, res: Response
   const openId = openIdForEmail(link.email);
   let user = await db.getUserByOpenId(openId);
   const invite = await db.getInviteByEmail(link.email);
+  // An invite link stops working once the invite is accepted or revoked.
+  if (link.forInvite && (!invite || invite.acceptedAt)) return null;
   // A valid invite is required only to create an account. Existing active users can continue
   // signing in if accepted invite records are later cleaned up.
   if (!user && !invite) return null;
@@ -187,7 +195,7 @@ export async function verifyMagicLink(token: string, req: Request, res: Response
     await db.upsertUser({
       openId,
       email: link.email,
-      name: link.email.split("@")[0],
+      name: invite!.name?.trim() || null,
       loginMethod: "email",
       role: invite!.role,
       lastSignedIn: new Date(),

@@ -25,6 +25,7 @@ export type InsertUser = typeof users.$inferInsert;
 export const invites = sqliteTable("invites", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   email: text("email").notNull().unique(),
+  name: text("name"),
   role: text("role", { enum: ["admin", "team_lead", "staff", "viewer"] }).notNull().default("staff"),
   invitedByUserId: integer("invitedByUserId").notNull(),
   createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
@@ -43,6 +44,8 @@ export const magicLinks = sqliteTable("magicLinks", {
   expiresAt: integer("expiresAt", { mode: "timestamp" }).notNull(),
   usedAt: integer("usedAt", { mode: "timestamp" }),
   ipAddress: text("ipAddress"),
+  // Invite links last 7 days and work only while the invite is still pending.
+  forInvite: integer("forInvite", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("createdAt", { mode: "timestamp" }).$defaultFn(() => new Date()).notNull(),
 });
 

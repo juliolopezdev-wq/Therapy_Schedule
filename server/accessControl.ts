@@ -1,7 +1,7 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import type { Patient, TherapySession, User } from "../drizzle/schema";
-import { therapists, users } from "../drizzle/schema";
+import { therapists } from "../drizzle/schema";
 import {
   getDb,
   getPatients,
@@ -71,13 +71,6 @@ export async function resolveAccessScope(user: User): Promise<AccessScope> {
       .where(and(eq(therapists.id, profile.id), isNull(therapists.userId)));
   }
 
-  // Use the staff profile for messaging attribution when the account has no name.
-  if (!user.name?.trim()) {
-    await db
-      .update(users)
-      .set({ name: profile.name, updatedAt: new Date() })
-      .where(eq(users.id, user.id));
-  }
   return {
     role: user.role,
     therapistId: profile.id,
@@ -142,7 +135,6 @@ function redactPatient(patient: Patient): ScopedPatient {
     archivedByUserId: null,
     archiveReason: null,
     estimatedDischargeDate: null,
-    actualDischargeDate: null,
     ptTarget: null,
     otTarget: null,
     slpTarget: null,

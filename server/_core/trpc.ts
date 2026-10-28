@@ -62,7 +62,7 @@ function requireRole(allowed: Array<User["role"]>) {
 /** Admin, Team Lead, or staff. Resource-level ownership is enforced inside each procedure. */
 export const staffProcedure = t.procedure.use(requireRole(["admin", "team_lead", "staff"]));
 
-/** Admins can change all schedules; Team Leads are further limited to their own patients/sessions. */
+/** Admins and Team Leads can manage schedules across all teams. */
 export const schedulerProcedure = t.procedure.use(requireRole(["admin", "team_lead"]));
 
 /** Admin only -- destructive/config actions (deletes, user management, settings). */

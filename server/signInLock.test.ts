@@ -20,8 +20,8 @@ beforeAll(async () => {
   await state.client.executeMultiple(`
     CREATE TABLE signInAttempts (ipHash TEXT PRIMARY KEY NOT NULL, failures INTEGER NOT NULL, resetAt INTEGER NOT NULL, lockedUntil INTEGER DEFAULT 0 NOT NULL);
     CREATE TABLE users (id INTEGER PRIMARY KEY, openId TEXT, name TEXT, email TEXT, loginMethod TEXT, role TEXT, deactivatedAt INTEGER, createdAt INTEGER, updatedAt INTEGER, lastSignedIn INTEGER);
-    CREATE TABLE invites (id INTEGER PRIMARY KEY, email TEXT, role TEXT, invitedByUserId INTEGER, createdAt INTEGER, acceptedAt INTEGER);
-    CREATE TABLE magicLinks (id INTEGER PRIMARY KEY, email TEXT, tokenHash TEXT, expiresAt INTEGER, usedAt INTEGER, ipAddress TEXT, createdAt INTEGER);
+    CREATE TABLE invites (id INTEGER PRIMARY KEY, email TEXT, name TEXT, role TEXT, invitedByUserId INTEGER, createdAt INTEGER, acceptedAt INTEGER);
+    CREATE TABLE magicLinks (id INTEGER PRIMARY KEY, email TEXT, tokenHash TEXT, expiresAt INTEGER, usedAt INTEGER, ipAddress TEXT, forInvite INTEGER DEFAULT 0 NOT NULL, createdAt INTEGER);
   `);
 });
 beforeEach(async () => {
@@ -29,7 +29,7 @@ beforeEach(async () => {
   vi.setSystemTime(new Date("2026-10-26T12:00:00Z"));
   state.sendEmail.mockReset().mockResolvedValue(true);
   await state.client!.executeMultiple(`DELETE FROM signInAttempts; DELETE FROM magicLinks; DELETE FROM users; DELETE FROM invites;
-    INSERT INTO invites VALUES (1, 'invited@gmail.com', 'staff', 1, 1, NULL);`);
+    INSERT INTO invites VALUES (1, 'invited@gmail.com', NULL, 'staff', 1, 1, NULL);`);
 });
 afterEach(() => vi.useRealTimers());
 afterAll(() => { state.client?.close(); vi.unstubAllEnvs(); });

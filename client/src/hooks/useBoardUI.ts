@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { type SessionFormValue } from "@/components/board/SessionDialog";
 import { type PatientFormValue } from "@/components/board/PatientDialog";
-import { type WeekSessionRow } from "@/components/board/TargetReachedDialog";
 
 export function useBoardUI() {
   const [sessionDialogOpen, setSessionDialogOpen] = useState(false);
@@ -17,14 +16,6 @@ export function useBoardUI() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [dataAnalysisOpen, setDataAnalysisOpen] = useState(false);
   
-  const [targetAlertData, setTargetAlertData] = useState<{
-    patientName: string;
-    target: number;
-    totalMinutes: number;
-    completedMinutes: number;
-    weekSessions: WeekSessionRow[];
-  } | null>(null);
-
   const [overrideWarning, setOverrideWarning] = useState<{
     message: string;
     onConfirm: () => void;
@@ -53,8 +44,6 @@ export function useBoardUI() {
     setHistoryOpen,
     dataAnalysisOpen,
     setDataAnalysisOpen,
-    targetAlertData,
-    setTargetAlertData,
     overrideWarning,
     setOverrideWarning,
     collapsedSections,

@@ -16,6 +16,16 @@ export async function upgradeSafetySchema(client: Pick<Client, "transaction">) {
       );
       changes.push("patients.actualDischargeDate");
     }
+    const inviteColumns = await tx.execute("PRAGMA table_info(invites)");
+    if (inviteColumns.rows.length && !inviteColumns.rows.some(row => row.name === "name")) {
+      await tx.execute("ALTER TABLE invites ADD COLUMN name TEXT");
+      changes.push("invites.name");
+    }
+    const magicLinkColumns = await tx.execute("PRAGMA table_info(magicLinks)");
+    if (magicLinkColumns.rows.length && !magicLinkColumns.rows.some(row => row.name === "forInvite")) {
+      await tx.execute("ALTER TABLE magicLinks ADD COLUMN forInvite INTEGER DEFAULT 0 NOT NULL");
+      changes.push("magicLinks.forInvite");
+    }
     const existing = await tx.execute(
       "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('signInAttempts','aiChangeProposals')"
     );

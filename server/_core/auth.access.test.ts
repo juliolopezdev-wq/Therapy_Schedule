@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getInviteByEmail: vi.fn(),
   getUserByOpenId: vi.fn(),
   createMagicLink: vi.fn(),
+  deleteUnusedInviteLinks: vi.fn(),
   getMagicLinkByTokenHash: vi.fn(),
   markMagicLinkUsed: vi.fn(),
   upsertUser: vi.fn(),
@@ -90,6 +91,98 @@ describe("magic-link access for existing accounts", () => {
     }));
     expect(mocks.markInviteAccepted).not.toHaveBeenCalled();
     expect(cookie).toHaveBeenCalledOnce();
+  });
+});
+
+describe("invite links", () => {
+  const pendingInvite = { email: "new@example.com", role: "staff", name: null, acceptedAt: null };
+  const req = { ip: "127.0.0.1", protocol: "https", get: () => "example.com", headers: {}, socket: {} } as never;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.countRecentMagicLinks.mockResolvedValue(0);
+    mocks.sendEmail.mockResolvedValue(true);
+    mocks.markMagicLinkUsed.mockResolvedValue(true);
+    mocks.createSession.mockResolvedValue(1);
+  });
+
+  it("sends an invite link that lasts 7 days and retires older invite links", async () => {
+    mocks.getInviteByEmail.mockResolvedValue(pendingInvite);
+    mocks.getUserByOpenId.mockResolvedValue(undefined);
+
+    await requestMagicLink("new@example.com", req, { awaitDelivery: true, invitation: true });
+
+    expect(mocks.deleteUnusedInviteLinks).toHaveBeenCalledWith("new@example.com");
+    const link = mocks.createMagicLink.mock.calls[0][0];
+    expect(link.forInvite).toBe(true);
+    const lifetime = link.expiresAt.getTime() - Date.now();
+    expect(lifetime).toBeGreaterThan(7 * 86400_000 - 60_000);
+    expect(lifetime).toBeLessThanOrEqual(7 * 86400_000);
+    expect(mocks.sendEmail.mock.calls[0][0].text).toContain("works for 7 days or until you accept the invitation");
+  });
+
+  it("keeps normal sign-in links at 15 minutes", async () => {
+    mocks.getInviteByEmail.mockResolvedValue(undefined);
+    mocks.getUserByOpenId.mockResolvedValue(existingTeamLead);
+
+    await requestMagicLink("lead@example.com", req, { awaitDelivery: true });
+
+    expect(mocks.deleteUnusedInviteLinks).not.toHaveBeenCalled();
+    const link = mocks.createMagicLink.mock.calls[0][0];
+    expect(link.forInvite).toBe(false);
+    expect(link.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(15 * 60_000);
+  });
+
+  it("accepts an old invite link while the invite is still pending", async () => {
+    mocks.getMagicLinkByTokenHash.mockResolvedValue({
+      id: 3, email: "new@example.com", forInvite: true, usedAt: null,
+      createdAt: new Date(Date.now() - 5 * 86400_000), expiresAt: new Date(Date.now() + 2 * 86400_000),
+    });
+    mocks.getInviteByEmail.mockResolvedValue(pendingInvite);
+    mocks.getUserByOpenId.mockResolvedValueOnce(undefined).mockResolvedValue(existingTeamLead);
+
+    expect(await verifyMagicLink("token", req, { cookie: vi.fn() } as never)).toBeTruthy();
+    expect(mocks.markInviteAccepted).toHaveBeenCalledWith("new@example.com");
+  });
+
+  it("rejects an invite link after 7 days even if the invite is still pending", async () => {
+    mocks.getMagicLinkByTokenHash.mockResolvedValue({
+      id: 5, email: "new@example.com", forInvite: true, usedAt: null, expiresAt: new Date(Date.now() - 1000),
+    });
+    mocks.getInviteByEmail.mockResolvedValue(pendingInvite);
+
+    expect(await verifyMagicLink("token", req, { cookie: vi.fn() } as never)).toBeNull();
+    expect(mocks.createSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["accepted", { ...pendingInvite, acceptedAt: new Date() }],
+    ["revoked", undefined],
+  ])("rejects an invite link once the invite is %s", async (_label, invite) => {
+    mocks.getMagicLinkByTokenHash.mockResolvedValue({
+      id: 4, email: "new@example.com", forInvite: true, usedAt: null, expiresAt: new Date(Date.now() + 2 * 86400_000),
+    });
+    mocks.getInviteByEmail.mockResolvedValue(invite);
+    mocks.getUserByOpenId.mockResolvedValue(existingTeamLead);
+
+    expect(await verifyMagicLink("token", req, { cookie: vi.fn() } as never)).toBeNull();
+    expect(mocks.markMagicLinkUsed).not.toHaveBeenCalled();
+    expect(mocks.createSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("optional invited account names", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.getMagicLinkByTokenHash.mockResolvedValue({ id: 1, email: "new@example.com", expiresAt: new Date(Date.now() + 60_000), usedAt: null });
+    mocks.markMagicLinkUsed.mockResolvedValue(true);
+    mocks.getUserByOpenId.mockResolvedValueOnce(undefined).mockResolvedValue(existingTeamLead);
+    mocks.createSession.mockResolvedValue(1);
+  });
+  it.each([[null, null], ["", null], ["  Assigned Name  ", "Assigned Name"]])("uses invited name %s without inventing a name from the email", async (name, expected) => {
+    mocks.getInviteByEmail.mockResolvedValue({ role: "team_lead", name });
+    await verifyMagicLink("token", { headers: {}, socket: {} } as never, { cookie: vi.fn() } as never);
+    expect(mocks.upsertUser).toHaveBeenCalledWith(expect.objectContaining({ name: expected, role: "team_lead" }));
   });
 });
 

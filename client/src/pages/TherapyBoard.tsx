@@ -71,7 +71,6 @@ import { TeamHuddle } from "@/components/board/TeamHuddle";
 import { MobileTodayList } from "@/components/board/MobileTodayList";
 import type { SessionFormValue } from "@/components/board/SessionDialog";
 import type { PatientFormValue } from "@/components/board/PatientDialog";
-import type { WeekSessionRow } from "@/components/board/TargetReachedDialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -102,7 +101,6 @@ const ProductivityHubModal = lazy(() => import("@/components/board/ProductivityH
 const SessionDialog = lazy(() => import("@/components/board/SessionDialog").then((module) => ({ default: module.SessionDialog })));
 const SickCallModal = lazy(() => import("@/components/board/SickCallModal").then((module) => ({ default: module.SickCallModal })));
 const StaffStatsModal = lazy(() => import("@/components/board/StaffStatsModal").then((module) => ({ default: module.StaffStatsModal })));
-const TargetReachedDialog = lazy(() => import("@/components/board/TargetReachedDialog").then((module) => ({ default: module.TargetReachedDialog })));
 const TherapistPanel = lazy(() => import("@/components/board/TherapistPanel").then((module) => ({ default: module.TherapistPanel })));
 const WeekendStaffingModal = lazy(() => import("@/components/board/WeekendStaffingModal").then((module) => ({ default: module.WeekendStaffingModal })));
 const WeeklyMinutesPanel = lazy(() => import("@/components/board/WeeklyMinutesPanel").then((module) => ({ default: module.WeeklyMinutesPanel })));
@@ -110,7 +108,7 @@ const WeeklyMinutesPanel = lazy(() => import("@/components/board/WeeklyMinutesPa
 const SLOT_WIDTH = 72; // px per 30-min slot
 
 import { getPatientWeekBounds } from "@/../../shared/weekUtils";
-import { isActiveAdmission } from "@/../../shared/patientLifecycle";
+import { wasOnUnitOn } from "@/../../shared/patientLifecycle";
 import type { Patient } from "../../../drizzle/schema";
 
 const BOARD_SECTIONS = [
@@ -215,8 +213,6 @@ export default function TherapyBoard() {
     setHistoryOpen,
     dataAnalysisOpen,
     setDataAnalysisOpen,
-    targetAlertData,
-    setTargetAlertData,
     overrideWarning,
     setOverrideWarning,
     collapsedSections,
@@ -294,7 +290,10 @@ export default function TherapyBoard() {
   }, { enabled: hasBoardAccess });
 
   const patients = patientsQuery.data ?? [];
-  const activePatientCount = patients.filter(isActiveAdmission).length;
+  // the board only shows patients who were on the unit on the selected day
+  const dayKey = formatDateKey(day);
+  const boardPatients = useMemo(() => patients.filter((p) => wasOnUnitOn(p, dayKey)), [patients, dayKey]);
+  const activePatientCount = boardPatients.filter((p) => !p.isRoomPlaceholder).length;
   const therapists = therapistsQuery.data ?? [];
   const teams = teamsQuery.data ?? [];
   const rawSessions = sessionsQuery.data ?? [];
@@ -652,8 +651,8 @@ export default function TherapyBoard() {
   const { weekMinsByPatient, projectedWeekMinsByPatient } = useMemo(() => {
     const completedMap = new Map<number, number>();
     const projectedMap = new Map<number, number>();
-    patients.forEach((p) => {
-      if (!isActiveAdmission(p)) return;
+    boardPatients.forEach((p) => {
+      if (p.isRoomPlaceholder) return;
       const bounds = getPatientWeekBounds(p.admissionDate, day);
       const patientSessions = weekSessions.filter((s) => {
         if (s.patientId !== p.id) return false;
@@ -674,66 +673,18 @@ export default function TherapyBoard() {
       weekMinsByPatient: completedMap,
       projectedWeekMinsByPatient: projectedMap,
     };
-  }, [patients, weekSessions, day]);
+  }, [boardPatients, weekSessions, day]);
 
   // How many active (non-discharged) patients are below their weekly target
   const patientsUnderTarget = useMemo(() => {
-    return patients.filter((p) => {
-      if (!isActiveAdmission(p)) return false;
+    return boardPatients.filter((p) => {
+      if (p.isRoomPlaceholder) return false;
       if (teamFilter !== "all" && p.teamId !== teamFilter) return false;
       const mins = projectedWeekMinsByPatient.get(p.id) ?? 0;
       const target = p.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET;
       return mins < target;
     });
-  }, [patients, projectedWeekMinsByPatient, teamFilter]);
-
-  // Fire a toast when a patient crosses from below to at/above their weekly target
-  const prevWeekMinsRef = useRef<Map<number, number> | null>(null);
-  useEffect(() => {
-    const prev = prevWeekMinsRef.current;
-    // First run after data loads has nothing real to compare against -- every already-on-target
-    // patient would otherwise look like they "just crossed" the line and pop the celebration
-    // dialog on a plain page refresh. Just record the baseline this time; only compare from the
-    // next run onward, when a change to weekMinsByPatient reflects an actual new session.
-    if (!prev) {
-      prevWeekMinsRef.current = new Map(projectedWeekMinsByPatient);
-      return;
-    }
-    patients.forEach((p) => {
-      if (!isActiveAdmission(p)) return;
-      const target: number = p.weeklyMinuteTarget ?? DEFAULT_WEEKLY_MINUTE_TARGET;
-      const prevMins = prev.get(p.id) ?? 0;
-      const currMins = projectedWeekMinsByPatient.get(p.id) ?? 0;
-      if (prevMins < target && currMins >= target) {
-        const bounds = getPatientWeekBounds(p.admissionDate, day);
-        const patientWeekSessions: WeekSessionRow[] = weekSessions
-          .filter((s) => {
-            if (s.patientId !== p.id) return false;
-            // Match weekMinsByPatient's own filter -- a missed or Block session was never
-            // counted toward the total, so it can't be a valid "trim this to get under target"
-            // recommendation below (TargetReachedDialog's buildRecommendations).
-            if (s.status !== "scheduled" || s.therapyType === "Block") return false;
-            const sessionStart = new Date(s.startTime);
-            return sessionStart >= bounds.start && sessionStart <= bounds.end;
-          })
-          .map((s) => ({
-            id: s.id,
-            therapyType: s.therapyType as TherapyType,
-            startTime: s.startTime,
-            durationMinutes: s.durationMinutes,
-            therapistName: therapists.find((t) => t.id === s.therapistId)?.name,
-          }));
-        setTargetAlertData({
-          patientName: p.name,
-          target,
-          totalMinutes: currMins,
-          completedMinutes: weekMinsByPatient.get(p.id) ?? 0,
-          weekSessions: patientWeekSessions,
-        });
-      }
-    });
-    prevWeekMinsRef.current = new Map(projectedWeekMinsByPatient);
-  }, [projectedWeekMinsByPatient, weekMinsByPatient, patients, weekSessions, therapists, day]);
+  }, [boardPatients, projectedWeekMinsByPatient, teamFilter]);
 
   // Therapist -> team map for filtering
   const therapistTeam = useMemo(() => {
@@ -1204,16 +1155,14 @@ export default function TherapyBoard() {
 
   // Group patients by team and filter based on teamFilter selection
   const patientsBySection = useMemo(() => {
-    const isPatientDC = (p: typeof patients[0]) => p.isDischarged;
-
     const sectionsToRender = teamFilter === "all" ? teams : teams.filter(t => t.id === teamFilter);
     const result = sectionsToRender.map((section) => ({
       ...section,
-      patients: patients.filter((p) => p.teamId === section.id && !isPatientDC(p)),
+      patients: boardPatients.filter((p) => p.teamId === section.id),
     }));
 
     if (teamFilter === "all") {
-      const unassigned = patients.filter(p => !p.teamId && !isPatientDC(p));
+      const unassigned = boardPatients.filter(p => !p.teamId);
       if (unassigned.length > 0) {
         result.push({
           id: 0,
@@ -1225,7 +1174,7 @@ export default function TherapyBoard() {
       }
     }
     return result;
-  }, [patients, teams, teamFilter, flagsByPatient]);
+  }, [boardPatients, teams, teamFilter]);
 
   const { customCollisionDetection, handleDragStart, handleDragEnd, handleDragCancel } = useBoardDnd({
     day,
@@ -1287,7 +1236,7 @@ export default function TherapyBoard() {
     completeAllSessions.error || completeOwnSession.error || undoOwnCompletion.error;
   const mobilePatients = patientsBySection
     .flatMap((section) => section.patients)
-    .filter((patient) => isActiveAdmission(patient) && !patient.isRoomPlaceholder);
+    .filter((patient) => !patient.isRoomPlaceholder);
   const mobilePatientIds = new Set(mobilePatients.map((patient) => patient.id));
   const mobileSessions = visibleTiles.filter((session) => mobilePatientIds.has(session.patientId));
   const hasVisiblePatients = patientsBySection.some((section) => section.patients.length > 0);
@@ -1930,15 +1879,6 @@ export default function TherapyBoard() {
         day={day}
       />}
 
-      {targetAlertData !== null && <TargetReachedDialog
-        open={targetAlertData !== null}
-        onOpenChange={(o) => { if (!o) setTargetAlertData(null); }}
-        patientName={targetAlertData?.patientName ?? ""}
-        target={targetAlertData?.target ?? DEFAULT_WEEKLY_MINUTE_TARGET}
-        totalMinutes={targetAlertData?.totalMinutes ?? 0}
-        completedMinutes={targetAlertData?.completedMinutes ?? 0}
-        weekSessions={targetAlertData?.weekSessions ?? []}
-      />}
       </Suspense>
       {/* Override Warning Modal */}
       <AlertDialog open={!!overrideWarning} onOpenChange={(open) => !open && setOverrideWarning(null)}>

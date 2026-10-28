@@ -128,6 +128,7 @@ import { getWeeklyMinutesSummary, getGapFillSuggestions, getOrCreateTodaysDigest
 import { getGGCompletenessReport, getGGTrendReport, getGGScoringConsistencyReport } from "./sectionGGCompliance";
 import { approveAiProposal, listAiProposals, dismissAiProposal, undoAiProposal } from "./aiReview";
 import { askScheduler, analyzeData, executeTool } from "./ollama";
+import { isTyping, setTyping } from "./typingStatus";
 import { canManageSchedule, isChartOnlyUpdate } from "../shared/accessPolicy";
 import { SECTION_GG_ITEMS, SECTION_GG_VALUES, assessmentProgress, isDateKey } from "../shared/sectionGG";
 import { ALL_THERAPY_TYPES } from "../shared/therapyTypes";
@@ -160,6 +161,15 @@ export const appRouter = router({
       if (!opts.ctx.user) return null;
       return { ...opts.ctx.user, accessScope: await resolveAccessScope(opts.ctx.user) };
     }),
+    updateOwnName: protectedProcedure
+      .input(z.object({ name: z.string().trim().max(80) }))
+      .mutation(async ({ input, ctx }) => {
+        await updateUserName(ctx.user.id, input.name);
+        await logAudit({ actorUserId: ctx.user.id, actorEmail: ctx.user.email,
+          action: "user.name_change", targetType: "user", targetId: String(ctx.user.id),
+          metadata: { name: input.name || null } });
+        return { success: true } as const;
+      }),
     requestLink: publicProcedure
       // format is checked in requestSignInLink so bad addresses count toward the lock
       .input(z.object({ email: z.string().max(1024) }))
@@ -191,13 +201,13 @@ export const appRouter = router({
     }),
     listInvites: adminProcedure.query(async () => listInvites()),
     invite: adminProcedure
-      .input(z.object({ email: z.string().email(), role: accountRoleEnum }))
+      .input(z.object({ email: z.string().email(), role: accountRoleEnum, name: z.string().trim().max(80).optional() }))
       .mutation(async ({ input, ctx }) => {
         const existing = await getInviteByEmail(input.email);
         if (existing) {
           throw new TRPCError({ code: "CONFLICT", message: "That email has already been invited." });
         }
-        const invite = await createInvite({ email: input.email, role: input.role, invitedByUserId: ctx.user.id });
+        const invite = await createInvite({ email: input.email, role: input.role, name: input.name || null, invitedByUserId: ctx.user.id });
         let emailDelivery: Awaited<ReturnType<typeof requestMagicLink>> = "send_failed";
         try {
           emailDelivery = await requestMagicLink(input.email, ctx.req, { awaitDelivery: true, invitation: true });
@@ -294,7 +304,7 @@ export const appRouter = router({
         return { success: true } as const;
       }),
     updateUserName: adminProcedure
-      .input(z.object({ userId: z.number().int().positive(), name: z.string().trim().min(2).max(80) }))
+      .input(z.object({ userId: z.number().int().positive(), name: z.string().trim().max(80) }))
       .mutation(async ({ input, ctx }) => {
         await updateUserName(input.userId, input.name);
         await logAudit({
@@ -348,12 +358,7 @@ export const appRouter = router({
         });
         return { success: true } as const;
       }),
-    // Other admins' active sessions (identity + IP) are hidden entirely -- an admin's own
-    // session, and every non-admin user's sessions, are unaffected.
-    listSessions: adminProcedure.query(async ({ ctx }) => {
-      const rows = await listAllActiveSessions();
-      return rows.filter((row) => row.userRole !== "admin" || row.userId === ctx.user.id);
-    }),
+    listSessions: adminProcedure.query(() => listAllActiveSessions()),
     revokeSession: adminProcedure
       .input(z.object({ sessionId: z.number() }))
       .mutation(async ({ input, ctx }) => {
@@ -1345,6 +1350,7 @@ export const appRouter = router({
       .input(z.object({ recipientUserId: z.number().int().positive(), body: z.string().trim().min(1).max(1200) }))
       .mutation(async ({ input, ctx }) => {
         if (input.recipientUserId === ctx.user.id) throw new TRPCError({ code: "BAD_REQUEST", message: "You cannot message yourself." });
+        setTyping(ctx.user.id, input.recipientUserId, false);
         const message = await createDirectMessage({
           senderUserId: ctx.user.id,
           recipientUserId: input.recipientUserId,
@@ -1366,6 +1372,15 @@ export const appRouter = router({
         await markDirectConversationRead(ctx.user.id, input.peerUserId);
         return { success: true } as const;
       }),
+    setTyping: protectedProcedure
+      .input(z.object({ peerUserId: z.number().int().positive(), typing: z.boolean() }))
+      .mutation(({ input, ctx }) => {
+        setTyping(ctx.user.id, input.peerUserId, input.typing);
+        return { success: true } as const;
+      }),
+    peerTyping: protectedProcedure
+      .input(z.object({ peerUserId: z.number().int().positive() }))
+      .query(({ input, ctx }) => isTyping(input.peerUserId, ctx.user.id)),
   }),
 
   /* ------------------------------------------------------------------ */

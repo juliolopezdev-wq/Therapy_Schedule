@@ -23,9 +23,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { trpc } from "@/lib/trpc";
 import { formatDate } from "@/lib/utils";
-import { ArrowLeft, Check, Loader2, MailX, Send, Trash2, UserRound } from "lucide-react";
+import { ArrowLeft, Check, Loader2, MailX, Send, Trash2, UserRound, MoreHorizontal, Pencil, Shield } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
@@ -118,10 +119,12 @@ export default function AdminUsers() {
   const auditQuery = trpc.admin.auditLog.useQuery({ limit: 100 });
 
   const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteName, setInviteName] = useState("");
   const [inviteRole, setInviteRole] = useState<Role>("staff");
   const [inviteToRevoke, setInviteToRevoke] = useState<{ id: number; email: string } | null>(null);
   const [accountToDelete, setAccountToDelete] = useState<{ id: number; label: string } | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [editingUserId, setEditingUserId] = useState<number | null>(null);
   const [nameDrafts, setNameDrafts] = useState<Record<number, string>>({});
 
   const invalidateAll = () => {
@@ -149,6 +152,7 @@ export default function AdminUsers() {
     onSuccess: (result) => {
       showInviteDelivery(result.email, result.emailDelivery);
       setInviteEmail("");
+      setInviteName("");
       invalidateAll();
     },
     onError: (e) => toast.error(e.message),
@@ -174,6 +178,7 @@ export default function AdminUsers() {
   const updateUserName = trpc.admin.updateUserName.useMutation({
     onSuccess: async (_result, variables) => {
       toast.success("Account holder name updated");
+      setEditingUserId(null);
       setNameDrafts((current) => {
         const next = { ...current };
         delete next[variables.userId];
@@ -253,7 +258,7 @@ export default function AdminUsers() {
     event.preventDefault();
     const email = inviteEmail.trim();
     if (!email) return;
-    invite.mutate({ email, role: inviteRole });
+    invite.mutate({ email, role: inviteRole, name: inviteName.trim() });
   };
 
   return (
@@ -322,10 +327,10 @@ export default function AdminUsers() {
           <div className="relative grid gap-5 p-5 md:grid-cols-[minmax(220px,0.7fr)_minmax(0,1.3fr)] md:items-center md:p-6">
             <div>
               <h2 className="text-lg font-bold text-slate-900">Invite a teammate</h2>
-              <p className="mt-1 text-sm leading-relaxed text-slate-500">Choose their access level. We’ll email a secure 15-minute sign-in link.</p>
+              <p className="mt-1 text-sm leading-relaxed text-slate-500">Choose their access level. Names are optional; teammates can add their own in the account menu. Team leads can access all teams’ schedules.</p>
             </div>
 
-            <form onSubmit={handleInvite} className="grid gap-2.5 sm:grid-cols-[minmax(0,1fr)_140px_auto]">
+            <form onSubmit={handleInvite} className="grid gap-2.5 sm:grid-cols-2">
               <div className="relative">
                 <Input
                   type="email"
@@ -336,6 +341,9 @@ export default function AdminUsers() {
                   className="h-11 rounded-xl border-slate-200 bg-white shadow-sm focus-visible:border-sky-400 focus-visible:ring-sky-200"
                 />
               </div>
+              <Input aria-label="Teammate name (optional)" placeholder="Name (optional)" maxLength={80}
+                value={inviteName} onChange={(event) => setInviteName(event.target.value)}
+                className="h-11 rounded-xl border-slate-200 bg-white" />
               <Select value={inviteRole} onValueChange={(value) => setInviteRole(value as Role)}>
                 <SelectTrigger aria-label="Invite role" className="h-11 w-full rounded-xl border-slate-200 bg-white shadow-sm">
                   <SelectValue />
@@ -360,160 +368,407 @@ export default function AdminUsers() {
 
         <SectionCard
           title="Team members"
-          description="Manage roles and access for everyone on the therapy board."
+          description="Manage account names, roles, and schedule access."
           count={users.length}
         >
-          <Table>
-            <TableHeader className="bg-slate-50/80">
-              <TableRow className="border-slate-100 hover:bg-transparent">
-                <TableHead className="h-11 px-5 text-xs font-bold uppercase tracking-wider text-slate-500">User</TableHead>
-                <TableHead className="h-11 px-4 text-xs font-bold uppercase tracking-wider text-slate-500">Role</TableHead>
-                <TableHead className="h-11 px-4 text-xs font-bold uppercase tracking-wider text-slate-500">Access scope</TableHead>
-                <TableHead className="h-11 px-4 text-xs font-bold uppercase tracking-wider text-slate-500">Status</TableHead>
-                <TableHead className="h-11 px-4 text-xs font-bold uppercase tracking-wider text-slate-500">Last signed in</TableHead>
-                <TableHead className="h-11 px-5 text-right"><span className="sr-only">Actions</span></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {usersQuery.isError ? <ErrorRow columns={6} message="Team members could not be loaded." /> : usersQuery.isLoading ? <LoadingRows columns={6} /> : users.length === 0 ? (
-                <EmptyRow columns={6} message="No users have joined yet." />
-              ) : users.map((user) => {
+          <div
+            className="hidden grid-cols-[minmax(0,1.6fr)_132px_minmax(0,1.4fr)_145px_36px] items-center gap-5 border-b border-slate-100 bg-slate-50/70 px-6 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500 lg:grid"
+            aria-hidden="true"
+          >
+            <span>Member</span>
+            <span>Role</span>
+            <span>Schedule access</span>
+            <span>Account activity</span>
+            <span />
+          </div>
+          {usersQuery.isError ? (
+            <p
+              role="alert"
+              className="px-6 py-10 text-center text-sm text-rose-700"
+            >
+              Team members could not be loaded.
+            </p>
+          ) : usersQuery.isLoading ? (
+            <div
+              className="space-y-5 px-6 py-6"
+              role="status"
+              aria-label="Loading team members"
+            >
+              {[0, 1, 2].map((row) => (
+                <div
+                  key={row}
+                  className="h-14 animate-pulse rounded-lg bg-slate-100"
+                />
+              ))}
+            </div>
+          ) : users.length === 0 ? (
+            <p className="px-6 py-10 text-center text-sm text-slate-500">
+              No users have joined yet.
+            </p>
+          ) : (
+            <ul className="divide-y divide-slate-100" aria-label="Team members">
+              {users.map((user) => {
                 const isCurrentUser = user.id === currentUser?.id;
                 const isOtherAdmin = user.role === "admin" && !isCurrentUser;
-                const identity = isOtherAdmin ? "Admin" : (user.email || user.name || user.openId);
-                const accessNeedsSetup = user.role !== "admin" && user.therapistId == null;
+                const identity = isOtherAdmin
+                  ? "Admin"
+                  : user.email || user.name || user.openId;
+                const accessNeedsSetup =
+                  user.role !== "admin" &&
+                  user.role !== "team_lead" &&
+                  user.therapistId == null;
                 const draftName = nameDrafts[user.id] ?? user.name ?? "";
                 const trimmedName = draftName.trim();
-                const canSaveName = trimmedName.length > 0 && trimmedName !== (user.name ?? "").trim();
-                const isSavingName = updateUserName.isPending && updateUserName.variables?.userId === user.id;
+                const canSaveName = trimmedName !== (user.name ?? "").trim();
+                const isSavingName =
+                  updateUserName.isPending &&
+                  updateUserName.variables?.userId === user.id;
+                const isEditingName = editingUserId === user.id;
+                const cancelNameEdit = () => {
+                  setEditingUserId(null);
+                  setNameDrafts((current) => {
+                    const next = { ...current };
+                    delete next[user.id];
+                    return next;
+                  });
+                };
                 return (
-                  <TableRow key={user.id} className="border-slate-100 hover:bg-sky-50/35">
-                    <TableCell className="px-5 py-3.5">
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 ring-1 ring-inset ring-slate-200" aria-hidden>
-                          <UserRound className="h-4.5 w-4.5" strokeWidth={1.8} />
-                        </div>
-                        <div className="min-w-0">
-                          {isOtherAdmin ? (
-                            <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
-                              Admin
-                              <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">Identity hidden</span>
-                            </p>
-                          ) : (
-                            <>
-                              <div className="flex items-center gap-1.5">
-                                <Input
-                                  value={draftName}
-                                  maxLength={80}
-                                  onChange={(event) => setNameDrafts((current) => ({ ...current, [user.id]: event.target.value }))}
-                                  aria-label={`Account holder name for ${identity}`}
-                                  placeholder="Account holder name"
-                                  className="h-8 min-w-[150px] border-slate-200 bg-white px-2 text-sm font-semibold"
-                                />
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  className="h-8 w-8 shrink-0 text-emerald-700"
-                                  aria-label={`Save account holder name for ${identity}`}
-                                  disabled={updateUserName.isPending || !canSaveName}
-                                  onClick={() => updateUserName.mutate({ userId: user.id, name: trimmedName })}
-                                >
-                                  {isSavingName ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                                </Button>
-                              </div>
-                              {user.email && <p className="mt-1 truncate text-xs text-slate-500">{user.email}</p>}
-                            </>
-                          )}
-                        </div>
+                  <li
+                    key={user.id}
+                    className="relative grid min-w-0 grid-cols-1 items-start gap-x-5 gap-y-4 px-5 py-5 transition-colors hover:bg-slate-50/60 sm:grid-cols-2 sm:px-6 lg:grid-cols-[minmax(0,1.6fr)_132px_minmax(0,1.4fr)_145px_36px]"
+                  >
+                    <div className="flex min-w-0 items-start gap-3 pr-10 sm:col-span-2 lg:col-span-1 lg:pr-0">
+                      <div
+                        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold ring-1 ring-inset ${user.deactivatedAt ? "bg-slate-100 text-slate-500 ring-slate-200" : "bg-sky-50 text-sky-700 ring-sky-100"}`}
+                        aria-hidden="true"
+                      >
+                        {isOtherAdmin ? (
+                          <Shield className="h-4 w-4" />
+                        ) : (
+                          (user.name || user.email || "?").charAt(0).toUpperCase()
+                        )}
                       </div>
-                    </TableCell>
-                    <TableCell className="px-4 py-3.5">
+                      <div className="min-w-0 flex-1">
+                        {isOtherAdmin ? (
+                          <>
+                            <p className="text-sm font-semibold text-slate-900">
+                              Admin
+                            </p>
+                            <p className="mt-1 text-xs text-slate-500">
+                              Identity hidden
+                            </p>
+                          </>
+                        ) : isEditingName ? (
+                          <form
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              if (canSaveName && !updateUserName.isPending)
+                                updateUserName.mutate({
+                                  userId: user.id,
+                                  name: trimmedName,
+                                });
+                            }}
+                            className="space-y-2"
+                          >
+                            <Input
+                              autoFocus
+                              value={draftName}
+                              maxLength={80}
+                              disabled={isSavingName}
+                              onChange={(event) =>
+                                setNameDrafts((current) => ({
+                                  ...current,
+                                  [user.id]: event.target.value,
+                                }))
+                              }
+                              onKeyDown={(event) => {
+                                if (event.key === "Escape" && !isSavingName)
+                                  cancelNameEdit();
+                              }}
+                              aria-label={`Account holder name for ${identity}`}
+                              placeholder="Name (optional)"
+                              className="h-9 w-full rounded-lg border-sky-300 bg-white text-sm"
+                            />
+                            <div className="flex items-center gap-2">
+                              <Button
+                                type="submit"
+                                size="sm"
+                                disabled={updateUserName.isPending || !canSaveName}
+                                className="h-8 gap-1.5 rounded-lg bg-sky-600 px-3 text-xs hover:bg-sky-700"
+                              >
+                                {isSavingName ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Check className="h-3.5 w-3.5" />
+                                )}
+                                Save
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                disabled={isSavingName}
+                                onClick={cancelNameEdit}
+                                className="h-8 rounded-lg px-2 text-xs text-slate-600"
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                            <p className="text-xs text-slate-500">
+                              Leave blank to let them add their name.
+                            </p>
+                          </form>
+                        ) : (
+                          <>
+                            <div className="flex min-w-0 items-center gap-1.5">
+                              <span
+                                className={`truncate text-sm font-semibold ${user.name ? "text-slate-900" : "text-slate-500"}`}
+                                title={user.name || undefined}
+                              >
+                                {user.name || "Name not added"}
+                              </span>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7 shrink-0 rounded-md text-slate-400 hover:bg-sky-50 hover:text-sky-700"
+                                aria-label={`Edit name for ${identity}`}
+                                disabled={updateUserName.isPending}
+                                onClick={() => {
+                                  setNameDrafts({ [user.id]: user.name ?? "" });
+                                  setEditingUserId(user.id);
+                                }}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                            {user.email && (
+                              <p
+                                className="mt-0.5 truncate text-xs text-slate-500"
+                                title={user.email}
+                              >
+                                {user.email}
+                              </p>
+                            )}
+                            {isCurrentUser && (
+                              <span className="mt-1.5 inline-flex rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                                You
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="mb-1.5 text-xs font-medium text-slate-500 lg:hidden">
+                        Role
+                      </p>
                       <Select
                         value={user.role}
                         disabled={isCurrentUser || updateUserRole.isPending}
-                        onValueChange={(value) => updateUserRole.mutate({ userId: user.id, role: value as Role })}
+                        onValueChange={(value) =>
+                          updateUserRole.mutate({
+                            userId: user.id,
+                            role: value as Role,
+                          })
+                        }
                       >
-                        <SelectTrigger aria-label={`Role for ${identity}`} title={isCurrentUser ? "You cannot change your own admin role." : undefined} className="h-9 w-32 rounded-lg border-slate-200 bg-white text-sm shadow-none">
+                        <SelectTrigger
+                          aria-label={`Role for ${identity}`}
+                          title={
+                            isCurrentUser
+                              ? "You cannot change your own admin role."
+                              : undefined
+                          }
+                          className="h-9 w-full rounded-lg border-slate-200 bg-white text-sm shadow-none"
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
                           {ROLES.map((role) => (
-                            <SelectItem key={role} value={role}>{ROLE_LABELS[role]}</SelectItem>
+                            <SelectItem key={role} value={role}>
+                              {ROLE_LABELS[role]}
+                            </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
-                    </TableCell>
-                    <TableCell className="px-4 py-3.5">
-                      {user.role === "admin" ? (
-                        <span className="text-sm font-semibold text-blue-700">Full schedule</span>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="mb-1.5 text-xs font-medium text-slate-500 lg:hidden">
+                        Schedule access
+                      </p>
+                      {user.role === "admin" || user.role === "team_lead" ? (
+                        <div className="mb-2 flex items-center gap-1.5 text-sm font-medium text-sky-800">
+                          <Shield className="h-3.5 w-3.5 shrink-0" />
+                          All teams’ schedules
+                        </div>
                       ) : (
-                        <div className="min-w-[180px]">
+                        <p
+                          className={`mb-2 text-sm font-medium ${accessNeedsSetup ? "text-amber-800" : "text-slate-700"}`}
+                        >
+                          {accessNeedsSetup
+                            ? "Staff link needed"
+                            : "Linked staff profile"}
+                        </p>
+                      )}
+                      {user.role === "admin" ? (
+                        <p className="text-xs text-slate-500">
+                          Full administrative access
+                        </p>
+                      ) : (
+                        <>
                           <Select
-                            value={user.therapistId == null ? "unlinked" : String(user.therapistId)}
+                            value={
+                              user.therapistId == null
+                                ? "unlinked"
+                                : String(user.therapistId)
+                            }
                             disabled={linkUserToTherapist.isPending}
-                            onValueChange={(value) => linkUserToTherapist.mutate({ userId: user.id, therapistId: value === "unlinked" ? null : Number(value) })}
+                            onValueChange={(value) =>
+                              linkUserToTherapist.mutate({
+                                userId: user.id,
+                                therapistId:
+                                  value === "unlinked" ? null : Number(value),
+                              })
+                            }
                           >
-                            <SelectTrigger className={accessNeedsSetup ? "h-9 border-amber-300 bg-amber-50 text-amber-900" : "h-9 border-slate-200 bg-white"} aria-label={`Staff profile for ${identity}`}>
+                            <SelectTrigger
+                              className={`h-9 w-full rounded-lg text-xs shadow-none ${accessNeedsSetup ? "border-amber-200 bg-amber-50/60 text-amber-900" : "border-slate-200 bg-white text-slate-600"}`}
+                              aria-label={`Staff profile for ${identity}`}
+                            >
                               <SelectValue placeholder="Choose staff profile" />
                             </SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="unlinked">Needs staff link</SelectItem>
+                              <SelectItem value="unlinked">
+                                {user.role === "team_lead"
+                                  ? "Staff profile (optional)"
+                                  : "Choose staff profile"}
+                              </SelectItem>
                               {therapists.map((therapist) => (
-                                <SelectItem key={therapist.id} value={String(therapist.id)} disabled={therapist.userId != null && therapist.userId !== user.id}>
-                                  {therapist.name}{therapist.teamId != null ? ` · ${teams.find((team) => team.id === therapist.teamId)?.name ?? `Team ${therapist.teamId}`}` : " · No team"}
+                                <SelectItem
+                                  key={therapist.id}
+                                  value={String(therapist.id)}
+                                  disabled={
+                                    therapist.userId != null &&
+                                    therapist.userId !== user.id
+                                  }
+                                >
+                                  {therapist.name}
+                                  {therapist.teamId != null
+                                    ? ` · ${teams.find((team) => team.id === therapist.teamId)?.name ?? `Team ${therapist.teamId}`}`
+                                    : " · No team"}
                                 </SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
-                          {user.teamName && <p className="mt-1 text-xs text-slate-500">{user.teamName}</p>}
-                        </div>
+                          {user.teamName && (
+                            <p
+                              className="mt-1.5 truncate text-xs text-slate-500"
+                              title={user.teamName}
+                            >
+                              {user.teamName}
+                            </p>
+                          )}
+                        </>
                       )}
-                    </TableCell>
-                    <TableCell className="px-4 py-3.5">
-                      {user.deactivatedAt ? (
-                        <Badge variant="secondary" className="rounded-full bg-rose-50 text-rose-700 ring-1 ring-rose-200/70">
-                          <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-rose-500" /> Deactivated
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary" className="rounded-full bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200/70">
-                          <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500" /> Active
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="px-4 py-3.5 text-sm text-slate-500">{isOtherAdmin ? "Hidden" : formatDate(user.lastSignedIn)}</TableCell>
-                    <TableCell className="px-5 py-3.5 text-right">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={isCurrentUser || setDeactivated.isPending}
-                        title={isCurrentUser ? "You cannot deactivate your own account." : undefined}
-                        className={user.deactivatedAt ? "text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800" : "text-slate-500 hover:bg-rose-50 hover:text-rose-700"}
-                        onClick={() => setDeactivated.mutate({ userId: user.id, deactivated: !user.deactivatedAt })}
+                    </div>
+                    <div className="min-w-0 border-t border-slate-100 pt-3 sm:col-span-2 lg:col-span-1 lg:border-0 lg:pt-0">
+                      <Badge
+                        variant="secondary"
+                        className={`gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${user.deactivatedAt ? "bg-slate-100 text-slate-600 ring-slate-200" : "bg-emerald-50 text-emerald-700 ring-emerald-200/70"}`}
                       >
-                        {isCurrentUser ? "Current account" : user.deactivatedAt ? "Reactivate" : "Deactivate"}
-                      </Button>
-                      {!isCurrentUser && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={deleteUser.isPending}
-                          className="gap-1.5 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
-                          aria-label={`Permanently delete ${identity || "account"} (account ${user.id})`}
-                          onClick={() => {
-                            setDeleteConfirmation("");
-                            setAccountToDelete({ id: user.id, label: `${identity || "Account"} (account ${user.id})` });
-                          }}
+                        <span
+                          className={`h-1.5 w-1.5 rounded-full ${user.deactivatedAt ? "bg-slate-400" : "bg-emerald-500"}`}
+                        />
+                        {user.deactivatedAt ? "Deactivated" : "Active"}
+                      </Badge>
+                      <p className="mt-2 text-xs leading-5 text-slate-500">
+                        {isOtherAdmin ? (
+                          "Sign-in details hidden"
+                        ) : user.lastSignedIn ? (
+                          <>
+                            Last sign-in
+                            <br className="hidden lg:block" />{" "}
+                            <span className="text-slate-600">
+                              {formatDate(user.lastSignedIn)}
+                            </span>
+                          </>
+                        ) : (
+                          "Hasn’t signed in yet"
+                        )}
+                      </p>
+                    </div>
+                    <div className="absolute right-5 top-5 sm:right-6 lg:static lg:justify-self-end">
+                      <DropdownMenu modal={false}>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            aria-label={`Actions for ${identity} (account ${user.id})`}
+                            className="h-9 w-9 rounded-lg text-slate-500 hover:bg-slate-100"
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent
+                          align="end"
+                          className="w-52 rounded-xl p-1.5"
                         >
-                          <Trash2 className="h-4 w-4" />
-                          Delete permanently
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
+                          <DropdownMenuLabel className="text-xs text-slate-500">
+                            {isCurrentUser ? "Your account" : "Account actions"}
+                          </DropdownMenuLabel>
+                          {!isOtherAdmin && (
+                            <DropdownMenuItem
+                              disabled={updateUserName.isPending}
+                              onSelect={() => {
+                                setNameDrafts({ [user.id]: user.name ?? "" });
+                                setEditingUserId(user.id);
+                              }}
+                            >
+                              <Pencil className="h-4 w-4" />
+                              Edit name
+                            </DropdownMenuItem>
+                          )}
+                          <DropdownMenuItem
+                            disabled={isCurrentUser || setDeactivated.isPending}
+                            onSelect={() =>
+                              setDeactivated.mutate({
+                                userId: user.id,
+                                deactivated: !user.deactivatedAt,
+                              })
+                            }
+                          >
+                            <UserRound className="h-4 w-4" />
+                            {user.deactivatedAt
+                              ? "Reactivate account"
+                              : "Deactivate account"}
+                          </DropdownMenuItem>
+                          {!isCurrentUser && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                disabled={deleteUser.isPending}
+                                className="text-rose-700 focus:bg-rose-50 focus:text-rose-800"
+                                onSelect={() => {
+                                  setDeleteConfirmation("");
+                                  setAccountToDelete({
+                                    id: user.id,
+                                    label: `${identity || "Account"} (account ${user.id})`,
+                                  });
+                                }}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                                Delete permanently
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </li>
                 );
               })}
-            </TableBody>
-          </Table>
+            </ul>
+          )}
         </SectionCard>
 
         <SectionCard

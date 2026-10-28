@@ -2354,6 +2354,15 @@ export async function createMagicLink(data: InsertMagicLink): Promise<void> {
   await db.insert(magicLinks).values(data);
 }
 
+/** Only the newest invite email should work, so a resend retires the older unused invite links. */
+export async function deleteUnusedInviteLinks(email: string): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .delete(magicLinks)
+    .where(and(eq(magicLinks.email, email), eq(magicLinks.forInvite, true), isNull(magicLinks.usedAt)));
+}
+
 export async function getMagicLinkByTokenHash(tokenHash: string) {
   const db = await getDb();
   if (!db) return undefined;
@@ -2479,7 +2488,7 @@ export async function updateUserRole(userId: number, role: "admin" | "team_lead"
 export async function updateUserName(userId: number, name: string): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(users).set({ name: name.trim(), updatedAt: new Date() }).where(eq(users.id, userId));
+  await db.update(users).set({ name: name.trim() || null, updatedAt: new Date() }).where(eq(users.id, userId));
 }
 
 export async function linkUserToTherapist(userId: number, therapistId: number | null): Promise<void> {
@@ -2504,7 +2513,6 @@ export async function linkUserToTherapist(userId: number, therapistId: number | 
     await tx.update(therapists).set({ userId: null, updatedAt: new Date() }).where(eq(therapists.userId, userId));
     if (target) {
       await tx.update(therapists).set({ userId, updatedAt: new Date() }).where(eq(therapists.id, target.id));
-      await tx.update(users).set({ name: target.name, updatedAt: new Date() }).where(eq(users.id, userId));
     }
   });
 }

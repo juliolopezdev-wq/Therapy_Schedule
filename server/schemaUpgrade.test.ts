@@ -22,7 +22,7 @@ beforeAll(() => {
 });
 beforeEach(async () => {
   await state.client!
-    .executeMultiple(`DROP TABLE IF EXISTS patients; DROP TABLE IF EXISTS signInAttempts; DROP TABLE IF EXISTS aiChangeProposals;
+    .executeMultiple(`DROP TABLE IF EXISTS invites; DROP TABLE IF EXISTS patients; DROP TABLE IF EXISTS signInAttempts; DROP TABLE IF EXISTS aiChangeProposals;
     CREATE TABLE patients (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
     INSERT INTO patients VALUES (1, 'Synthetic existing record');`);
 });
@@ -88,4 +88,15 @@ it("does not create a partial schema when the base database is absent", async ()
       )
     ).rows
   ).toHaveLength(0);
+});
+
+
+it("adds an optional invitation name without changing existing invites", async () => {
+  await state.client!.executeMultiple(`CREATE TABLE invites (id INTEGER PRIMARY KEY, email TEXT NOT NULL);
+    INSERT INTO invites VALUES (1, 'synthetic@example.com');`);
+  expect(await upgradeSafetySchema(state.client!)).toContain("invites.name");
+  expect((await state.client!.execute("SELECT * FROM invites")).rows[0]).toMatchObject({
+    id: 1, email: "synthetic@example.com", name: null,
+  });
+  expect(await upgradeSafetySchema(state.client!)).toEqual([]);
 });

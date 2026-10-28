@@ -29,11 +29,11 @@ export default function UserMenu({ inline = false }: { inline?: boolean }) {
   if (!user) return null;
 
   const initial = (user.name || user.email || "?").charAt(0).toUpperCase();
-  const hasOwnProfile = user.accessScope?.therapistId != null;
 
   return (
     <div className={cn(inline ? "relative shrink-0" : "fixed top-3 right-3 z-50")}>
-      <DropdownMenu>
+      {/* The profile dialog owns modality; avoid overlapping menu/dialog pointer locks. */}
+      <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
@@ -73,11 +73,9 @@ export default function UserMenu({ inline = false }: { inline?: boolean }) {
             <span className="text-xs text-muted-foreground font-normal">{user.email}</span>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
-          {hasOwnProfile && (
-            <DropdownMenuItem onClick={() => setProfileOpen(true)} className="flex items-center gap-2">
-              <UserCog className="h-4 w-4" /> My profile
-            </DropdownMenuItem>
-          )}
+          <DropdownMenuItem onClick={() => setProfileOpen(true)} className="flex items-center gap-2">
+            <UserCog className="h-4 w-4" /> {user.name ? "My profile" : "Add your name"}
+          </DropdownMenuItem>
           {user.role === "admin" && (
             <DropdownMenuItem asChild>
               <Link href="/admin/users" className="flex items-center gap-2 w-full">
@@ -90,7 +88,7 @@ export default function UserMenu({ inline = false }: { inline?: boolean }) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      {hasOwnProfile && <MyProfileDialog open={profileOpen} onOpenChange={setProfileOpen} />}
+      <MyProfileDialog open={profileOpen} onOpenChange={setProfileOpen} />
     </div>
   );
 }
